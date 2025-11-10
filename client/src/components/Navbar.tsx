@@ -6,11 +6,11 @@ export default function Navbar() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   return (
-    <nav className="sticky top-0 z-50 bg-background/80 backdrop-blur-lg border-b border-border/50">
+    <nav className="sticky top-0 z-50 bg-background/60 backdrop-blur-2xl border-b border-primary/20 shadow-[0_8px_32px_hsl(195_100%_50%/0.1)]">
       <div className="max-w-7xl mx-auto px-8">
         <div className="flex items-center justify-between h-20">
           <div className="flex items-center">
-            <span className="text-2xl font-bold text-foreground tracking-tight">Milo</span>
+            <span className="text-2xl font-bold text-foreground tracking-tight drop-shadow-[0_0_20px_hsl(195_100%_50%/0.2)]">Milo</span>
           </div>
 
           <div className="hidden md:flex items-center gap-12">

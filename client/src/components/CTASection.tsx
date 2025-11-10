@@ -13,7 +13,7 @@ export default function CTASection() {
         </p>
         <Button
           size="lg"
-          className="text-base px-12 h-14 rounded-full font-medium"
+          className="text-base px-12 h-14 rounded-full font-medium shadow-[0_0_40px_hsl(195_100%_50%/0.4)] border-2 border-primary/50"
           data-testid="button-get-started"
           onClick={() => console.log('Get started clicked')}
         >

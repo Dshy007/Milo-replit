@@ -45,7 +45,7 @@ export default function FeatureSection({
             <img
               src={image}
               alt={imageAlt}
-              className="w-full rounded-lg border border-border/50"
+              className="w-full rounded-2xl border-2 border-primary/20 shadow-[0_0_60px_hsl(195_100%_50%/0.15)]"
               data-testid="feature-image"
             />
           </div>
