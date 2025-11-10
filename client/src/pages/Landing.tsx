@@ -11,90 +11,102 @@ import complianceImage from "@assets/generated_images/Compliance_dashboard_featu
 
 export default function Landing() {
   return (
-    <div className="min-h-screen bg-background">
-      <Navbar />
-      
-      <Hero />
+    <div className="min-h-screen bg-background relative">
+      <div className="absolute inset-0 opacity-[0.04] pointer-events-none">
+        <div className="absolute inset-0" style={{
+          backgroundImage: `
+            linear-gradient(to right, hsl(195 100% 45% / 0.2) 1px, transparent 1px),
+            linear-gradient(to bottom, hsl(195 100% 45% / 0.2) 1px, transparent 1px)
+          `,
+          backgroundSize: '60px 60px'
+        }}></div>
+      </div>
 
-      <FeatureSection
-        title="Meet Milo, Your AI Assistant"
-        description="Talk to Milo in plain English. No complex interfaces or training required. Ask about driver availability, schedule conflicts, or DOT compliance in natural language."
-        image={aiChatImage}
-        imageAlt="Milo AI chat interface showing scheduling conversation"
-        features={[
-          "Natural language scheduling commands",
-          "Real-time driver availability queries",
-          "Automatic conflict detection and resolution",
-          "Smart recommendations for optimal assignments"
-        ]}
-      />
+      <div className="relative z-10">
+        <Navbar />
+        
+        <Hero />
 
-      <FeatureSection
-        title="Drag & Drop File Import"
-        description="Upload your CSV or Excel files with a simple drag and drop. Milo automatically parses, validates, and performs bench alignment checking to ensure data accuracy."
-        image={dragDropImage}
-        imageAlt="Drag and drop file upload interface"
-        features={[
-          "Support for CSV and Excel formats",
-          "Automatic Operator ID parsing",
-          "Bench alignment validation with reason codes",
-          "Carryover trip recognition for weekly files"
-        ]}
-        reverse
-      />
+        <FeatureSection
+          title="Meet Milo"
+          description="Your AI scheduling assistant. Talk in plain English—no complex interfaces or training required. Ask about driver availability, schedule conflicts, or DOT compliance naturally."
+          image={aiChatImage}
+          imageAlt="Milo AI chat interface showing scheduling conversation"
+          features={[
+            "Natural language scheduling commands",
+            "Real-time driver availability queries",
+            "Automatic conflict detection",
+            "Smart assignment recommendations"
+          ]}
+        />
 
-      <FeatureGrid
-        title="Everything You Need for Fleet Operations"
-        features={[
-          {
-            icon: Calendar,
-            title: "Smart Scheduling",
-            description: "AI-powered block assignment with automatic conflict detection and rolling-6 day compliance validation for all drivers."
-          },
-          {
-            icon: FileUp,
-            title: "Instant Import",
-            description: "Upload CSV or Excel files instantly with automatic parsing, validation, and bench alignment checking built-in."
-          },
-          {
-            icon: Shield,
-            title: "DOT Compliance",
-            description: "Automated validation of 34-hour reset, rolling 6-day patterns, and 10-hour rest requirements for every assignment."
-          },
-          {
-            icon: Brain,
-            title: "ML Predictions",
-            description: "Forecast block availability and optimize driver assignments using machine learning models trained on historical data."
-          },
-          {
-            icon: Users,
-            title: "Protected Drivers",
-            description: "Enforce custom driver rules and preferences automatically. Never assign Isaac on Fridays or override Firas's schedule."
-          },
-          {
-            icon: TrendingUp,
-            title: "Analytics Dashboard",
-            description: "Duty-day heatmaps, utilization metrics, and actionable insights help you plan better and avoid violations."
-          }
-        ]}
-      />
+        <FeatureSection
+          title="Instant Import"
+          description="Drag and drop your CSV or Excel files. Milo automatically parses, validates, and performs bench alignment checking to ensure perfect data accuracy."
+          image={dragDropImage}
+          imageAlt="Drag and drop file upload interface"
+          features={[
+            "CSV and Excel support",
+            "Automatic Operator ID parsing",
+            "Bench alignment validation",
+            "Carryover trip recognition"
+          ]}
+          reverse
+        />
 
-      <FeatureSection
-        title="DOT Compliance Made Simple"
-        description="Milo continuously monitors rolling-6 day patterns, rest periods, and reset requirements to keep your fleet compliant with federal regulations."
-        image={complianceImage}
-        imageAlt="Compliance dashboard showing duty-day heatmap"
-        features={[
-          "Rolling-6 day pattern tracking",
-          "34-hour reset validation",
-          "10-hour rest period monitoring",
-          "Duty-day projection heatmaps"
-        ]}
-      />
+        <FeatureGrid
+          title="Complete Fleet Operations Platform"
+          features={[
+            {
+              icon: Calendar,
+              title: "Smart Scheduling",
+              description: "AI-powered block assignment with automatic conflict detection and rolling-6 day compliance validation."
+            },
+            {
+              icon: FileUp,
+              title: "Rapid Import",
+              description: "Upload files instantly with automatic parsing, validation, and bench alignment checking."
+            },
+            {
+              icon: Shield,
+              title: "DOT Compliance",
+              description: "Automated validation of 34-hour resets, rolling 6-day patterns, and rest requirements."
+            },
+            {
+              icon: Brain,
+              title: "ML Predictions",
+              description: "Forecast block availability and optimize assignments with machine learning models."
+            },
+            {
+              icon: Users,
+              title: "Protected Drivers",
+              description: "Enforce custom driver rules and preferences automatically without manual oversight."
+            },
+            {
+              icon: TrendingUp,
+              title: "Analytics",
+              description: "Duty-day heatmaps, utilization metrics, and actionable insights for better planning."
+            }
+          ]}
+        />
 
-      <CTASection />
-      
-      <Footer />
+        <FeatureSection
+          title="Compliance Simplified"
+          description="Milo continuously monitors rolling-6 day patterns, rest periods, and reset requirements to keep your fleet compliant with federal regulations."
+          image={complianceImage}
+          imageAlt="Compliance dashboard showing duty-day heatmap"
+          features={[
+            "Rolling-6 day pattern tracking",
+            "34-hour reset validation",
+            "10-hour rest monitoring",
+            "Duty-day projection heatmaps"
+          ]}
+        />
+
+        <CTASection />
+        
+        <Footer />
+      </div>
     </div>
   );
 }
