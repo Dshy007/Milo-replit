@@ -1,53 +1,103 @@
 import { Button } from "@/components/ui/button";
-import { ArrowRight, Sparkles } from "lucide-react";
+import { ArrowRight } from "lucide-react";
+
+const CalendarBackground = () => {
+  const daysOfWeek = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const currentDate = new Date();
+  const currentMonth = currentDate.getMonth();
+  const currentYear = currentDate.getFullYear();
+  
+  const firstDay = new Date(currentYear, currentMonth, 1).getDay();
+  const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+  
+  const calendarDays = [];
+  for (let i = 0; i < firstDay; i++) {
+    calendarDays.push(null);
+  }
+  for (let day = 1; day <= daysInMonth; day++) {
+    calendarDays.push(day);
+  }
+
+  const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+  return (
+    <div className="absolute inset-0 flex items-center justify-center opacity-15 pointer-events-none">
+      <div className="max-w-6xl w-full px-8">
+        <div className="text-center mb-8">
+          <h2 className="text-4xl font-bold text-primary" style={{
+            filter: 'drop-shadow(0 0 30px hsl(195 100% 50% / 0.6)) drop-shadow(0 0 60px hsl(195 100% 50% / 0.4))'
+          }}>
+            {monthNames[currentMonth]} {currentYear}
+          </h2>
+        </div>
+        <div className="grid grid-cols-7 gap-4 mb-4">
+          {daysOfWeek.map((day) => (
+            <div key={day} className="text-center text-xl font-semibold text-primary" style={{
+              filter: 'drop-shadow(0 0 20px hsl(195 100% 50% / 0.5))'
+            }}>
+              {day}
+            </div>
+          ))}
+        </div>
+        <div className="grid grid-cols-7 gap-4">
+          {calendarDays.map((day, index) => (
+            <div
+              key={index}
+              className={`aspect-square flex items-center justify-center text-2xl font-medium rounded-lg border-2 ${
+                day === currentDate.getDate() 
+                  ? 'bg-primary/20 border-primary text-primary' 
+                  : 'bg-card/30 border-primary/30 text-primary/70'
+              }`}
+              style={{
+                filter: day === currentDate.getDate() 
+                  ? 'drop-shadow(0 0 40px hsl(195 100% 50% / 0.7)) drop-shadow(0 0 80px hsl(195 100% 50% / 0.5))' 
+                  : 'drop-shadow(0 0 15px hsl(195 100% 50% / 0.3))',
+                backdropFilter: 'blur(10px)'
+              }}
+            >
+              {day}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export default function Hero() {
   return (
     <section className="relative min-h-screen flex items-center justify-center overflow-hidden bg-gradient-to-br from-background via-background to-primary/5">
-      <div className="absolute inset-0 opacity-20">
-        <div className="absolute inset-0" style={{
-          backgroundImage: `
-            linear-gradient(to right, hsl(195 100% 50%) 1.5px, transparent 1.5px),
-            linear-gradient(to bottom, hsl(195 100% 50%) 1.5px, transparent 1.5px)
-          `,
-          backgroundSize: '80px 80px',
-          filter: 'drop-shadow(0 0 20px hsl(195 100% 50% / 0.4))'
-        }}></div>
-      </div>
-
-      <div className="absolute inset-0 opacity-15">
-        <div className="absolute inset-0" style={{
-          backgroundImage: `
-            linear-gradient(to right, hsl(195 100% 45%) 3px, transparent 3px),
-            linear-gradient(to bottom, hsl(195 100% 45%) 3px, transparent 3px)
-          `,
-          backgroundSize: '400px 400px',
-          filter: 'drop-shadow(0 0 30px hsl(195 100% 45% / 0.5)) drop-shadow(0 0 60px hsl(195 100% 45% / 0.3))'
-        }}></div>
-      </div>
+      <CalendarBackground />
 
       <div className="absolute inset-0">
-        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-primary/20 rounded-full blur-[120px]"></div>
-        <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-primary/15 rounded-full blur-[120px]"></div>
+        <div className="absolute top-1/3 left-1/3 w-[600px] h-[600px] bg-primary/20 rounded-full blur-[150px]"></div>
+        <div className="absolute bottom-1/3 right-1/3 w-[600px] h-[600px] bg-primary/15 rounded-full blur-[150px]"></div>
       </div>
 
       <div className="relative z-10 max-w-5xl mx-auto px-8 py-40 text-center">
-        <div className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full border-2 border-primary/40 bg-primary/10 backdrop-blur-xl mb-12 shadow-lg shadow-primary/30">
-          <Sparkles className="w-4 h-4 text-primary drop-shadow-[0_0_8px_hsl(195_100%_50%)]" />
-          <span className="text-sm font-medium text-foreground">AI-Powered Fleet Intelligence</span>
-        </div>
-
         <div className="mb-16">
-          <h1 className="text-7xl md:text-8xl lg:text-9xl font-bold mb-10 text-foreground tracking-tighter drop-shadow-[0_0_40px_hsl(195_100%_50%/0.3)]">
-            Milo
-          </h1>
+          <div className="relative inline-block">
+            <h1 className="text-8xl md:text-9xl lg:text-[12rem] font-bold mb-4 text-foreground tracking-tighter" style={{
+              filter: 'drop-shadow(0 0 60px hsl(195 100% 50% / 0.6)) drop-shadow(0 0 120px hsl(195 100% 50% / 0.4)) drop-shadow(0 0 180px hsl(195 100% 50% / 0.3))'
+            }}>
+              Milo
+            </h1>
+            <div className="absolute -inset-12 bg-primary/10 rounded-full blur-3xl -z-10"></div>
+            <div className="absolute -inset-20 bg-primary/5 rounded-full blur-[100px] -z-10"></div>
+          </div>
+          
+          <p className="text-2xl md:text-3xl text-primary font-medium tracking-wide mb-12" style={{
+            filter: 'drop-shadow(0 0 20px hsl(195 100% 50% / 0.5))'
+          }}>
+            AI-Powered
+          </p>
           
           <p className="text-3xl md:text-4xl text-foreground/90 mb-6 font-light tracking-tight">
             The Future of Trucking Operations
           </p>
           
           <p className="text-xl text-muted-foreground max-w-2xl mx-auto font-light leading-relaxed">
-            Intelligent scheduling, DOT compliance, and fleet optimization through AI conversation
+            Intelligent scheduling, DOT compliance, and fleet optimization through conversation
           </p>
         </div>
 
