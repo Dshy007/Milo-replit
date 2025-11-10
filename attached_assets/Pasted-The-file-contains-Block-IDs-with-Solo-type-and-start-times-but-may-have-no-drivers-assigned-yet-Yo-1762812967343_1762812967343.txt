@@ -1,0 +1,126 @@
+The file contains Block IDs with Solo type and start times, but may have no drivers assigned yet. Your job is to understand the rolling-6 day pattern and report what to look for in the file so I can safely assign drivers.
+
+My rules (lock these in)
+
+Time zone: All times are Central (CT).
+
+Contracts (bench): Fixed start times by Solo and tractor. Do not group identical times; each time+tractor is its own contract.
+
+Solo1 (14h): 00:30 (Tractor_8), 01:30 (Tractor_6), 16:30 (Tractor_1), 16:30 (Tractor_9), 17:30 (Tractor_4), 18:30 (Tractor_7), 20:30 (Tractor_10), 20:30 (Tractor_2), 20:30 (Tractor_3), 21:30 (Tractor_5)
+
+Solo2 (38h): 08:30 (Tractor_4), 11:30 (Tractor_6), 15:30 (Tractor_5), 16:30 (Tractor_7), 18:30 (Tractor_1), 21:30 (Tractor_3), 23:30 (Tractor_2)
+
+Block ID: Immutable. One block = one fixed time window.
+
+Durations for math: Solo1 = 14h, Solo2 = 38h. Compute end = start + duration (elapsed hours, ignore DST quirks).
+
+Rolling-6 definition: Count duty days on a sliding window of 6 consecutive calendar days (cross-week):
+
+Solo1 = 1 duty day (the calendar day it starts).
+
+Solo2 = 2 duty days (the start day and the next calendar day).
+
+Friday files include carryovers: The CSV for the new week also shows Fri/Sat from the previous week. Keep those to compute rolling-6 correctly.
+
+Bump logic (for later driver assignment): Start-time flex ±2h (±3h if explicitly marked “last day”). Same-slot + same-solo next cycle is auto-OK on 10-hour rest.
+
+On-bench vs off-bench (only WARN):
+
+off_bench (non_contract_time) → start time not in the contract list for that Solo.
+
+off_bench (wrong_tractor_for_contract) → time is valid but paired with a tractor that’s not in the contract mapping for that time.
+
+Protected drivers (for later when drivers are added):
+
+Isaac Kiragu: no Fridays (hard).
+
+Firas IMAD Tahseen: Sat/Sun/Mon, Solo1 @ 16:30, flex ≤ 17:30 latest.
+
+Tareef THAMER Mahdi: Sat/Sun, Solo1 @ 17:30, never later than 17:30.
+
+Never take blocks from Firas or Tareef to cover others.
+
+What to look for in the CSV
+
+Expect columns like:
+
+Block ID (e.g., B-XXXXXXXXX)
+
+Solo Type (Solo1 or Solo2)
+
+Block Start Date (YYYY-MM-DD)
+
+Start Time (Facility Local) (HH:MM, 24h)
+
+Operator ID (e.g., FTIM_MKC_Solo2_Tractor_7_d2) → parse Solo type + Tractor; ignore the _d# suffix.
+
+Driver Name (may be empty in this file)
+
+Tasks (no mutations—analysis only)
+
+Read the CSV and normalize times to CT. Build a list of blocks:
+
+{block_id, solo_type, start_date, start_time, tractor, start_dt, end_dt}
+
+
+If tractor isn’t explicit, derive it from Operator ID (e.g., Tractor_7).
+
+Bench alignment report
+
+For each block, check (solo_type, start_time, tractor) against the contract lists above.
+
+Emit:
+
+✅ on_bench
+
+⚠️ off_bench with reason: "non_contract_time" or "wrong_tractor_for_contract", and include expected_tractors when applicable.
+
+Carryover recognition
+
+Treat rows dated Fri/Sat from the previous week as carryover context (label carryover_trip if the row is a trip row tied to a prior Block ID). Keep them for rolling-6 math; do not off-bench-check them.
+
+Unassigned count
+
+Count blocks with no Driver Name that are not carryovers. Provide totals by Solo1/Solo2 and overall.
+
+Rolling-6 readiness map (structure-only)
+
+Build a calendar heatmap (per day) of how many duty days the structure would impose once drivers are assigned:
+
+Solo1 contributes 1 duty day on its start day.
+
+Solo2 contributes 2 duty days: start day and start day + 1.
+
+Output per-day totals for the CSV’s date span (including prior Fri/Sat). This shows pressure zones where drivers might hit rolling-6 limits after assignment.
+
+Output format
+
+Summary:
+
+Total blocks; Solo1 vs Solo2 counts.
+
+Unassigned counts (by Solo type and overall).
+
+Off-bench counts broken down by reason.
+
+Dates present (show Fri/Sat carryover dates explicitly).
+
+Details:
+
+List of off_bench items with block_id, solo_type, start_time, tractor, reason, and expected_tractors (if reason = wrong_tractor_for_contract).
+
+Per-day duty-day projection (a small table) showing how many duty days the structure implies each calendar day (Solo1 adds 1; Solo2 adds on D and D+1).
+
+Notes for dispatcher:
+
+“This is structure-only. Actual rolling-6 violations are per-driver once assignments are added. Use this map to place drivers where daily duty-day pressure is lower.”
+
+Acceptance criteria
+
+Do not group identical start times; handle each time+tractor separately (e.g., Solo1 20:30 appears for Tractor_10, Tractor_2, Tractor_3 — list all three).
+
+Treat off-bench as WARN only (not errors). Use reason codes.
+
+Include the Fri/Sat carryover dates in the duty-day projection.
+
+The output must be clear, plain language, with one compact JSON summary at the end.

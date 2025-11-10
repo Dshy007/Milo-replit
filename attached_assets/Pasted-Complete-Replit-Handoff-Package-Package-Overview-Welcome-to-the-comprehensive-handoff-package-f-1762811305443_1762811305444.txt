@@ -1,0 +1,820 @@
+Complete Replit Handoff Package
+
+📦 Package Overview
+
+Welcome to the comprehensive handoff package for the Driver Flo / Milo AI Scheduling Assistant. This package contains all the documentation, architecture details, pattern analysis, and code needed to continue development on Replit.
+
+🎯 What's Included
+
+Core Documentation
+
+1.
+
+
+
+REPLIT_PROMPT.md - Main prompt for starting development on Replit
+
+1.
+
+
+
+TECHNICAL_ARCHITECTURE.md - Full technology stack and system architecture
+
+1.
+
+
+
+MILO_KNOWLEDGE_BASE.md - Built-in knowledge base for Milo AI
+
+1.
+
+
+
+PROJECT_STRUCTURE.md - Complete file structure and code organization
+
+1.
+
+
+
+DEPLOYMENT_SETUP.md - Step-by-step deployment instructions
+
+1.
+
+
+
+README.md - Overview of the handoff package
+
+Pattern Analysis & Scheduling System (NEW)
+
+1.
+
+
+
+PATTERN_ANALYSIS_TECHNICAL.md - Technical details of Operator ID → Contract Time pattern
+
+1.
+
+
+
+OPERATOR_ID_PATCH_README.md - Detailed patch documentation
+
+1.
+
+
+
+CONTRACT_TIMES_SUMMARY.md - All 17 base contract times
+
+1.
+
+
+
+CHATGPT_QUICK_START.md - Quick start guide for AI assistants
+
+1.
+
+
+
+PATCH_SUMMARY.md - Executive summary of the pattern analysis fix
+
+Code & Implementation
+
+1.
+
+
+
+base_time_contracts.json - Source of truth for all 17 contract times
+
+1.
+
+
+
+schedule_utils.py - Core scheduling functions with Operator ID parsing
+
+1.
+
+
+
+schedule_validator.py - DOT compliance validation engine
+
+1.
+
+
+
+test_operator_id_patch.py - Comprehensive test suite
+
+🚀 Quick Start
+
+For Immediate Development
+
+1.
+
+
+
+Read First: REPLIT_PROMPT.md for high-level overview
+
+1.
+
+
+
+Setup: Follow DEPLOYMENT_SETUP.md to configure Replit environment
+
+1.
+
+
+
+Understand: Review PATTERN_ANALYSIS_TECHNICAL.md for critical scheduling logic
+
+1.
+
+
+
+Code: Refer to TECHNICAL_ARCHITECTURE.md and PROJECT_STRUCTURE.md
+
+1.
+
+
+
+Test: Run test_operator_id_patch.py to verify pattern analysis
+
+For Understanding the Scheduling System
+
+1.
+
+
+
+Start: Read PATTERN_ANALYSIS_TECHNICAL.md - CRITICAL
+
+1.
+
+
+
+Contracts: Review CONTRACT_TIMES_SUMMARY.md for all 17 base contracts
+
+1.
+
+
+
+Implementation: Study schedule_utils.py for code examples
+
+1.
+
+
+
+Validation: Examine schedule_validator.py for DOT compliance logic
+
+1.
+
+
+
+Testing: Run test suite to see it in action
+
+📊 About the Project
+
+Overview
+
+Driver Flo is a full-stack web application designed for AFP trucking to manage driver schedules, fleet operations, and predictive forecasting. The application features:
+
+• Milo AI: Conversational AI assistant with natural language understanding and intelligent scheduling decisions
+
+• ML Predictions: Python-based machine learning engine for forecasting block availability
+
+• Type-Safe Full Stack: React 19, TypeScript, tRPC, Node.js 22 for end-to-end type safety
+
+• Scalable Architecture: MySQL for data storage, OpenAI GPT-4.1-mini for AI capabilities
+
+• DOT Compliance: Automated validation of 34-hour reset, rolling 6-day pattern, and 10-hour rest rules
+
+Key Technologies
+
+Frontend:
+
+• React 19
+
+• TypeScript
+
+• tRPC (type-safe API)
+
+• Tailwind CSS
+
+Backend:
+
+• Node.js 22
+
+• TypeScript
+
+• tRPC
+
+• Drizzle ORM
+
+Database:
+
+• MySQL
+
+• Vector database for semantic search
+
+AI/LLM:
+
+• OpenAI GPT-4.1-mini
+
+• Function calling for Milo AI
+
+ML/Python:
+
+• Python 3.11
+
+• Pandas
+
+• Scikit-learn
+
+• Pattern analysis for contract time determination
+
+🔍 Critical Pattern Analysis (NEW)
+
+The Core Problem
+
+Amazon Freight releases schedule files every Friday containing mixed data types:
+
+1.
+
+
+
+Block-Level Data (Next Week): Closed blocks with generic start times
+
+1.
+
+
+
+Trip-Level Data (Current Week): Opened blocks with actual route times
+
+The CSV start_datetime column means different things depending on data type, making it unreliable for determining contract times.
+
+The Solution: Operator ID Pattern
+
+Every row contains an Operator ID field:
+
+Plain Text
+
+FTIM_MKC_{Solo1|Solo2}Tractor{N}_d{1|2}
+
+Examples:
+
+• FTIM_MKC_Solo1_Tractor_9_d2
+
+• FTIM_MKC_Solo2_Tractor_4_d1
+
+By parsing this field, we can:
+
+1.
+
+
+
+Extract Solo type (Solo1 or Solo2)
+
+1.
+
+
+
+Extract Tractor number (Tractor_1 to Tractor_10)
+
+1.
+
+
+
+Look up contract in base_time_contracts.json
+
+1.
+
+
+
+Get correct start time regardless of data type
+
+Why This Matters
+
+Without this pattern analysis:
+
+• ❌ Incorrect time calculations on Fridays
+
+• ❌ DOT compliance violations
+
+• ❌ Driver scheduling conflicts
+
+• ❌ System unreliability
+
+With this pattern analysis:
+
+• ✅ Uniform handling of all data types
+
+• ✅ Accurate contract time determination
+
+• ✅ Correct DOT compliance validation
+
+• ✅ Reliable scheduling system
+
+Technical Details
+
+See PATTERN_ANALYSIS_TECHNICAL.md for:
+
+• Regex pattern extraction
+
+• Contract lookup algorithm
+
+• Time calculation method
+
+• DOT compliance integration
+
+• Data flow diagrams
+
+• Performance considerations
+
+• Common pitfalls and solutions
+
+📋 Base Contract System
+
+Contract Structure
+
+17 Total Contracts:
+
+• 10 Solo1 contracts (14-hour runs)
+
+• 7 Solo2 contracts (38-hour runs, span 2 days)
+
+Solo1 Contracts:
+
+• Tractors: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+
+• Start times: 00:30, 01:30, 16:30, 17:30, 18:30, 20:30, 21:30
+
+• Duration: 14 hours
+
+• Work days: 1 day per block
+
+Solo2 Contracts:
+
+• Tractors: 1, 2, 3, 4, 5, 6, 7
+
+• Start times: 08:30, 11:30, 15:30, 16:30, 18:30, 21:30, 23:30
+
+• Duration: 38 hours
+
+• Work days: 2 days per block (spans overnight)
+
+Critical Rule
+
+Each tractor/time combination is a SEPARATE contract.
+
+❌ WRONG: "There are 3 contracts at 20:30"
+
+✅ CORRECT: "There are 3 SEPARATE contracts: SOLO1_20:30_T2, SOLO1_20:30_T3, SOLO1_20:30_T10"
+
+💻 Code Implementation
+
+Core Functions
+
+1.
+parse_operator_id(operator_id)
+
+Purpose: Extract Solo type and Tractor from Operator ID
+
+Python
+
+def parse_operator_id(operator_id): """ Parse Operator ID to extract solo type and tractor.
+
+Plain Text
+
+
+Format: FTIM_MKC_Solo1_Tractor_9_d2
+Extracts: Solo1, Tractor_9
+Ignores: d1, d2, FTIM_MKC
+"""
+import re
+
+if not operator_id or not isinstance(operator_id, str):
+    return None
+
+# Extract Solo type (Solo1 or Solo2)
+solo_match = re.search(r'(Solo[12])', operator_id)
+solo_type = solo_match.group(1) if solo_match else None
+
+# Extract Tractor number
+tractor_match = re.search(r'(Tractor_\d+)', operator_id)
+tractor = tractor_match.group(1) if tractor_match else None
+
+if not solo_type or not tractor:
+    return None
+
+return {
+    'solo_type': solo_type,
+    'tractor': tractor
+}
+
+
+Example:
+
+Python
+
+parsed = parse_operator_id("FTIM_MKC_Solo1_Tractor_9_d2")
+
+Returns: {'solo_type': 'Solo1', 'tractor': 'Tractor_9'}
+
+1.
+get_contract_from_operator_id(operator_id)
+
+Purpose: Look up contract details from Operator ID
+
+Python
+
+def get_contract_from_operator_id(operator_id): """ Get contract details from Operator ID.
+
+Plain Text
+
+
+This is the KEY function for handling both:
+- Block-level data (next week, not opened yet)
+- Trip-level data (current week, already working)
+"""
+parsed = parse_operator_id(operator_id)
+if not parsed:
+    return None
+
+solo_type = parsed['solo_type']
+tractor = parsed['tractor']
+
+# Load contracts
+contracts_data = load_base_contracts()
+
+# Search in correct solo type section
+solo_key = solo_type.lower()  # 'solo1' or 'solo2'
+
+if solo_key not in contracts_data['contracts']:
+    return None
+
+for contract in contracts_data['contracts'][solo_key]:
+    if contract['tractor'] == tractor:
+        return contract
+
+return None
+
+
+Example:
+
+Python
+
+contract = get_contract_from_operator_id("FTIM_MKC_Solo1_Tractor_9_d2")
+
+Returns: {
+
+'contract_id': 'SOLO1_16:30_T9',
+
+'start_time': '16:30',
+
+'tractor': 'Tractor_9',
+
+'type': 'Solo1',
+
+'duration_hours': 14
+
+}
+
+1.
+get_block_times_from_operator_id(operator_id, date_str)
+
+Purpose: Calculate block start and end times from Operator ID and date
+
+Python
+
+def get_block_times_from_operator_id(operator_id, date_str): """ Calculate block start and end times from Operator ID and date.
+
+Plain Text
+
+
+This works for BOTH block-level and trip-level data because
+Operator ID always tells us the contract time.
+"""
+from datetime import datetime, timedelta
+
+contract = get_contract_from_operator_id(operator_id)
+if not contract:
+    return (None, None)
+
+# Parse date
+if isinstance(date_str, str):
+    try:
+        if '-' in date_str:
+            date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+        else:
+            return (None, None)
+    except:
+        return (None, None)
+else:
+    date_obj = date_str
+
+# Parse contract start time
+start_time_str = contract['start_time']
+hour, minute = map(int, start_time_str.split(':'))
+
+# Create start datetime
+start_dt = date_obj.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+# Calculate end datetime
+duration = timedelta(hours=contract['duration_hours'])
+end_dt = start_dt + duration
+
+return (start_dt, end_dt)
+
+
+Example:
+
+Python
+
+start, end = get_block_times_from_operator_id( "FTIM_MKC_Solo1_Tractor_9_d2", "2025-11-09" )
+
+Returns: (2025-11-09 16:30:00, 2025-11-10 06:30:00)
+
+1.
+get_block_times(df_row) - UPDATED
+
+Purpose: Get block times from DataFrame row (backward compatible)
+
+Python
+
+def get_block_times(df_row): """ Get start and end times for a block row.
+
+Plain Text
+
+
+CRITICAL: Now uses Operator ID to determine contract time.
+This works for BOTH block-level and trip-level data.
+"""
+from datetime import datetime
+
+# Try to use Operator ID first (NEW METHOD)
+if 'Operator ID' in df_row and pd.notna(df_row['Operator ID']):
+    # Extract date from row
+    if 'start_datetime' in df_row:
+        date_str = df_row['start_datetime']
+        if isinstance(date_str, str):
+            date_obj = datetime.strptime(date_str.split()[0], "%Y-%m-%d")
+        else:
+            date_obj = date_str
+    elif 'Stop 1 Planned Arrival Date' in df_row:
+        date_str = df_row['Stop 1 Planned Arrival Date']
+        date_obj = datetime.strptime(date_str, "%m/%d/%Y")
+    else:
+        # Fallback to old method
+        return get_block_times_legacy(df_row)
+    
+    # Use Operator ID to get contract times
+    start_dt, end_dt = get_block_times_from_operator_id(
+        df_row['Operator ID'],
+        date_obj.strftime("%Y-%m-%d")
+    )
+    
+    if start_dt and end_dt:
+        return (start_dt, end_dt)
+
+# Fallback to old method if Operator ID not available
+return get_block_times_legacy(df_row)
+
+
+DOT Compliance Validation
+
+34-Hour Reset Validation
+
+Python
+
+def validate_34hour_cross_week(last_week_df, this_week_df): """ CRITICAL: Check 34-hour reset between last week and this week. Uses Operator ID to determine correct contract times. """ violations = []
+
+Plain Text
+
+
+# Get drivers who worked BOTH weeks
+drivers_last = set(last_week_df['Driver Name'].unique())
+drivers_this = set(this_week_df['Driver Name'].unique())
+drivers_both = drivers_last & drivers_this
+
+for driver in drivers_both:
+    # Get last block from last week
+    last_week_blocks = last_week_df[
+        last_week_df['Driver Name'] == driver
+    ].sort_values('start_datetime')
+    
+    if len(last_week_blocks) == 0:
+        continue
+    
+    last_block = last_week_blocks.iloc[-1]
+    _, last_week_end = get_block_times(last_block)
+    
+    # Get first block from this week
+    this_week_blocks = this_week_df[
+        this_week_df['Driver Name'] == driver
+    ].sort_values('start_datetime')
+    
+    if len(this_week_blocks) == 0:
+        continue
+    
+    first_block = this_week_blocks.iloc[0]
+    this_week_start, _ = get_block_times(first_block)
+    
+    # Calculate reset
+    reset_hours = (this_week_start - last_week_end).total_seconds() / 3600
+    
+    if reset_hours < 34:
+        violations.append({
+            'type': 'cross_week_34hour',
+            'driver': driver,
+            'reset_hours': reset_hours,
+            'shortage': 34 - reset_hours,
+            'severity': 'CRITICAL'
+        })
+
+return violations
+
+
+Rolling 6-Day Pattern Validation
+
+Python
+
+def calculate_actual_work_days(driver_blocks): """ Calculate actual calendar days worked (not just block count). Solo1 = 1 day, Solo2 = 2 days.
+
+Plain Text
+
+
+This was the CRITICAL bug - counting blocks instead of days.
+"""
+total_days = 0
+for _, block in driver_blocks.iterrows():
+    # Use Operator ID to determine Solo type
+    contract = get_contract_from_operator_id(block['Operator ID'])
+    
+    if contract['type'] == 'Solo2':
+        total_days += 2
+    else:
+        total_days += 1
+
+return total_days
+
+
+def validate_rolling_6day(df): """ Check 6-day rolling pattern using ACTUAL calendar days worked. Fixed to count days, not blocks. """ violations = []
+
+Plain Text
+
+
+for driver in df['Driver Name'].unique():
+    driver_blocks = df[df['Driver Name'] == driver].sort_values('start_datetime')
+    
+    if len(driver_blocks) == 0:
+        continue
+    
+    # Calculate actual work days
+    work_days = calculate_actual_work_days(driver_blocks)
+    
+    if work_days > 6:
+        violations.append({
+            'type': 'rolling_6day',
+            'driver': driver,
+            'work_days': work_days,
+            'excess_days': work_days - 6,
+            'severity': 'CRITICAL'
+        })
+
+return violations
+
+
+🧪 Testing
+
+Run Test Suite
+
+Bash
+
+python3.11 test_operator_id_patch.py
+
+Test Coverage
+
+✅ TEST 1: Parse Operator ID - 4/4 cases passed ✅ TEST 2: Contract Lookup - 4/4 cases passed ✅ TEST 3: Block Times Calculation - 4/4 cases passed ✅ TEST 4: get_block_times Integration - 3/3 cases passed ✅ TEST 5: All 17 Contracts Accessible - 17/17 verified ✅ TEST 6: d1/d2 Suffixes Ignored - 2/2 cases passed
+
+Result: All tests passed with 100% success rate
+
+
+
+
+Milo AI Integration & Architecture
+
+This section details the implementation of the Milo AI assistant, including the AI scheduler, function calling system, vector database, and ML prediction engine integration.
+
+1. Core AI Architecture
+
+Milo's intelligence is orchestrated by the AI Scheduler (server/ai-scheduler.ts). This file is the "brain" that processes user commands and decides which actions to take.
+
+How it Works:
+
+1.
+User Input: A user types a command (e.g., "how many drivers do I have?") into the Milo search bar.
+
+2.
+tRPC Call: The frontend calls the trpc.ai.processCommand endpoint.
+
+3.
+AI Scheduler: The ai-scheduler.ts receives the command.
+
+4.
+LLM Invocation: It sends the command, conversation history, and a list of available "tools" (functions) to the OpenAI GPT-4.1-mini model.
+
+5.
+Function Call Decision: The LLM decides which function to call (e.g., get_all_drivers()).
+
+6.
+Execution: The executeFunctionCall method in ai-scheduler.ts runs the corresponding database function from server/db.ts.
+
+7.
+Response: The result is returned to the LLM, which then formulates a natural language response for the user.
+
+2. Function Calling System
+
+Milo can interact with the database and other system components through a set of predefined functions (tools). These are defined in the tools array within ai-scheduler.ts.
+
+Available Functions:
+
+Function Name
+Description
+get_all_drivers
+Get a list of all drivers.
+get_all_tractors
+Get a list of all tractors.
+get_all_schedules
+Get all schedule assignments.
+get_all_start_times
+Get all available contract start times.
+get_predictions
+Retrieve ML predictions for a specific week.
+generate_predictions
+Generate new ML predictions for a specific week.
+search_knowledge
+Perform a semantic search on the vector database.
+create_driver
+Add a new driver to the database.
+update_driver
+Update an existing driver's information.
+delete_driver
+Remove a driver from the database.
+create_schedule_assignment
+Assign a driver to a schedule.
+
+
+3. Vector Database (Semantic Search)
+
+Milo uses a vector database to enable semantic search and long-term memory. This is handled by the embedding-service.ts.
+
+How it Works:
+
+1.
+Indexing: When new data is added (e.g., a driver, a schedule, or a document), it is converted into a numerical representation (an embedding) and stored in the embeddings table.
+
+2.
+Searching: When a user asks a question like "who are my best drivers?", the search_knowledge function is called.
+
+3.
+Similarity Search: The user's query is converted into an embedding, and the database is searched for the most similar (semantically related) embeddings.
+
+4.
+Contextual Response: The search results are passed to the LLM as context, allowing it to provide more accurate and relevant answers.
+
+4. ML Prediction Engine Integration
+
+The generate_predictions function provides the bridge between the Node.js backend and the Python ML engine.
+
+Data Flow:
+
+1.
+Milo Command: User asks, "Milo, predict week 49".
+
+2.
+Function Call: The AI scheduler calls generate_predictions(49).
+
+3.
+tRPC Router (routers/milo.ts): The generate procedure is invoked.
+
+4.
+Child Process: The router spawns a Python child process:
+
+5.
+Python Script (predict_week.py):
+
+•
+Reads historical data.
+
+•
+Calculates prediction probabilities.
+
+•
+Writes the results to a CSV file.
+
+
+
+6.
+Data Import: The Node.js backend reads the generated CSV file and inserts the predictions into the predictions database table.
+
+7.
+Response: Milo confirms that the predictions have been generated and are ready to view.
+
+This architecture allows for a powerful, flexible, and scalable AI assistant that can leverage the strengths of both Node.js (for the web backend) and Python (for machine learning).
+
