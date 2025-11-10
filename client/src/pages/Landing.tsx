@@ -40,15 +40,15 @@ export default function Landing() {
         <Hero />
 
         <FeatureSection
-          title="Meet Milo"
-          description="Your AI scheduling assistant. Talk in plain English—no complex interfaces or training required. Ask about driver availability, schedule conflicts, or DOT compliance naturally."
+          title="An Evolution in Intelligence"
+          description="Milo isn't software—it's a self-adapting AI that evolves with your operation. Talk naturally, make decisions faster, and watch complexity transform into simplicity."
           image={aiChatImage}
           imageAlt="Milo AI chat interface showing scheduling conversation"
           features={[
-            "Natural language scheduling commands",
-            "Real-time driver availability queries",
-            "Automatic conflict detection",
-            "Smart assignment recommendations"
+            "Self-adapting AI that learns your patterns",
+            "Natural conversation replaces complex interfaces",
+            "Instant conflict resolution and optimization",
+            "Spectacular speed meets effortless control"
           ]}
         />
 
@@ -67,12 +67,12 @@ export default function Landing() {
         />
 
         <FeatureGrid
-          title="Complete Fleet Operations Platform"
+          title="Evolution in Every Feature"
           features={[
             {
               icon: Calendar,
-              title: "Smart Scheduling",
-              description: "AI-powered block assignment with automatic conflict detection and rolling-6 day compliance validation."
+              title: "Intelligent Scheduling",
+              description: "Self-adapting AI transforms complex block assignments into effortless decisions with spectacular speed."
             },
             {
               icon: FileUp,
@@ -86,8 +86,8 @@ export default function Landing() {
             },
             {
               icon: Brain,
-              title: "ML Predictions",
-              description: "Forecast block availability and optimize assignments with machine learning models."
+              title: "Evolving Intelligence",
+              description: "Machine learning that adapts, predicts, and optimizes—getting smarter with every decision."
             },
             {
               icon: Users,

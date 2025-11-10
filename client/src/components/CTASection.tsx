@@ -6,10 +6,10 @@ export default function CTASection() {
     <section className="py-32 px-8">
       <div className="max-w-3xl mx-auto text-center">
         <h2 className="text-5xl md:text-6xl font-bold mb-8 text-foreground tracking-tight">
-          Start Today
+          Experience the Evolution
         </h2>
         <p className="text-xl text-muted-foreground mb-12 font-light">
-          Transform your fleet operations with intelligent automation
+          Transform operations into something effortless, fast, and spectacular
         </p>
         <Button
           size="lg"

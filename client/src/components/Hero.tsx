@@ -93,11 +93,11 @@ export default function Hero() {
           </p>
           
           <p className="text-3xl md:text-4xl text-foreground/90 mb-6 font-light tracking-tight">
-            The Future of Trucking Operations
+            Not software — an evolution
           </p>
           
-          <p className="text-xl text-muted-foreground max-w-2xl mx-auto font-light leading-relaxed">
-            Intelligent scheduling, DOT compliance, and fleet optimization through conversation
+          <p className="text-xl text-muted-foreground max-w-3xl mx-auto font-light leading-relaxed">
+            An intelligent, self-adapting AI that transforms scheduling, operations, and decision-making into something effortless, fast, and spectacular
           </p>
         </div>
 
