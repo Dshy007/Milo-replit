@@ -66,7 +66,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Signup
   app.post("/api/auth/signup", async (req, res) => {
     try {
-      const { username, password, email, tenantName } = req.body;
+      const { username, password, email, companyName } = req.body;
       
       // Check if user already exists
       const existingUser = await dbStorage.getUserByUsername(username);
@@ -78,7 +78,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const hashedPassword = await bcrypt.hash(password, 10);
 
       // Create tenant first
-      const tenant = await dbStorage.createTenant({ name: tenantName });
+      const tenant = await dbStorage.createTenant({ name: companyName });
 
       // Create user
       const userData = insertUserSchema.parse({

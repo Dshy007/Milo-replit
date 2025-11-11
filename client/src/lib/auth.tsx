@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect } from "react";
 import { useLocation } from "wouter";
+import { queryClient } from "@/lib/queryClient";
 
 type User = {
   id: string;
@@ -80,7 +81,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
     setUser(null);
-    setLocation("/");
+    queryClient.clear();
+    setLocation("/login");
   }
 
   return (

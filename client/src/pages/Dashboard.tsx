@@ -1,38 +1,13 @@
 import { useAuth } from "@/lib/auth";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Sparkles, Truck, Calendar, Users, LogOut } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Truck, Calendar, Users, Sparkles } from "lucide-react";
 
 export default function Dashboard() {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
 
   return (
-    <div className="min-h-screen bg-background">
-      <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
-        <div className="container mx-auto px-6 h-16 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <Sparkles className="w-6 h-6 text-primary" />
-            <h1 className="text-xl font-bold text-foreground">Milo</h1>
-          </div>
-          <div className="flex items-center gap-4">
-            <div className="text-sm">
-              <p className="font-medium text-foreground" data-testid="text-user-name">{user?.username}</p>
-              <p className="text-muted-foreground text-xs" data-testid="text-user-email">{user?.email}</p>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => logout()}
-              data-testid="button-logout"
-            >
-              <LogOut className="w-4 h-4 mr-2" />
-              Logout
-            </Button>
-          </div>
-        </div>
-      </header>
-
-      <main className="container mx-auto px-6 py-12">
+    <div className="bg-background p-6">
         <div className="mb-8">
           <h2 className="text-3xl font-bold text-foreground mb-2" data-testid="text-welcome">Welcome back, {user?.username}!</h2>
           <p className="text-muted-foreground" data-testid="text-subtitle">Manage your trucking operations with AI-powered intelligence</p>
@@ -151,7 +126,6 @@ export default function Dashboard() {
             </CardContent>
           </Card>
         </div>
-      </main>
     </div>
   );
 }
