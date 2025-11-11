@@ -8,6 +8,51 @@ Milo is a modern trucking operations management platform designed to streamline 
 
 Preferred communication style: Simple, everyday language.
 
+## Recent Changes
+
+### Phase 2 Task 4 - Dashboard Sidebar Integration (November 11, 2025)
+
+**Completed**: Integrated Shadcn sidebar navigation system for authenticated routes.
+
+**Key Features Implemented**:
+- AppSidebar component with navigation links (Dashboard, Drivers, Schedules, Routes, AI Assistant)
+- ProtectedLayout wrapper using SidebarProvider for authenticated routes
+- SidebarTrigger button in dashboard header for collapse/expand functionality
+- User info display in sidebar footer (username, email) with logout button
+- Active route highlighting using wouter's useLocation hook
+- Built-in keyboard shortcut (Cmd/Ctrl+B) for sidebar toggle via Shadcn
+- Responsive mobile/desktop behavior handled by SidebarProvider
+
+**Critical Bug Fix - Session Cookie Persistence**:
+- Added `credentials: "include"` to ALL fetch requests in auth.tsx
+- Fixed issue where login/signup would succeed but session wouldn't persist on navigation
+- Session cookies now properly sent with requests for checkAuth, login, signup, and logout
+- TanStack Query cache cleared on logout to prevent stale protected data exposure
+
+**Architecture**:
+- Sidebar only renders for protected routes (/dashboard and future protected pages)
+- Public routes (/, /login, /signup) render without ProtectedLayout/sidebar
+- Navigation links include comprehensive data-testid attributes for e2e testing
+- Logout function clears both session and queryClient cache before redirect
+
+**Testing Coverage**:
+- Comprehensive e2e test covering signup → login → sidebar visibility → navigation → logout → protected route access
+- All navigation elements have data-testid: nav-dashboard, nav-drivers, nav-schedules, nav-routes, nav-chat
+- User info elements: text-user-name, text-user-email
+- Action buttons: button-logout, button-sidebar-toggle
+
+**Files Modified**:
+- Created: client/src/components/app-sidebar.tsx
+- Modified: client/src/App.tsx (added ProtectedLayout, SidebarProvider integration)
+- Modified: client/src/lib/auth.tsx (added credentials: "include", queryClient.clear() on logout)
+- Modified: client/src/pages/Dashboard.tsx (removed duplicate header, cleaned up layout)
+
+**Next Steps**: 
+- Task 5: Implement Drivers page with CRUD functionality
+- Task 6: Build Schedules page with calendar view
+- Task 7: Create AI Chat interface
+- Task 8: Add CSV/Excel import functionality
+
 ## System Architecture
 
 ### Frontend Architecture
