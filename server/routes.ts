@@ -47,10 +47,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       secret: SESSION_SECRET,
       resave: false,
       saveUninitialized: false,
+      name: 'milo.sid', // Custom session cookie name
       cookie: {
-        secure: process.env.NODE_ENV === "production",
+        secure: false, // Allow cookies over HTTP in development
         httpOnly: true,
-        maxAge: 1000 * 60 * 60 * 24 * 7, // 1 week
+        sameSite: 'lax', // Allow cookies in same-site requests
+        maxAge: 1000 * 60 * 60 * 24 * 30, // 30 days default
+        path: '/', // Cookie available for entire site
       },
     })
   );
