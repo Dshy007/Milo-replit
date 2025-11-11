@@ -37,12 +37,12 @@ export default function Hero() {
   ];
 
   return (
-    <section className="relative min-h-screen flex items-center justify-center overflow-hidden bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+    <section className="relative min-h-screen flex items-center justify-center overflow-hidden bg-gradient-to-br from-background via-slate-50 to-background">
       <div className="absolute inset-0 pointer-events-none">
         {floatingDates.map((item, index) => (
           <div
             key={index}
-            className={`absolute ${item.size} font-bold text-primary/40`}
+            className={`absolute ${item.size} font-bold text-primary/30`}
             style={{
               top: item.top,
               left: item.left,
@@ -57,30 +57,38 @@ export default function Hero() {
       </div>
 
       <div className="absolute inset-0">
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-gradient-radial from-orange-400/20 via-primary/15 to-transparent rounded-full blur-[120px]"></div>
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-gradient-radial from-orange-200/30 via-primary/10 to-transparent rounded-full blur-[120px]"></div>
       </div>
 
       <div className="relative z-10 max-w-5xl mx-auto px-8 py-40 text-center">
         <div className="mb-16">
           <div className="relative inline-block">
-            <div className="absolute -inset-32 bg-gradient-radial from-orange-300/30 via-orange-400/10 to-transparent rounded-full blur-[100px] -z-10"></div>
-            <div className="absolute -inset-40 bg-gradient-radial from-primary/20 via-primary/5 to-transparent rounded-full blur-[140px] -z-10"></div>
+            <div className="absolute -inset-32 bg-gradient-radial from-orange-200/40 via-orange-100/20 to-transparent rounded-full blur-[100px] -z-10"></div>
+            <div className="absolute -inset-40 bg-gradient-radial from-primary/15 via-primary/5 to-transparent rounded-full blur-[140px] -z-10"></div>
             
-            <h1 className="text-8xl md:text-9xl lg:text-[12rem] font-bold mb-4 text-slate-900 tracking-tighter" style={{
+            <h1 className="text-8xl md:text-9xl lg:text-[12rem] font-bold mb-4 text-foreground tracking-tighter" style={{
               textShadow: `
-                0 4px 20px rgba(251, 146, 60, 0.4),
-                0 0 40px rgba(6, 182, 212, 0.2)
-              `
+                0 0 20px rgba(255, 255, 255, 0.9),
+                0 0 40px rgba(255, 255, 255, 0.6),
+                0 0 60px rgba(255, 255, 255, 0.4),
+                0 0 80px hsl(195 100% 50% / 0.8),
+                0 0 120px hsl(195 100% 50% / 0.6),
+                0 0 160px hsl(195 100% 50% / 0.5),
+                0 0 200px hsl(195 100% 50% / 0.4)
+              `,
+              filter: 'drop-shadow(0 0 60px rgba(255, 255, 255, 0.5)) drop-shadow(0 0 100px hsl(195 100% 50% / 0.6))'
             }}>
               Milo
             </h1>
           </div>
           
           <div className="inline-block">
-            <p className="text-2xl md:text-3xl text-slate-300 font-medium tracking-wide mb-12">
+            <p className="text-2xl md:text-3xl text-primary font-medium tracking-wide mb-12" style={{
+              filter: 'drop-shadow(0 0 20px hsl(195 100% 50% / 0.5))'
+            }}>
               AI-Powered
             </p>
-            <div className="h-0.5 w-full bg-gradient-to-r from-transparent via-slate-400 to-transparent"></div>
+            <div className="h-0.5 w-full bg-gradient-to-r from-transparent via-primary/50 to-transparent"></div>
           </div>
           
           <p className="text-xl text-muted-foreground max-w-3xl mx-auto font-light leading-relaxed">
