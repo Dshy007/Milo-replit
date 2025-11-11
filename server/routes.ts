@@ -645,6 +645,76 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ==================== AI CHAT ====================
+
+  app.post("/api/chat", requireAuth, async (req, res) => {
+    try {
+      const { message, history = [] } = req.body;
+
+      if (!message || typeof message !== "string") {
+        return res.status(400).json({ message: "Message is required" });
+      }
+
+      // Get user info for context
+      const user = await dbStorage.getUser(req.session.userId!);
+      const tenant = user?.tenantId ? await dbStorage.getTenant(user.tenantId) : null;
+
+      // Construct system prompt with context about Milo and available data
+      const systemPrompt = `You are Milo, an AI assistant for a trucking operations management platform called Milo. You help ${tenant?.name || "the company"} manage their fleet operations.
+
+Your capabilities include:
+- Answering questions about drivers, trucks, routes, schedules, loads, and contracts
+- Providing insights about fleet operations and logistics
+- Helping with scheduling and route planning concepts
+- Explaining DOT compliance requirements
+- Offering operational recommendations
+
+Current Context:
+- Company: ${tenant?.name || "Unknown"}
+- User: ${user?.username || "Unknown"}
+
+Be concise, professional, and helpful. Focus on trucking operations management. If asked about data you don't have direct access to, explain what information would be helpful and suggest where they can find it in the application.`;
+
+      // Import OpenAI client
+      const { default: OpenAI } = await import("openai");
+      
+      const openai = new OpenAI({
+        baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+        apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY
+      });
+
+      // Build messages array with history
+      const messages = [
+        { role: "system" as const, content: systemPrompt },
+        ...history.map((msg: any) => ({
+          role: msg.role as "user" | "assistant",
+          content: msg.content
+        })),
+        { role: "user" as const, content: message }
+      ];
+
+      // Call OpenAI
+      const completion = await openai.chat.completions.create({
+        model: "gpt-5", // the newest OpenAI model is "gpt-5" which was released August 7, 2025. do not change this unless explicitly requested by the user
+        messages,
+        max_completion_tokens: 2048,
+      });
+
+      const aiResponse = completion.choices[0]?.message?.content || "I apologize, I couldn't generate a response.";
+
+      res.json({ 
+        message: aiResponse,
+        usage: completion.usage
+      });
+    } catch (error: any) {
+      console.error("AI Chat Error:", error);
+      res.status(500).json({ 
+        message: "Failed to get AI response", 
+        error: error.message 
+      });
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }

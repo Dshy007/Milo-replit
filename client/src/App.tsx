@@ -14,6 +14,7 @@ import Dashboard from "@/pages/Dashboard";
 import Drivers from "@/pages/Drivers";
 import Schedules from "@/pages/Schedules";
 import Routes from "@/pages/Routes";
+import Chat from "@/pages/Chat";
 import NotFound from "@/pages/not-found";
 
 function ProtectedLayout({ children }: { children: ReactNode }) {
@@ -70,6 +71,13 @@ function Router() {
         <ProtectedRoute>
           <ProtectedLayout>
             <Routes />
+          </ProtectedLayout>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/chat">
+        <ProtectedRoute>
+          <ProtectedLayout>
+            <Chat />
           </ProtectedLayout>
         </ProtectedRoute>
       </Route>
