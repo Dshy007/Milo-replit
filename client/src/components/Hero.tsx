@@ -1,6 +1,5 @@
 import { Button } from "@/components/ui/button";
 import { ArrowRight } from "lucide-react";
-import { Card } from "@/components/ui/card";
 
 export default function Hero() {
   const currentDate = new Date();
@@ -25,44 +24,75 @@ export default function Hero() {
   return (
     <section className="relative min-h-screen flex items-center justify-center overflow-hidden bg-gradient-to-br from-background via-slate-50 to-background">
       <div className="absolute inset-0">
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-gradient-radial from-orange-200/30 via-primary/10 to-transparent rounded-full blur-[120px]"></div>
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[1000px] h-[1000px] bg-gradient-radial from-orange-200/30 via-primary/10 to-transparent rounded-full blur-[120px]"></div>
       </div>
 
-      <div className="relative z-10 max-w-6xl mx-auto px-8 py-20">
-        <Card className="p-8 bg-background/60 backdrop-blur-xl border-2 border-primary/20 shadow-[0_0_60px_hsl(195_100%_50%/0.2)]">
-          <div className="mb-6 text-center">
-            <h2 className="text-3xl font-bold text-foreground mb-2">{monthNames[currentMonth]} {currentYear}</h2>
+      {/* Calendar in background with perspective */}
+      <div 
+        className="absolute inset-0 flex items-center justify-center"
+        style={{
+          perspective: '1500px',
+          perspectiveOrigin: 'center center'
+        }}
+      >
+        <div 
+          className="w-[1200px] opacity-30 blur-[2px]"
+          style={{
+            transform: 'rotateX(65deg) translateY(200px)',
+            transformStyle: 'preserve-3d'
+          }}
+        >
+          <div className="bg-background/40 backdrop-blur-sm border border-primary/20 rounded-lg p-8">
+            <div className="mb-6 text-center">
+              <h2 className="text-4xl font-bold text-foreground">{monthNames[currentMonth]} {currentYear}</h2>
+            </div>
+            
+            <div className="grid grid-cols-7 gap-6 mb-4">
+              {daysOfWeek.map((day) => (
+                <div key={day} className="text-center font-semibold text-primary text-lg">
+                  {day}
+                </div>
+              ))}
+            </div>
+            
+            <div className="grid grid-cols-7 gap-6">
+              {calendarDays.map((day, index) => (
+                <div
+                  key={index}
+                  className={`aspect-square flex items-center justify-center rounded-md text-2xl font-bold ${
+                    day === today
+                      ? 'bg-primary/80 text-primary-foreground shadow-[0_0_30px_hsl(195_100%_50%/0.8)]'
+                      : day
+                      ? 'bg-card/60 text-foreground'
+                      : ''
+                  }`}
+                >
+                  {day}
+                </div>
+              ))}
+            </div>
           </div>
-          
-          <div className="grid grid-cols-7 gap-4 mb-4">
-            {daysOfWeek.map((day) => (
-              <div key={day} className="text-center font-semibold text-primary text-sm">
-                {day}
-              </div>
-            ))}
-          </div>
-          
-          <div className="grid grid-cols-7 gap-4">
-            {calendarDays.map((day, index) => (
-              <div
-                key={index}
-                className={`aspect-square flex items-center justify-center rounded-md text-lg font-medium transition-all ${
-                  day === today
-                    ? 'bg-primary text-primary-foreground shadow-[0_0_20px_hsl(195_100%_50%/0.6)]'
-                    : day
-                    ? 'bg-card hover-elevate active-elevate-2 cursor-pointer'
-                    : ''
-                }`}
-                data-testid={day ? `calendar-day-${day}` : undefined}
-              >
-                {day}
-              </div>
-            ))}
-          </div>
-        </Card>
+        </div>
+      </div>
 
-        <div className="mt-12 text-center">
-          <div className="flex justify-center">
+      {/* Foreground content */}
+      <div className="relative z-10 max-w-5xl mx-auto px-8 py-40 text-center">
+        <div className="mb-16">
+          <h1 className="text-7xl md:text-8xl font-bold mb-6 text-foreground tracking-tight" style={{
+            textShadow: '0 2px 40px rgba(0,0,0,0.1)'
+          }}>
+            Milo
+          </h1>
+          
+          <p className="text-3xl md:text-4xl text-primary/90 font-semibold mb-6">
+            Your AI Operations Brain
+          </p>
+          
+          <p className="text-xl text-muted-foreground max-w-2xl mx-auto mb-12">
+            Stop wasting hours every week on scheduling.
+          </p>
+
+          <div className="flex flex-col sm:flex-row gap-5 justify-center items-center">
             <Button 
               size="lg" 
               className="text-base px-14 h-14 rounded-full font-medium shadow-[0_0_40px_hsl(195_100%_50%/0.4)] border-2 border-primary/50"
@@ -71,6 +101,15 @@ export default function Hero() {
             >
               Get Started Free
               <ArrowRight className="ml-2 w-5 h-5" />
+            </Button>
+            <Button 
+              size="lg" 
+              variant="outline"
+              className="text-base px-14 h-14 rounded-full font-medium border-2 border-primary/30 bg-background/50 backdrop-blur-xl"
+              data-testid="button-watch-demo"
+              onClick={() => console.log('Watch demo clicked')}
+            >
+              Watch Demo
             </Button>
           </div>
           
