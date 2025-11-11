@@ -1,5 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { ArrowRight } from "lucide-react";
+import { Link } from "wouter";
 
 export default function Hero() {
   const currentDate = new Date();
@@ -102,15 +103,16 @@ export default function Hero() {
           </p>
 
           <div className="flex justify-center items-center">
-            <Button 
-              size="lg" 
-              className="text-base px-14 h-14 rounded-full font-medium shadow-[0_0_40px_hsl(195_100%_50%/0.4)] border-2 border-primary/50"
-              data-testid="button-start-trial"
-              onClick={() => console.log('Start trial clicked')}
-            >
-              Get Started Free
-              <ArrowRight className="ml-2 w-5 h-5" />
-            </Button>
+            <Link href="/signup">
+              <Button 
+                size="lg" 
+                className="text-base px-14 h-14 rounded-full font-medium shadow-[0_0_40px_hsl(195_100%_50%/0.4)] border-2 border-primary/50"
+                data-testid="button-start-trial"
+              >
+                Get Started Free
+                <ArrowRight className="ml-2 w-5 h-5" />
+              </Button>
+            </Link>
           </div>
           
           <p className="text-sm text-muted-foreground mt-6">
