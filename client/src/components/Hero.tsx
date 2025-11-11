@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { ArrowRight } from "lucide-react";
-import calendarBg from "@assets/generated_images/Calendar_background_with_text_only_52a55f42.png";
+import calendarBg from "@assets/generated_images/Clean_calendar_background_no_text_77d9f00e.png";
 
 export default function Hero() {
   return (
