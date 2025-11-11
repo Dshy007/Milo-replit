@@ -295,7 +295,7 @@ export default function Contracts() {
               Bench Contracts
             </h1>
             <p className="text-sm text-muted-foreground" data-testid="page-subtitle">
-              Manage bench contract schedules with start times and tractors
+              Manage contract start times and tractor assignments
             </p>
           </div>
         </div>
