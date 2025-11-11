@@ -14,6 +14,7 @@ import Dashboard from "@/pages/Dashboard";
 import Drivers from "@/pages/Drivers";
 import Schedules from "@/pages/Schedules";
 import Routes from "@/pages/Routes";
+import Trucks from "@/pages/Trucks";
 import Chat from "@/pages/Chat";
 import NotFound from "@/pages/not-found";
 
@@ -71,6 +72,13 @@ function Router() {
         <ProtectedRoute>
           <ProtectedLayout>
             <Routes />
+          </ProtectedLayout>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/trucks">
+        <ProtectedRoute>
+          <ProtectedLayout>
+            <Trucks />
           </ProtectedLayout>
         </ProtectedRoute>
       </Route>
