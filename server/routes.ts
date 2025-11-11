@@ -29,9 +29,19 @@ declare module "express-session" {
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Session middleware
+  // PostgreSQL session store for production-grade session management
+  const { default: connectPgSimple } = await import("connect-pg-simple");
+  const PgSession = connectPgSimple(session);
+  
   app.use(
     session({
+      store: new PgSession({
+        conObject: {
+          connectionString: process.env.DATABASE_URL,
+        },
+        createTableIfMissing: true,
+        pruneSessionInterval: 60 * 15, // Prune expired sessions every 15 minutes
+      }),
       secret: SESSION_SECRET,
       resave: false,
       saveUninitialized: false,
