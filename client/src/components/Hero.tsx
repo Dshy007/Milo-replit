@@ -24,37 +24,37 @@ export default function Hero() {
   return (
     <section className="relative min-h-screen flex items-center justify-center overflow-hidden bg-gradient-to-br from-background via-background to-primary/5">
       <div 
-        className="absolute inset-0 flex items-center justify-center pointer-events-none p-12"
+        className="absolute inset-0 flex items-center justify-center pointer-events-none p-8"
         style={{
-          opacity: 0.04,
-          filter: 'blur(1px) saturate(0.3)',
+          opacity: 0.12,
+          filter: 'blur(0.5px) saturate(0.5)',
           transform: 'scale(1.5)'
         }}
       >
-        <div className="max-w-4xl w-full">
-          <div className="text-center mb-6">
-            <h3 className="text-2xl font-semibold text-foreground/60">
+        <div className="max-w-5xl w-full">
+          <div className="text-center mb-8">
+            <h3 className="text-3xl font-bold text-foreground tracking-wide">
               {monthNames[currentMonth]} {currentYear}
             </h3>
           </div>
           
-          <div className="grid grid-cols-7 gap-4 mb-4">
+          <div className="grid grid-cols-7 gap-5 mb-5">
             {daysOfWeek.map((day) => (
-              <div key={day} className="text-center text-sm font-medium text-foreground/50">
+              <div key={day} className="text-center text-base font-semibold text-foreground">
                 {day}
               </div>
             ))}
           </div>
           
-          <div className="grid grid-cols-7 gap-4">
+          <div className="grid grid-cols-7 gap-5">
             {calendarDays.map((day, index) => (
               <div
                 key={index}
-                className={`aspect-square flex items-center justify-center text-xl font-medium rounded-lg ${
+                className={`aspect-square flex items-center justify-center text-2xl font-semibold rounded-xl ${
                   day === today 
-                    ? 'bg-foreground/30 border border-foreground/40 text-foreground' 
+                    ? 'bg-foreground/40 border-2 border-foreground/60 text-foreground' 
                     : day 
-                    ? 'bg-foreground/10 border border-foreground/20 text-foreground/70' 
+                    ? 'bg-foreground/20 border border-foreground/30 text-foreground' 
                     : 'bg-transparent'
                 }`}
               >
