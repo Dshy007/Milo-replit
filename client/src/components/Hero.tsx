@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { ArrowRight } from "lucide-react";
-import calendarBg from "@assets/generated_images/Enhanced_Milo_calendar_background_b86eb619.png";
+import calendarBg from "@assets/generated_images/Milo_with_premium_font_0a1c0ee7.png";
 
 export default function Hero() {
   return (
