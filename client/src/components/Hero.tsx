@@ -2,25 +2,73 @@ import { Button } from "@/components/ui/button";
 import { ArrowRight } from "lucide-react";
 
 export default function Hero() {
-  const calendarGrid = [];
-  for (let i = 0; i < 35; i++) {
-    calendarGrid.push(i);
+  const currentDate = new Date();
+  const currentMonth = currentDate.getMonth();
+  const currentYear = currentDate.getFullYear();
+  const today = currentDate.getDate();
+  
+  const firstDay = new Date(currentYear, currentMonth, 1).getDay();
+  const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+  
+  const calendarDays = [];
+  for (let i = 0; i < firstDay; i++) {
+    calendarDays.push(null);
   }
+  for (let day = 1; day <= daysInMonth; day++) {
+    calendarDays.push(day);
+  }
+  
+  const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const daysOfWeek = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
   return (
     <section className="relative min-h-screen flex items-center justify-center overflow-hidden bg-gradient-to-br from-background via-background to-primary/5">
-      <div className="absolute inset-0 flex items-center justify-center opacity-[0.04] pointer-events-none p-8">
-        <div className="grid grid-cols-7 gap-4 max-w-5xl w-full">
-          {calendarGrid.map((i) => (
-            <div
-              key={i}
-              className="aspect-square bg-primary/5 rounded-2xl border border-primary/10"
-              style={{
-                filter: 'drop-shadow(0 0 10px hsl(195 100% 50% / 0.15))',
-                boxShadow: 'inset 0 0 15px hsl(195 100% 50% / 0.05)'
-              }}
-            />
-          ))}
+      <div className="absolute inset-0 flex items-center justify-center opacity-[0.08] pointer-events-none p-12">
+        <div className="max-w-4xl w-full">
+          <div className="text-center mb-6">
+            <h3 className="text-2xl font-bold text-primary/60" style={{
+              filter: 'drop-shadow(0 0 15px hsl(195 100% 50% / 0.3))'
+            }}>
+              {monthNames[currentMonth]} {currentYear}
+            </h3>
+          </div>
+          
+          <div className="grid grid-cols-7 gap-3 mb-3">
+            {daysOfWeek.map((day) => (
+              <div key={day} className="text-center text-sm font-semibold text-primary/50">
+                {day}
+              </div>
+            ))}
+          </div>
+          
+          <div className="grid grid-cols-7 gap-3">
+            {calendarDays.map((day, index) => (
+              <div
+                key={index}
+                className={`aspect-square flex items-center justify-center text-lg font-medium rounded-2xl ${
+                  day === today 
+                    ? 'bg-primary/20 border-2 border-primary/40 text-primary' 
+                    : day 
+                    ? 'bg-primary/5 border border-primary/15 text-primary/60' 
+                    : 'bg-transparent'
+                }`}
+                style={{
+                  filter: day === today 
+                    ? 'drop-shadow(0 0 25px hsl(195 100% 50% / 0.5))' 
+                    : day 
+                    ? 'drop-shadow(0 0 10px hsl(195 100% 50% / 0.2))' 
+                    : 'none',
+                  boxShadow: day === today 
+                    ? 'inset 0 0 20px hsl(195 100% 50% / 0.15)' 
+                    : day 
+                    ? 'inset 0 0 10px hsl(195 100% 50% / 0.05)' 
+                    : 'none'
+                }}
+              >
+                {day}
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
