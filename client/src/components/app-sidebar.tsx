@@ -48,7 +48,7 @@ const navItems = [
     testId: "nav-trucks",
   },
   {
-    title: "Bench Contracts",
+    title: "Start Times",
     url: "/contracts",
     icon: FileText,
     testId: "nav-contracts",

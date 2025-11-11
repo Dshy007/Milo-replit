@@ -320,9 +320,9 @@ export default function Contracts() {
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
-                <DialogTitle>Import Bench Contracts</DialogTitle>
+                <DialogTitle>Import Start Times</DialogTitle>
                 <DialogDescription>
-                  Upload a CSV or Excel file with your bench contract data
+                  Upload a CSV or Excel file with your contract start times
                 </DialogDescription>
               </DialogHeader>
               <div
@@ -372,9 +372,9 @@ export default function Contracts() {
             </DialogTrigger>
             <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
-                <DialogTitle>Add New Bench Contract</DialogTitle>
+                <DialogTitle>Add New Contract</DialogTitle>
                 <DialogDescription>
-                  Create a new bench contract with start time and tractor assignment
+                  Create a new contract with start time and tractor assignment
                 </DialogDescription>
               </DialogHeader>
               <Form {...addForm}>
@@ -704,7 +704,7 @@ export default function Contracts() {
           <DialogHeader>
             <DialogTitle>Edit Contract</DialogTitle>
             <DialogDescription>
-              Update bench contract information
+              Update contract information
             </DialogDescription>
           </DialogHeader>
           <Form {...editForm}>
