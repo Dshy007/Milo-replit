@@ -1,6 +1,4 @@
 import { useState, useRef, useEffect } from "react";
-import { useMutation } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent } from "@/components/ui/card";
@@ -17,6 +15,8 @@ export default function Chat() {
   const { toast } = useToast();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [streamingMessage, setStreamingMessage] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when new messages arrive
@@ -24,33 +24,10 @@ export default function Chat() {
     if (scrollRef.current) {
       scrollRef.current.scrollIntoView({ behavior: "smooth" });
     }
-  }, [messages]);
+  }, [messages, streamingMessage]);
 
-  const chatMutation = useMutation({
-    mutationFn: async (message: string) => {
-      const response = await apiRequest("POST", "/api/chat", {
-        message,
-        history: messages.slice(-10), // Send last 10 messages for context
-      });
-      return response.json();
-    },
-    onSuccess: (data: any) => {
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: data.message },
-      ]);
-    },
-    onError: (error: Error) => {
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: error.message || "Failed to get AI response",
-      });
-    },
-  });
-
-  const handleSend = () => {
-    if (!input.trim()) return;
+  const handleSend = async () => {
+    if (!input.trim() || isStreaming) return;
 
     const userMessage = input.trim();
     setInput("");
@@ -58,8 +35,79 @@ export default function Chat() {
     // Add user message immediately
     setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
     
-    // Send to AI
-    chatMutation.mutate(userMessage);
+    // Start streaming
+    setIsStreaming(true);
+    setStreamingMessage("");
+
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          message: userMessage,
+          history: messages.slice(-10),
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to get AI response");
+      }
+
+      if (!response.body) {
+        throw new Error("No response body");
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let accumulatedMessage = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split('\n');
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = JSON.parse(line.slice(6));
+            
+            if (data.error) {
+              throw new Error(data.error);
+            }
+            
+            if (data.done) {
+              // Streaming complete
+              setMessages((prev) => [
+                ...prev,
+                { role: "assistant", content: accumulatedMessage },
+              ]);
+              setStreamingMessage("");
+              setIsStreaming(false);
+              return;
+            }
+            
+            if (data.content) {
+              accumulatedMessage += data.content;
+              setStreamingMessage(accumulatedMessage);
+            }
+          }
+        }
+      }
+    } catch (error: any) {
+      console.error("Chat error:", error);
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: error.message || "Failed to get AI response",
+      });
+      setIsStreaming(false);
+      setStreamingMessage("");
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -170,8 +218,25 @@ export default function Chat() {
               ))
             )}
             
+            {/* Streaming message */}
+            {isStreaming && streamingMessage && (
+              <div className="flex gap-4 justify-start" data-testid="message-streaming">
+                <div className="flex-shrink-0 flex items-start">
+                  <div className="flex items-center justify-center w-8 h-8 rounded-full bg-primary/10">
+                    <Sparkles className="w-4 h-4 text-primary" />
+                  </div>
+                </div>
+                <Card>
+                  <CardContent className="p-4">
+                    <p className="text-foreground whitespace-pre-wrap">{streamingMessage}</p>
+                    <div className="inline-block w-2 h-4 bg-primary ml-1 animate-pulse" />
+                  </CardContent>
+                </Card>
+              </div>
+            )}
+            
             {/* Loading indicator */}
-            {chatMutation.isPending && (
+            {isStreaming && !streamingMessage && (
               <div className="flex gap-4 justify-start" data-testid="message-loading">
                 <div className="flex-shrink-0 flex items-start">
                   <div className="flex items-center justify-center w-8 h-8 rounded-full bg-primary/10">
@@ -204,12 +269,12 @@ export default function Chat() {
               onKeyDown={handleKeyDown}
               placeholder="Ask Milo anything about your trucking operations..."
               className="min-h-[60px] resize-none"
-              disabled={chatMutation.isPending}
+              disabled={isStreaming}
               data-testid="input-chat-message"
             />
             <Button
               onClick={handleSend}
-              disabled={!input.trim() || chatMutation.isPending}
+              disabled={!input.trim() || isStreaming}
               size="icon"
               className="h-[60px] w-[60px] flex-shrink-0"
               data-testid="button-send-message"

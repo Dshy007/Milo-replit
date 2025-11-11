@@ -820,25 +820,44 @@ Be concise, professional, and helpful. Focus on trucking operations management. 
         { role: "user" as const, content: message }
       ];
 
-      // Call OpenAI
-      const completion = await openai.chat.completions.create({
+      // Set up SSE headers for streaming
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+
+      // Call OpenAI with streaming enabled
+      const stream = await openai.chat.completions.create({
         model: "gpt-5", // the newest OpenAI model is "gpt-5" which was released August 7, 2025. do not change this unless explicitly requested by the user
         messages,
         max_completion_tokens: 2048,
+        stream: true,
       });
 
-      const aiResponse = completion.choices[0]?.message?.content || "I apologize, I couldn't generate a response.";
+      // Stream the response
+      for await (const chunk of stream) {
+        const content = chunk.choices[0]?.delta?.content || '';
+        if (content) {
+          res.write(`data: ${JSON.stringify({ content })}\n\n`);
+        }
+      }
 
-      res.json({ 
-        message: aiResponse,
-        usage: completion.usage
-      });
+      // Send done signal
+      res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+      res.end();
     } catch (error: any) {
       console.error("AI Chat Error:", error);
-      res.status(500).json({ 
-        message: "Failed to get AI response", 
-        error: error.message 
-      });
+      
+      // If headers not sent, return JSON error
+      if (!res.headersSent) {
+        res.status(500).json({ 
+          message: "Failed to get AI response", 
+          error: error.message 
+        });
+      } else {
+        // Send error in stream format
+        res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
+        res.end();
+      }
     }
   });
 
