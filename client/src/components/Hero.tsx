@@ -23,19 +23,23 @@ export default function Hero() {
 
   return (
     <section className="relative min-h-screen flex items-center justify-center overflow-hidden bg-gradient-to-br from-background via-background to-primary/5">
-      <div className="absolute inset-0 flex items-center justify-center opacity-[0.08] pointer-events-none p-12">
+      <div 
+        className="absolute inset-0 flex items-center justify-center pointer-events-none p-12"
+        style={{
+          opacity: 0.04,
+          filter: 'blur(1px) saturate(0.3)'
+        }}
+      >
         <div className="max-w-4xl w-full">
           <div className="text-center mb-6">
-            <h3 className="text-2xl font-bold text-primary/60" style={{
-              filter: 'drop-shadow(0 0 15px hsl(195 100% 50% / 0.3))'
-            }}>
+            <h3 className="text-xl font-semibold text-foreground/60">
               {monthNames[currentMonth]} {currentYear}
             </h3>
           </div>
           
           <div className="grid grid-cols-7 gap-3 mb-3">
             {daysOfWeek.map((day) => (
-              <div key={day} className="text-center text-sm font-semibold text-primary/50">
+              <div key={day} className="text-center text-xs font-medium text-foreground/50">
                 {day}
               </div>
             ))}
@@ -45,25 +49,13 @@ export default function Hero() {
             {calendarDays.map((day, index) => (
               <div
                 key={index}
-                className={`aspect-square flex items-center justify-center text-lg font-medium rounded-2xl ${
+                className={`aspect-square flex items-center justify-center text-base font-medium rounded-lg ${
                   day === today 
-                    ? 'bg-primary/20 border-2 border-primary/40 text-primary' 
+                    ? 'bg-foreground/30 border border-foreground/40 text-foreground' 
                     : day 
-                    ? 'bg-primary/5 border border-primary/15 text-primary/60' 
+                    ? 'bg-foreground/10 border border-foreground/20 text-foreground/70' 
                     : 'bg-transparent'
                 }`}
-                style={{
-                  filter: day === today 
-                    ? 'drop-shadow(0 0 25px hsl(195 100% 50% / 0.5))' 
-                    : day 
-                    ? 'drop-shadow(0 0 10px hsl(195 100% 50% / 0.2))' 
-                    : 'none',
-                  boxShadow: day === today 
-                    ? 'inset 0 0 20px hsl(195 100% 50% / 0.15)' 
-                    : day 
-                    ? 'inset 0 0 10px hsl(195 100% 50% / 0.05)' 
-                    : 'none'
-                }}
               >
                 {day}
               </div>
