@@ -158,7 +158,10 @@ export const loads = pgTable("loads", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-export const insertLoadSchema = createInsertSchema(loads).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertLoadSchema = createInsertSchema(loads, {
+  pickupTime: z.coerce.date(),
+  deliveryTime: z.coerce.date(),
+}).omit({ id: true, createdAt: true, updatedAt: true });
 export const updateLoadSchema = insertLoadSchema.omit({ tenantId: true }).partial();
 export type InsertLoad = z.infer<typeof insertLoadSchema>;
 export type UpdateLoad = z.infer<typeof updateLoadSchema>;
