@@ -48,7 +48,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       resave: false,
       saveUninitialized: false,
       rolling: true, // Refresh session on every request
-      name: 'milo.sid', // Custom session cookie name
       cookie: {
         secure: false, // Allow cookies over HTTP in development
         httpOnly: true,
@@ -59,8 +58,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
     })
   );
 
+  // Debug middleware to log session info
+  app.use((req, res, next) => {
+    if (req.path.startsWith('/api/auth')) {
+      console.log('Session ID:', req.sessionID);
+      console.log('Session:', req.session);
+      console.log('Cookies:', req.headers.cookie);
+    }
+    next();
+  });
+
   // Middleware to check authentication
   const requireAuth = (req: any, res: any, next: any) => {
+    console.log('Auth check - Session ID:', req.sessionID, 'User ID:', req.session?.userId);
     if (!req.session.userId) {
       return res.status(401).json({ message: "Unauthorized" });
     }
