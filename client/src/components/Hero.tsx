@@ -26,21 +26,20 @@ export default function Hero() {
       <div 
         className="absolute inset-0 flex items-center justify-center pointer-events-none p-8"
         style={{
-          opacity: 0.15,
-          filter: 'blur(0.3px) saturate(0.6)',
+          opacity: 0.35,
           transform: 'scale(1.5)'
         }}
       >
         <div className="max-w-5xl w-full">
           <div className="text-center mb-8">
-            <h3 className="text-3xl font-bold text-foreground tracking-wide">
+            <h3 className="text-3xl font-bold text-muted-foreground tracking-wide">
               {monthNames[currentMonth]} {currentYear}
             </h3>
           </div>
           
           <div className="grid grid-cols-7 gap-5 mb-5">
             {daysOfWeek.map((day) => (
-              <div key={day} className="text-center text-base font-semibold text-foreground">
+              <div key={day} className="text-center text-lg font-semibold text-muted-foreground">
                 {day}
               </div>
             ))}
@@ -50,11 +49,11 @@ export default function Hero() {
             {calendarDays.map((day, index) => (
               <div
                 key={index}
-                className={`aspect-square flex items-center justify-center text-2xl font-semibold rounded-xl ${
+                className={`aspect-square flex items-center justify-center text-2xl font-bold rounded-xl ${
                   day === today 
-                    ? 'bg-foreground/40 border-2 border-foreground/60 text-foreground' 
+                    ? 'bg-primary/30 border-2 border-primary/50 text-primary' 
                     : day 
-                    ? 'bg-foreground/20 border border-foreground/30 text-foreground' 
+                    ? 'bg-muted/60 border border-muted-foreground/20 text-muted-foreground' 
                     : 'bg-transparent'
                 }`}
               >
