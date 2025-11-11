@@ -291,9 +291,7 @@ export default function Contracts() {
             <FileText className="w-5 h-5 text-primary" data-testid="contracts-icon" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-foreground" data-testid="page-title">
-              Bench Contracts
-            </h1>
+            <h1 className="text-2xl font-bold text-foreground" data-testid="page-title">Start Times</h1>
             <p className="text-sm text-muted-foreground" data-testid="page-subtitle">
               Manage contract start times and tractor assignments
             </p>
@@ -582,7 +580,6 @@ export default function Contracts() {
           </Dialog>
         </div>
       </div>
-
       <Card>
         <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0 pb-4">
           <div className="flex items-center gap-2 flex-1">
@@ -701,7 +698,6 @@ export default function Contracts() {
           </div>
         </CardContent>
       </Card>
-
       {/* Edit Dialog */}
       <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -899,7 +895,6 @@ export default function Contracts() {
           </Form>
         </DialogContent>
       </Dialog>
-
       {/* Delete Confirmation Dialog */}
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>
