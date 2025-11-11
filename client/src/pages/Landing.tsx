@@ -12,28 +12,6 @@ import complianceImage from "@assets/generated_images/Compliance_dashboard_featu
 export default function Landing() {
   return (
     <div className="min-h-screen bg-background relative">
-      <div className="absolute inset-0 opacity-10 pointer-events-none">
-        <div className="absolute inset-0" style={{
-          backgroundImage: `
-            linear-gradient(to right, hsl(195 100% 50%) 1px, transparent 1px),
-            linear-gradient(to bottom, hsl(195 100% 50%) 1px, transparent 1px)
-          `,
-          backgroundSize: '80px 80px',
-          filter: 'drop-shadow(0 0 8px hsl(195 100% 50% / 0.3))'
-        }}></div>
-      </div>
-
-      <div className="absolute inset-0 opacity-[0.06] pointer-events-none">
-        <div className="absolute inset-0" style={{
-          backgroundImage: `
-            linear-gradient(to right, hsl(195 100% 45%) 2px, transparent 2px),
-            linear-gradient(to bottom, hsl(195 100% 45%) 2px, transparent 2px)
-          `,
-          backgroundSize: '400px 400px',
-          filter: 'drop-shadow(0 0 20px hsl(195 100% 45% / 0.4))'
-        }}></div>
-      </div>
-
       <div className="relative z-10">
         <Navbar />
         
