@@ -11,6 +11,7 @@ import Landing from "@/pages/Landing";
 import Login from "@/pages/Login";
 import Signup from "@/pages/Signup";
 import Dashboard from "@/pages/Dashboard";
+import Drivers from "@/pages/Drivers";
 import NotFound from "@/pages/not-found";
 
 function ProtectedLayout({ children }: { children: ReactNode }) {
@@ -46,6 +47,13 @@ function Router() {
         <ProtectedRoute>
           <ProtectedLayout>
             <Dashboard />
+          </ProtectedLayout>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/drivers">
+        <ProtectedRoute>
+          <ProtectedLayout>
+            <Drivers />
           </ProtectedLayout>
         </ProtectedRoute>
       </Route>

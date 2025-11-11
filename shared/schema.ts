@@ -45,7 +45,9 @@ export const drivers = pgTable("drivers", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-export const insertDriverSchema = createInsertSchema(drivers).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertDriverSchema = createInsertSchema(drivers, {
+  licenseExpiry: z.coerce.date(),
+}).omit({ id: true, createdAt: true, updatedAt: true });
 export const updateDriverSchema = insertDriverSchema.omit({ tenantId: true }).partial();
 export type InsertDriver = z.infer<typeof insertDriverSchema>;
 export type UpdateDriver = z.infer<typeof updateDriverSchema>;
