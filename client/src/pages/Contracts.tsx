@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -52,7 +52,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { insertContractSchema, type Contract, type InsertContract } from "@shared/schema";
-import { Plus, Pencil, Trash2, Search, FileText } from "lucide-react";
+import { Plus, Pencil, Trash2, Search, FileText, Upload, Clock, Truck } from "lucide-react";
 
 export default function Contracts() {
   const { toast } = useToast();
@@ -62,6 +62,7 @@ export default function Contracts() {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedContract, setSelectedContract] = useState<Contract | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: contracts = [], isLoading } = useQuery<Contract[]>({
     queryKey: ["/api/contracts"],
@@ -72,6 +73,9 @@ export default function Contracts() {
     defaultValues: {
       name: "",
       type: "solo1",
+      startTime: "",
+      tractorId: "",
+      duration: 14,
       baseRoutes: 10,
       daysPerWeek: 6,
       protectedDrivers: false,
@@ -151,10 +155,43 @@ export default function Contracts() {
     },
   });
 
+  const importContractsMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      const response = await fetch("/api/contracts/import", {
+        method: "POST",
+        body: formData,
+        credentials: "include",
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || "Failed to import contracts");
+      }
+      return response.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/contracts"] });
+      toast({
+        title: "Success",
+        description: `Imported ${data.count} contracts successfully`,
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Import Error",
+        description: error.message || "Failed to import contracts",
+      });
+    },
+  });
+
   const filteredContracts = contracts.filter((contract) => {
     const matchesSearch =
       contract.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      contract.type.toLowerCase().includes(searchTerm.toLowerCase());
+      contract.type.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      contract.startTime.includes(searchTerm) ||
+      contract.tractorId.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesType = typeFilter === "all" || contract.type === typeFilter;
     return matchesSearch && matchesType;
   });
@@ -164,6 +201,9 @@ export default function Contracts() {
     editForm.reset({
       name: contract.name,
       type: contract.type,
+      startTime: contract.startTime,
+      tractorId: contract.tractorId,
+      duration: contract.duration,
       baseRoutes: contract.baseRoutes,
       daysPerWeek: contract.daysPerWeek,
       protectedDrivers: contract.protectedDrivers,
@@ -174,6 +214,16 @@ export default function Contracts() {
   const handleDelete = (contract: Contract) => {
     setSelectedContract(contract);
     setDeleteDialogOpen(true);
+  };
+
+  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      importContractsMutation.mutate(file);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
   };
 
   const getTypeBadgeVariant = (type: string) => {
@@ -219,179 +269,281 @@ export default function Contracts() {
           </div>
           <div>
             <h1 className="text-2xl font-bold text-foreground" data-testid="page-title">
-              Contracts
+              Bench Contracts
             </h1>
             <p className="text-sm text-muted-foreground" data-testid="page-subtitle">
-              Manage contract types and routes
+              Manage bench contract schedules with start times and tractors
             </p>
           </div>
         </div>
 
-        <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-add-contract">
-              <Plus className="w-4 h-4 mr-2" />
-              Add Contract
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Add New Contract</DialogTitle>
-              <DialogDescription>
-                Create a new contract type
-              </DialogDescription>
-            </DialogHeader>
-            <Form {...addForm}>
-              <form
-                onSubmit={addForm.handleSubmit((data) => addContractMutation.mutate(data))}
-                className="space-y-4"
-              >
-                <FormField
-                  control={addForm.control}
-                  name="name"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Contract Name *</FormLabel>
-                      <FormControl>
-                        <Input
-                          placeholder="Solo1"
-                          data-testid="input-name"
-                          {...field}
-                        />
-                      </FormControl>
-                      <FormDescription>
-                        e.g., Solo1, Solo2, Team
-                      </FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+        <div className="flex gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".csv,.xlsx,.xls"
+            onChange={handleFileSelect}
+            className="hidden"
+            data-testid="input-file-upload"
+          />
+          <Button
+            variant="outline"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={importContractsMutation.isPending}
+            data-testid="button-import-contracts"
+          >
+            <Upload className="w-4 h-4 mr-2" />
+            {importContractsMutation.isPending ? "Importing..." : "Import CSV/Excel"}
+          </Button>
+          <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
+            <DialogTrigger asChild>
+              <Button data-testid="button-add-contract">
+                <Plus className="w-4 h-4 mr-2" />
+                Add Contract
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>Add New Bench Contract</DialogTitle>
+                <DialogDescription>
+                  Create a new bench contract with start time and tractor assignment
+                </DialogDescription>
+              </DialogHeader>
+              <Form {...addForm}>
+                <form
+                  onSubmit={addForm.handleSubmit((data) => addContractMutation.mutate(data))}
+                  className="space-y-4"
+                >
+                  <div className="grid grid-cols-2 gap-4">
+                    <FormField
+                      control={addForm.control}
+                      name="name"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Contract Name *</FormLabel>
+                          <FormControl>
+                            <Input
+                              placeholder="0030"
+                              data-testid="input-name"
+                              {...field}
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            e.g., Solo1, Solo2, Team
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
 
-                <FormField
-                  control={addForm.control}
-                  name="type"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Contract Type *</FormLabel>
-                      <Select
-                        onValueChange={field.onChange}
-                        defaultValue={field.value}
-                      >
+                    <FormField
+                      control={addForm.control}
+                      name="type"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Contract Type *</FormLabel>
+                          <Select
+                            onValueChange={field.onChange}
+                            defaultValue={field.value}
+                          >
+                            <FormControl>
+                              <SelectTrigger data-testid="select-type">
+                                <SelectValue placeholder="Select type" />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              <SelectItem value="solo1">Solo 1</SelectItem>
+                              <SelectItem value="solo2">Solo 2</SelectItem>
+                              <SelectItem value="team">Team</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <FormField
+                      control={addForm.control}
+                      name="startTime"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Start Time *</FormLabel>
+                          <FormControl>
+                            <div className="relative">
+                              <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                              <Input
+                                placeholder="00:30"
+                                className="pl-9"
+                                data-testid="input-start-time"
+                                {...field}
+                              />
+                            </div>
+                          </FormControl>
+                          <FormDescription>
+                            HH:MM format (e.g., 00:30, 16:30)
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={addForm.control}
+                      name="tractorId"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Tractor *</FormLabel>
+                          <FormControl>
+                            <div className="relative">
+                              <Truck className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                              <Input
+                                placeholder="Tractor_8"
+                                className="pl-9"
+                                data-testid="input-tractor-id"
+                                {...field}
+                              />
+                            </div>
+                          </FormControl>
+                          <FormDescription>
+                            e.g., Tractor_1, Tractor_2
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <FormField
+                      control={addForm.control}
+                      name="duration"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Duration (hours) *</FormLabel>
+                          <FormControl>
+                            <Input
+                              type="number"
+                              placeholder="14"
+                              data-testid="input-duration"
+                              {...field}
+                              value={field.value || ""}
+                              onChange={(e) => {
+                                const value = e.target.value;
+                                field.onChange(value === "" ? "" : parseInt(value, 10));
+                              }}
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            14 for Solo1, 38 for Solo2
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={addForm.control}
+                      name="baseRoutes"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Base Routes *</FormLabel>
+                          <FormControl>
+                            <Input
+                              type="number"
+                              placeholder="10"
+                              data-testid="input-base-routes"
+                              {...field}
+                              value={field.value || ""}
+                              onChange={(e) => {
+                                const value = e.target.value;
+                                field.onChange(value === "" ? "" : parseInt(value, 10));
+                              }}
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            10 for Solo1, 7 for Solo2
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+
+                  <FormField
+                    control={addForm.control}
+                    name="daysPerWeek"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Days Per Week *</FormLabel>
                         <FormControl>
-                          <SelectTrigger data-testid="select-type">
-                            <SelectValue placeholder="Select type" />
-                          </SelectTrigger>
+                          <Input
+                            type="number"
+                            placeholder="6"
+                            data-testid="input-days-per-week"
+                            {...field}
+                            value={field.value || ""}
+                            onChange={(e) => {
+                              const value = e.target.value;
+                              field.onChange(value === "" ? "" : parseInt(value, 10));
+                            }}
+                          />
                         </FormControl>
-                        <SelectContent>
-                          <SelectItem value="solo1">Solo 1</SelectItem>
-                          <SelectItem value="solo2">Solo 2</SelectItem>
-                          <SelectItem value="team">Team</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-
-                <FormField
-                  control={addForm.control}
-                  name="baseRoutes"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Base Routes *</FormLabel>
-                      <FormControl>
-                        <Input
-                          type="number"
-                          placeholder="10"
-                          data-testid="input-base-routes"
-                          {...field}
-                          value={field.value || ""}
-                          onChange={(e) => {
-                            const value = e.target.value;
-                            field.onChange(value === "" ? "" : parseInt(value, 10));
-                          }}
-                        />
-                      </FormControl>
-                      <FormDescription>
-                        Number of base routes (e.g., 10 for Solo1, 7 for Solo2)
-                      </FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-
-                <FormField
-                  control={addForm.control}
-                  name="daysPerWeek"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Days Per Week *</FormLabel>
-                      <FormControl>
-                        <Input
-                          type="number"
-                          placeholder="6"
-                          data-testid="input-days-per-week"
-                          {...field}
-                          value={field.value || ""}
-                          onChange={(e) => {
-                            const value = e.target.value;
-                            field.onChange(value === "" ? "" : parseInt(value, 10));
-                          }}
-                        />
-                      </FormControl>
-                      <FormDescription>
-                        Rolling pattern days per week (default: 6)
-                      </FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-
-                <FormField
-                  control={addForm.control}
-                  name="protectedDrivers"
-                  render={({ field }) => (
-                    <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4">
-                      <div className="space-y-0.5">
-                        <FormLabel className="text-base">
-                          Protected Drivers
-                        </FormLabel>
                         <FormDescription>
-                          Enable driver protection for this contract
+                          Rolling pattern days per week (default: 6)
                         </FormDescription>
-                      </div>
-                      <FormControl>
-                        <Switch
-                          checked={field.value}
-                          onCheckedChange={field.onChange}
-                          data-testid="switch-protected-drivers"
-                        />
-                      </FormControl>
-                    </FormItem>
-                  )}
-                />
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
 
-                <div className="flex justify-end gap-2 pt-4">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => setAddDialogOpen(false)}
-                    data-testid="button-cancel-add"
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    type="submit"
-                    disabled={addContractMutation.isPending}
-                    data-testid="button-submit-add"
-                  >
-                    {addContractMutation.isPending ? "Adding..." : "Add Contract"}
-                  </Button>
-                </div>
-              </form>
-            </Form>
-          </DialogContent>
-        </Dialog>
+                  <FormField
+                    control={addForm.control}
+                    name="protectedDrivers"
+                    render={({ field }) => (
+                      <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4">
+                        <div className="space-y-0.5">
+                          <FormLabel className="text-base">
+                            Protected Drivers
+                          </FormLabel>
+                          <FormDescription>
+                            Enable driver protection for this contract
+                          </FormDescription>
+                        </div>
+                        <FormControl>
+                          <Switch
+                            checked={field.value}
+                            onCheckedChange={field.onChange}
+                            data-testid="switch-protected-drivers"
+                          />
+                        </FormControl>
+                      </FormItem>
+                    )}
+                  />
+
+                  <div className="flex justify-end gap-2 pt-4">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setAddDialogOpen(false)}
+                      data-testid="button-cancel-add"
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      type="submit"
+                      disabled={addContractMutation.isPending}
+                      data-testid="button-submit-add"
+                    >
+                      {addContractMutation.isPending ? "Adding..." : "Add Contract"}
+                    </Button>
+                  </div>
+                </form>
+              </Form>
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
 
       <Card>
@@ -400,7 +552,7 @@ export default function Contracts() {
             <div className="relative flex-1 max-w-md">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <Input
-                placeholder="Search by contract name or type..."
+                placeholder="Search by name, type, time, or tractor..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="pl-9"
@@ -428,30 +580,41 @@ export default function Contracts() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Contract Name</TableHead>
+                  <TableHead>Start Time</TableHead>
+                  <TableHead>Tractor</TableHead>
                   <TableHead>Type</TableHead>
+                  <TableHead>Duration</TableHead>
                   <TableHead>Base Routes</TableHead>
                   <TableHead>Days/Week</TableHead>
-                  <TableHead>Protected Drivers</TableHead>
+                  <TableHead>Protected</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filteredContracts.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center py-8">
+                    <TableCell colSpan={8} className="text-center py-8">
                       <div className="text-muted-foreground" data-testid="empty-state">
                         {searchTerm || typeFilter !== "all"
                           ? "No contracts found matching your filters"
-                          : "No contracts yet. Add your first contract to get started."}
+                          : "No contracts yet. Add your first contract or import from CSV/Excel."}
                       </div>
                     </TableCell>
                   </TableRow>
                 ) : (
                   filteredContracts.map((contract) => (
                     <TableRow key={contract.id} data-testid={`row-contract-${contract.id}`}>
-                      <TableCell className="font-medium" data-testid={`text-name-${contract.id}`}>
-                        {contract.name}
+                      <TableCell className="font-medium" data-testid={`text-start-time-${contract.id}`}>
+                        <div className="flex items-center gap-2">
+                          <Clock className="w-4 h-4 text-muted-foreground" />
+                          {contract.startTime}
+                        </div>
+                      </TableCell>
+                      <TableCell data-testid={`text-tractor-${contract.id}`}>
+                        <div className="flex items-center gap-2">
+                          <Truck className="w-4 h-4 text-muted-foreground" />
+                          {contract.tractorId}
+                        </div>
                       </TableCell>
                       <TableCell>
                         <Badge
@@ -460,6 +623,9 @@ export default function Contracts() {
                         >
                           {formatType(contract.type)}
                         </Badge>
+                      </TableCell>
+                      <TableCell data-testid={`text-duration-${contract.id}`}>
+                        {contract.duration}h
                       </TableCell>
                       <TableCell data-testid={`text-base-routes-${contract.id}`}>
                         {contract.baseRoutes}
@@ -503,12 +669,13 @@ export default function Contracts() {
         </CardContent>
       </Card>
 
+      {/* Edit Dialog */}
       <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Edit Contract</DialogTitle>
             <DialogDescription>
-              Update contract information
+              Update bench contract information
             </DialogDescription>
           </DialogHeader>
           <Form {...editForm}>
@@ -518,73 +685,147 @@ export default function Contracts() {
               )}
               className="space-y-4"
             >
-              <FormField
-                control={editForm.control}
-                name="name"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Contract Name *</FormLabel>
-                    <FormControl>
-                      <Input
-                        placeholder="Solo1"
-                        data-testid="input-edit-name"
-                        {...field}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={editForm.control}
-                name="type"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Contract Type *</FormLabel>
-                    <Select
-                      onValueChange={field.onChange}
-                      value={field.value}
-                    >
+              <div className="grid grid-cols-2 gap-4">
+                <FormField
+                  control={editForm.control}
+                  name="name"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Contract Name *</FormLabel>
                       <FormControl>
-                        <SelectTrigger data-testid="select-edit-type">
-                          <SelectValue placeholder="Select type" />
-                        </SelectTrigger>
+                        <Input
+                          placeholder="0030"
+                          data-testid="input-edit-name"
+                          {...field}
+                        />
                       </FormControl>
-                      <SelectContent>
-                        <SelectItem value="solo1">Solo 1</SelectItem>
-                        <SelectItem value="solo2">Solo 2</SelectItem>
-                        <SelectItem value="team">Team</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
 
-              <FormField
-                control={editForm.control}
-                name="baseRoutes"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Base Routes *</FormLabel>
-                    <FormControl>
-                      <Input
-                        type="number"
-                        placeholder="10"
-                        data-testid="input-edit-base-routes"
-                        {...field}
-                        value={field.value || ""}
-                        onChange={(e) => {
-                          const value = e.target.value;
-                          field.onChange(value === "" ? "" : parseInt(value, 10));
-                        }}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
+                <FormField
+                  control={editForm.control}
+                  name="type"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Contract Type *</FormLabel>
+                      <Select
+                        onValueChange={field.onChange}
+                        value={field.value}
+                      >
+                        <FormControl>
+                          <SelectTrigger data-testid="select-edit-type">
+                            <SelectValue placeholder="Select type" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="solo1">Solo 1</SelectItem>
+                          <SelectItem value="solo2">Solo 2</SelectItem>
+                          <SelectItem value="team">Team</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <FormField
+                  control={editForm.control}
+                  name="startTime"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Start Time *</FormLabel>
+                      <FormControl>
+                        <div className="relative">
+                          <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                          <Input
+                            placeholder="00:30"
+                            className="pl-9"
+                            data-testid="input-edit-start-time"
+                            {...field}
+                          />
+                        </div>
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={editForm.control}
+                  name="tractorId"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Tractor *</FormLabel>
+                      <FormControl>
+                        <div className="relative">
+                          <Truck className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                          <Input
+                            placeholder="Tractor_8"
+                            className="pl-9"
+                            data-testid="input-edit-tractor-id"
+                            {...field}
+                          />
+                        </div>
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <FormField
+                  control={editForm.control}
+                  name="duration"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Duration (hours) *</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="number"
+                          placeholder="14"
+                          data-testid="input-edit-duration"
+                          {...field}
+                          value={field.value || ""}
+                          onChange={(e) => {
+                            const value = e.target.value;
+                            field.onChange(value === "" ? "" : parseInt(value, 10));
+                          }}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={editForm.control}
+                  name="baseRoutes"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Base Routes *</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="number"
+                          placeholder="10"
+                          data-testid="input-edit-base-routes"
+                          {...field}
+                          value={field.value || ""}
+                          onChange={(e) => {
+                            const value = e.target.value;
+                            field.onChange(value === "" ? "" : parseInt(value, 10));
+                          }}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
 
               <FormField
                 control={editForm.control}
@@ -656,22 +897,24 @@ export default function Contracts() {
         </DialogContent>
       </Dialog>
 
+      {/* Delete Confirmation Dialog */}
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Contract</AlertDialogTitle>
+            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete contract{" "}
-              <span className="font-semibold">{selectedContract?.name}</span>? This
-              action cannot be undone.
+              This will permanently delete the contract "{selectedContract?.name}".
+              This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel data-testid="button-cancel-delete">Cancel</AlertDialogCancel>
+            <AlertDialogCancel data-testid="button-cancel-delete">
+              Cancel
+            </AlertDialogCancel>
             <AlertDialogAction
               onClick={() => selectedContract && deleteContractMutation.mutate(selectedContract.id)}
-              disabled={deleteContractMutation.isPending}
               data-testid="button-confirm-delete"
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               {deleteContractMutation.isPending ? "Deleting..." : "Delete"}
             </AlertDialogAction>

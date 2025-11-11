@@ -749,6 +749,94 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Import contracts from CSV/Excel
+  app.post("/api/contracts/import", requireAuth, upload.single('file'), async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: "No file uploaded" });
+      }
+
+      const Papa = await import("papaparse");
+      const XLSX = await import("xlsx");
+      
+      const filename = req.file.originalname.toLowerCase();
+      const fileBuffer = req.file.buffer;
+      
+      let rows: any[] = [];
+      
+      // Parse based on file extension
+      if (filename.endsWith('.csv')) {
+        const csvText = fileBuffer.toString('utf-8');
+        const parsed = Papa.parse(csvText, { header: true, skipEmptyLines: true });
+        rows = parsed.data;
+      } else if (filename.endsWith('.xlsx') || filename.endsWith('.xls')) {
+        const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
+        if (workbook.SheetNames.length === 0) {
+          return res.status(400).json({ message: "Excel file is empty" });
+        }
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        rows = XLSX.utils.sheet_to_json(worksheet);
+      } else {
+        return res.status(400).json({ message: "Unsupported file format. Please upload CSV or Excel file." });
+      }
+
+      if (rows.length === 0) {
+        return res.status(400).json({ message: "File contains no data" });
+      }
+
+      // Normalize headers (case-insensitive)
+      const normalizedRows = rows.map(row => {
+        const normalized: any = {};
+        for (const key in row) {
+          const normalizedKey = key.trim().toLowerCase().replace(/\s+/g, '_');
+          normalized[normalizedKey] = row[key];
+        }
+        return normalized;
+      });
+
+      let successCount = 0;
+      const errors: string[] = [];
+
+      for (let i = 0; i < normalizedRows.length; i++) {
+        const row = normalizedRows[i];
+        const rowNum = i + 2; // Account for header row
+
+        try {
+          // Extract contract data from row
+          const contractData = insertContractSchema.parse({
+            tenantId: req.session.tenantId,
+            name: row.name || row.contract_name || `Contract ${rowNum}`,
+            type: (row.type || row.contract_type || 'solo1').toLowerCase(),
+            startTime: row.start_time || row.starttime || row.time || '',
+            tractorId: row.tractor_id || row.tractor || row.tractorid || '',
+            duration: parseInt(row.duration || row.hours || '14', 10),
+            baseRoutes: parseInt(row.base_routes || row.baseroutes || row.routes || '10', 10),
+            daysPerWeek: parseInt(row.days_per_week || row.daysperweek || row.days || '6', 10),
+            protectedDrivers: row.protected_drivers === 'true' || row.protected_drivers === '1' || row.protected === 'true' || false,
+          });
+
+          await dbStorage.createContract(contractData);
+          successCount++;
+        } catch (error: any) {
+          if (error.name === "ZodError") {
+            errors.push(`Row ${rowNum}: ${fromZodError(error).message}`);
+          } else {
+            errors.push(`Row ${rowNum}: ${error.message}`);
+          }
+        }
+      }
+
+      res.json({
+        count: successCount,
+        total: normalizedRows.length,
+        errors: errors.length > 0 ? errors : undefined,
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: "Failed to import contracts", error: error.message });
+    }
+  });
+
   // Admin endpoint: Seed bench contracts
   app.post("/api/admin/seed-contracts", requireAuth, async (req, res) => {
     try {
