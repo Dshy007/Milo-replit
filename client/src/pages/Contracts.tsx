@@ -415,61 +415,32 @@ export default function Contracts() {
                     />
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4">
-                    <FormField
-                      control={addForm.control}
-                      name="duration"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Duration (hours) *</FormLabel>
-                          <FormControl>
-                            <Input
-                              type="number"
-                              placeholder="14"
-                              data-testid="input-duration"
-                              {...field}
-                              value={field.value || ""}
-                              onChange={(e) => {
-                                const value = e.target.value;
-                                field.onChange(value === "" ? "" : parseInt(value, 10));
-                              }}
-                            />
-                          </FormControl>
-                          <FormDescription>
-                            14 for Solo1, 38 for Solo2
-                          </FormDescription>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-
-                    <FormField
-                      control={addForm.control}
-                      name="baseRoutes"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Base Routes *</FormLabel>
-                          <FormControl>
-                            <Input
-                              type="number"
-                              placeholder="10"
-                              data-testid="input-base-routes"
-                              {...field}
-                              value={field.value || ""}
-                              onChange={(e) => {
-                                const value = e.target.value;
-                                field.onChange(value === "" ? "" : parseInt(value, 10));
-                              }}
-                            />
-                          </FormControl>
-                          <FormDescription>
-                            10 for Solo1, 7 for Solo2
-                          </FormDescription>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                  </div>
+                  <FormField
+                    control={addForm.control}
+                    name="duration"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Duration (hours) *</FormLabel>
+                        <FormControl>
+                          <Input
+                            type="number"
+                            placeholder="14"
+                            data-testid="input-duration"
+                            {...field}
+                            value={field.value || ""}
+                            onChange={(e) => {
+                              const value = e.target.value;
+                              field.onChange(value === "" ? "" : parseInt(value, 10));
+                            }}
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          14 for Solo1, 38 for Solo2
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
 
                   <FormField
                     control={addForm.control}
@@ -584,7 +555,6 @@ export default function Contracts() {
                   <TableHead>Tractor</TableHead>
                   <TableHead>Type</TableHead>
                   <TableHead>Duration</TableHead>
-                  <TableHead>Base Routes</TableHead>
                   <TableHead>Days/Week</TableHead>
                   <TableHead>Protected</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
@@ -593,7 +563,7 @@ export default function Contracts() {
               <TableBody>
                 {filteredContracts.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center py-8">
+                    <TableCell colSpan={7} className="text-center py-8">
                       <div className="text-muted-foreground" data-testid="empty-state">
                         {searchTerm || typeFilter !== "all"
                           ? "No contracts found matching your filters"
@@ -626,9 +596,6 @@ export default function Contracts() {
                       </TableCell>
                       <TableCell data-testid={`text-duration-${contract.id}`}>
                         {contract.duration}h
-                      </TableCell>
-                      <TableCell data-testid={`text-base-routes-${contract.id}`}>
-                        {contract.baseRoutes}
                       </TableCell>
                       <TableCell data-testid={`text-days-per-week-${contract.id}`}>
                         {contract.daysPerWeek}
@@ -777,55 +744,29 @@ export default function Contracts() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <FormField
-                  control={editForm.control}
-                  name="duration"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Duration (hours) *</FormLabel>
-                      <FormControl>
-                        <Input
-                          type="number"
-                          placeholder="14"
-                          data-testid="input-edit-duration"
-                          {...field}
-                          value={field.value || ""}
-                          onChange={(e) => {
-                            const value = e.target.value;
-                            field.onChange(value === "" ? "" : parseInt(value, 10));
-                          }}
-                        />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-
-                <FormField
-                  control={editForm.control}
-                  name="baseRoutes"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Base Routes *</FormLabel>
-                      <FormControl>
-                        <Input
-                          type="number"
-                          placeholder="10"
-                          data-testid="input-edit-base-routes"
-                          {...field}
-                          value={field.value || ""}
-                          onChange={(e) => {
-                            const value = e.target.value;
-                            field.onChange(value === "" ? "" : parseInt(value, 10));
-                          }}
-                        />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
+              <FormField
+                control={editForm.control}
+                name="duration"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Duration (hours) *</FormLabel>
+                    <FormControl>
+                      <Input
+                        type="number"
+                        placeholder="14"
+                        data-testid="input-edit-duration"
+                        {...field}
+                        value={field.value || ""}
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          field.onChange(value === "" ? "" : parseInt(value, 10));
+                        }}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
 
               <FormField
                 control={editForm.control}
