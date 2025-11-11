@@ -61,7 +61,9 @@ export default function Contracts() {
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [selectedContract, setSelectedContract] = useState<Contract | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: contracts = [], isLoading } = useQuery<Contract[]>({
@@ -220,10 +222,31 @@ export default function Contracts() {
     const file = event.target.files?.[0];
     if (file) {
       importContractsMutation.mutate(file);
+      setImportDialogOpen(false);
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
     }
+  };
+
+  const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDragging(false);
+    const file = event.dataTransfer.files?.[0];
+    if (file) {
+      importContractsMutation.mutate(file);
+      setImportDialogOpen(false);
+    }
+  };
+
+  const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDragging(false);
   };
 
   const getTypeBadgeVariant = (type: string) => {
@@ -286,15 +309,62 @@ export default function Contracts() {
             className="hidden"
             data-testid="input-file-upload"
           />
-          <Button
-            variant="outline"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={importContractsMutation.isPending}
-            data-testid="button-import-contracts"
-          >
-            <Upload className="w-4 h-4 mr-2" />
-            {importContractsMutation.isPending ? "Importing..." : "Import CSV/Excel"}
-          </Button>
+          <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
+            <DialogTrigger asChild>
+              <Button
+                variant="outline"
+                disabled={importContractsMutation.isPending}
+                data-testid="button-import-contracts"
+              >
+                <Upload className="w-4 h-4 mr-2" />
+                {importContractsMutation.isPending ? "Importing..." : "Import CSV/Excel"}
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Import Bench Contracts</DialogTitle>
+                <DialogDescription>
+                  Upload a CSV or Excel file with your bench contract data
+                </DialogDescription>
+              </DialogHeader>
+              <div
+                onDrop={handleDrop}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
+                  isDragging
+                    ? "border-primary bg-primary/5"
+                    : "border-muted-foreground/25 hover:border-primary/50"
+                }`}
+              >
+                <Upload className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
+                <p className="text-sm font-medium mb-2">
+                  Drag and drop your file here
+                </p>
+                <p className="text-xs text-muted-foreground mb-4">
+                  or click the button below to browse
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={importContractsMutation.isPending}
+                  data-testid="button-browse-file"
+                >
+                  Choose File
+                </Button>
+                <p className="text-xs text-muted-foreground mt-4">
+                  Supports CSV, XLSX, XLS files
+                </p>
+              </div>
+              <div className="text-xs text-muted-foreground space-y-2">
+                <p className="font-medium">Expected columns:</p>
+                <ul className="list-disc list-inside space-y-1 ml-2">
+                  <li>Name, Type, Start Time, Tractor, Duration, Days Per Week</li>
+                </ul>
+              </div>
+            </DialogContent>
+          </Dialog>
           <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
             <DialogTrigger asChild>
               <Button data-testid="button-add-contract">
