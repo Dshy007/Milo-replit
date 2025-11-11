@@ -26,8 +26,8 @@ export default function Hero() {
       <div 
         className="absolute inset-0 flex items-center justify-center pointer-events-none p-8"
         style={{
-          opacity: 0.12,
-          filter: 'blur(0.5px) saturate(0.5)',
+          opacity: 0.15,
+          filter: 'blur(0.3px) saturate(0.6)',
           transform: 'scale(1.5)'
         }}
       >
