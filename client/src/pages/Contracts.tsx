@@ -371,15 +371,11 @@ export default function Contracts() {
                         <FormItem>
                           <FormLabel>Start Time *</FormLabel>
                           <FormControl>
-                            <div className="relative">
-                              <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                              <Input
-                                placeholder="00:30"
-                                className="pl-9"
-                                data-testid="input-start-time"
-                                {...field}
-                              />
-                            </div>
+                            <Input
+                              placeholder="00:30"
+                              data-testid="input-start-time"
+                              {...field}
+                            />
                           </FormControl>
                           <FormDescription>
                             HH:MM format (e.g., 00:30, 16:30)
@@ -396,15 +392,11 @@ export default function Contracts() {
                         <FormItem>
                           <FormLabel>Tractor *</FormLabel>
                           <FormControl>
-                            <div className="relative">
-                              <Truck className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                              <Input
-                                placeholder="Tractor_8"
-                                className="pl-9"
-                                data-testid="input-tractor-id"
-                                {...field}
-                              />
-                            </div>
+                            <Input
+                              placeholder="Tractor_8"
+                              data-testid="input-tractor-id"
+                              {...field}
+                            />
                           </FormControl>
                           <FormDescription>
                             e.g., Tractor_1, Tractor_2
@@ -706,15 +698,11 @@ export default function Contracts() {
                     <FormItem>
                       <FormLabel>Start Time *</FormLabel>
                       <FormControl>
-                        <div className="relative">
-                          <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                          <Input
-                            placeholder="00:30"
-                            className="pl-9"
-                            data-testid="input-edit-start-time"
-                            {...field}
-                          />
-                        </div>
+                        <Input
+                          placeholder="00:30"
+                          data-testid="input-edit-start-time"
+                          {...field}
+                        />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -728,15 +716,11 @@ export default function Contracts() {
                     <FormItem>
                       <FormLabel>Tractor *</FormLabel>
                       <FormControl>
-                        <div className="relative">
-                          <Truck className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                          <Input
-                            placeholder="Tractor_8"
-                            className="pl-9"
-                            data-testid="input-edit-tractor-id"
-                            {...field}
-                          />
-                        </div>
+                        <Input
+                          placeholder="Tractor_8"
+                          data-testid="input-edit-tractor-id"
+                          {...field}
+                        />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
