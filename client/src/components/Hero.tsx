@@ -2,28 +2,26 @@ import { Button } from "@/components/ui/button";
 import { ArrowRight } from "lucide-react";
 
 export default function Hero() {
+  const calendarGrid = [];
+  for (let i = 0; i < 35; i++) {
+    calendarGrid.push(i);
+  }
+
   return (
     <section className="relative min-h-screen flex items-center justify-center overflow-hidden bg-gradient-to-br from-background via-background to-primary/5">
-      <div className="absolute inset-0 opacity-15">
-        <div className="absolute inset-0" style={{
-          backgroundImage: `
-            linear-gradient(to right, hsl(195 100% 50%) 2px, transparent 2px),
-            linear-gradient(to bottom, hsl(195 100% 50%) 2px, transparent 2px)
-          `,
-          backgroundSize: '100px 100px',
-          filter: 'drop-shadow(0 0 20px hsl(195 100% 50% / 0.4))'
-        }}></div>
-      </div>
-      
-      <div className="absolute inset-0 opacity-10">
-        <div className="absolute inset-0" style={{
-          backgroundImage: `
-            linear-gradient(to right, hsl(195 100% 45%) 3px, transparent 3px),
-            linear-gradient(to bottom, hsl(195 100% 45%) 3px, transparent 3px)
-          `,
-          backgroundSize: '400px 400px',
-          filter: 'drop-shadow(0 0 30px hsl(195 100% 45% / 0.5))'
-        }}></div>
+      <div className="absolute inset-0 flex items-center justify-center opacity-12 pointer-events-none p-8">
+        <div className="grid grid-cols-7 gap-6 max-w-6xl w-full">
+          {calendarGrid.map((i) => (
+            <div
+              key={i}
+              className="aspect-square bg-primary/10 backdrop-blur-sm rounded-3xl border border-primary/20"
+              style={{
+                filter: 'drop-shadow(0 0 20px hsl(195 100% 50% / 0.3))',
+                boxShadow: 'inset 0 0 30px hsl(195 100% 50% / 0.1)'
+              }}
+            />
+          ))}
+        </div>
       </div>
 
       <div className="absolute inset-0">
@@ -55,10 +53,6 @@ export default function Hero() {
             filter: 'drop-shadow(0 0 20px hsl(195 100% 50% / 0.5))'
           }}>
             AI-Powered
-          </p>
-          
-          <p className="text-3xl md:text-4xl text-foreground/90 mb-6 font-light tracking-tight">
-            Not software — an evolution
           </p>
           
           <p className="text-xl text-muted-foreground max-w-3xl mx-auto font-light leading-relaxed">
