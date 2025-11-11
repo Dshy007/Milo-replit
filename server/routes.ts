@@ -47,6 +47,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       secret: SESSION_SECRET,
       resave: false,
       saveUninitialized: false,
+      rolling: true, // Refresh session on every request
       name: 'milo.sid', // Custom session cookie name
       cookie: {
         secure: false, // Allow cookies over HTTP in development
