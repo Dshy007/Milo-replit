@@ -101,7 +101,7 @@ export default function Hero() {
             Stop wasting hours every week on scheduling.
           </p>
 
-          <div className="flex flex-col sm:flex-row gap-5 justify-center items-center">
+          <div className="flex justify-center items-center">
             <Button 
               size="lg" 
               className="text-base px-14 h-14 rounded-full font-medium shadow-[0_0_40px_hsl(195_100%_50%/0.4)] border-2 border-primary/50"
@@ -110,15 +110,6 @@ export default function Hero() {
             >
               Get Started Free
               <ArrowRight className="ml-2 w-5 h-5" />
-            </Button>
-            <Button 
-              size="lg" 
-              variant="outline"
-              className="text-base px-14 h-14 rounded-full font-medium border-2 border-primary/30 bg-background/50 backdrop-blur-xl"
-              data-testid="button-watch-demo"
-              onClick={() => console.log('Watch demo clicked')}
-            >
-              Watch Demo
             </Button>
           </div>
           
