@@ -63,40 +63,68 @@ export default function Chat() {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let accumulatedMessage = "";
+      let buffer = ""; // Buffer for incomplete lines
 
-      while (true) {
-        const { done, value } = await reader.read();
-        
-        if (done) break;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          
+          if (done) break;
 
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split('\n');
+          // Decode chunk and add to buffer
+          buffer += decoder.decode(value, { stream: true });
+          
+          // Process complete lines
+          const lines = buffer.split('\n');
+          
+          // Keep the last incomplete line in buffer
+          buffer = lines.pop() || "";
 
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = JSON.parse(line.slice(6));
-            
-            if (data.error) {
-              throw new Error(data.error);
-            }
-            
-            if (data.done) {
-              // Streaming complete
-              setMessages((prev) => [
-                ...prev,
-                { role: "assistant", content: accumulatedMessage },
-              ]);
-              setStreamingMessage("");
-              setIsStreaming(false);
-              return;
-            }
-            
-            if (data.content) {
-              accumulatedMessage += data.content;
-              setStreamingMessage(accumulatedMessage);
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                // Trim to handle CRLF line endings
+                const lineData = line.slice(6).trim();
+                if (!lineData) continue;
+                
+                const data = JSON.parse(lineData);
+                
+                if (data.error) {
+                  throw new Error(data.error);
+                }
+                
+                if (data.done) {
+                  // Streaming complete - add to messages and clean up
+                  setMessages((prev) => [
+                    ...prev,
+                    { role: "assistant", content: accumulatedMessage },
+                  ]);
+                  setStreamingMessage("");
+                  setIsStreaming(false);
+                  await reader.cancel(); // Explicitly cancel reader
+                  return;
+                }
+                
+                if (data.content) {
+                  accumulatedMessage += data.content;
+                  setStreamingMessage(accumulatedMessage);
+                }
+              } catch (parseError) {
+                console.error("Failed to parse SSE data:", line, parseError);
+              }
             }
           }
         }
+        
+        // If loop exits without done signal, clean up
+        await reader.cancel();
+      } catch (readerError) {
+        try {
+          await reader.cancel();
+        } catch {
+          // Ignore cancel errors
+        }
+        throw readerError;
       }
     } catch (error: any) {
       console.error("Chat error:", error);
