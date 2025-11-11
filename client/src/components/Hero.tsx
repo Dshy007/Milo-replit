@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { ArrowRight } from "lucide-react";
-import missionControlBg from "@assets/generated_images/Full_Mission_Control_dashboard_layout_3c882a6b.png";
+import missionControlBg from "@assets/generated_images/Mission_Control_aesthetic_background_8845aa5d.png";
 
 export default function Hero() {
   return (
