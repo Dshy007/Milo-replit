@@ -76,7 +76,7 @@ export default function Hero() {
       </div>
 
       {/* Foreground content */}
-      <div className="relative z-10 max-w-5xl mx-auto px-8 pt-32 pb-20 text-center">
+      <div className="relative z-10 max-w-5xl mx-auto px-8 pt-16 pb-20 text-center">
         <div className="mb-16">
           <div className="relative inline-block">
             <div className="absolute -inset-16 bg-gradient-radial from-primary/30 via-primary/15 to-transparent rounded-full blur-[60px]"></div>
