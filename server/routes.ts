@@ -14,6 +14,7 @@ import session from "express-session";
 import { fromZodError } from "zod-validation-error";
 import bcrypt from "bcryptjs";
 import { benchContracts } from "./seed-data";
+import multer from "multer";
 
 // Require SESSION_SECRET
 const SESSION_SECRET = process.env.SESSION_SECRET!;
@@ -281,49 +282,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Configure multer for file uploads
+  const upload = multer({ 
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
+  });
+
   // Bulk import drivers from CSV/Excel
-  app.post("/api/drivers/bulk-import", requireAuth, async (req, res) => {
+  app.post("/api/drivers/bulk-import", requireAuth, upload.single('file'), async (req, res) => {
     try {
       const Papa = await import("papaparse");
       const XLSX = await import("xlsx");
       
-      // Handle multipart form data
-      const formData = await new Promise<{ file?: Buffer; filename?: string }>((resolve, reject) => {
-        const chunks: Buffer[] = [];
-        req.on('data', (chunk) => chunks.push(chunk));
-        req.on('end', () => {
-          const buffer = Buffer.concat(chunks);
-          const boundary = req.headers['content-type']?.split('boundary=')[1];
-          if (!boundary) {
-            return reject(new Error('No boundary found in content-type'));
-          }
-          
-          // Simple multipart parser - extract file content and filename
-          const parts = buffer.toString('binary').split(`--${boundary}`);
-          for (const part of parts) {
-            if (part.includes('filename=')) {
-              // Extract filename
-              const filenameMatch = part.match(/filename="([^"]+)"/);
-              const filename = filenameMatch ? filenameMatch[1] : '';
-              
-              // Extract binary file content
-              const contentStart = part.indexOf('\r\n\r\n') + 4;
-              const contentEnd = part.lastIndexOf('\r\n');
-              const binaryContent = part.substring(contentStart, contentEnd);
-              const fileBuffer = Buffer.from(binaryContent, 'binary');
-              
-              resolve({ file: fileBuffer, filename });
-              return;
-            }
-          }
-          reject(new Error('No file found in request'));
-        });
-        req.on('error', reject);
-      });
-
-      if (!formData.file || !formData.filename) {
+      if (!req.file) {
         return res.status(400).json({ message: "No file provided" });
       }
+
+      const fileBuffer = req.file.buffer;
+      const filename = req.file.originalname;
 
       // Normalize headers helper
       const normalizeHeader = (header: string): string => {
@@ -354,20 +330,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let parsedData: any[] = [];
 
       // Detect file type and parse accordingly (case-insensitive)
-      const filenameLower = formData.filename.toLowerCase();
+      const filenameLower = filename.toLowerCase();
       const isExcel = filenameLower.endsWith('.xlsx') || filenameLower.endsWith('.xls');
       const isCSV = filenameLower.endsWith('.csv');
       
       // Validate file type
       if (!isExcel && !isCSV) {
         return res.status(400).json({ 
-          message: `Unsupported file format. Please upload a CSV (.csv) or Excel (.xlsx, .xls) file. Received: ${formData.filename}` 
+          message: `Unsupported file format. Please upload a CSV (.csv) or Excel (.xlsx, .xls) file. Received: ${filename}` 
         });
       }
       
       if (isExcel) {
         // Parse Excel file
-        const workbook = XLSX.read(formData.file, { type: 'buffer' });
+        const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
         
         // Validate workbook has sheets
         if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
@@ -400,7 +376,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       } else {
         // Parse CSV file
-        const csvContent = formData.file.toString('utf-8');
+        const csvContent = fileBuffer.toString('utf-8');
         const parseResult = Papa.parse(csvContent, {
           header: true,
           skipEmptyLines: true,
