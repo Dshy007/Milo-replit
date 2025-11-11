@@ -372,13 +372,13 @@ export default function Contracts() {
                           <FormLabel>Start Time *</FormLabel>
                           <FormControl>
                             <Input
-                              placeholder="00:30"
+                              type="time"
                               data-testid="input-start-time"
                               {...field}
                             />
                           </FormControl>
                           <FormDescription>
-                            HH:MM format (e.g., 00:30, 16:30)
+                            Click to select time (e.g., 00:30, 16:30)
                           </FormDescription>
                           <FormMessage />
                         </FormItem>
@@ -392,11 +392,15 @@ export default function Contracts() {
                         <FormItem>
                           <FormLabel>Tractor *</FormLabel>
                           <FormControl>
-                            <Input
-                              placeholder="Tractor_8"
-                              data-testid="input-tractor-id"
-                              {...field}
-                            />
+                            <div className="relative">
+                              <Truck className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+                              <Input
+                                placeholder="Tractor_8"
+                                className="pl-9"
+                                data-testid="input-tractor-id"
+                                {...field}
+                              />
+                            </div>
                           </FormControl>
                           <FormDescription>
                             e.g., Tractor_1, Tractor_2
@@ -699,7 +703,7 @@ export default function Contracts() {
                       <FormLabel>Start Time *</FormLabel>
                       <FormControl>
                         <Input
-                          placeholder="00:30"
+                          type="time"
                           data-testid="input-edit-start-time"
                           {...field}
                         />
@@ -716,11 +720,15 @@ export default function Contracts() {
                     <FormItem>
                       <FormLabel>Tractor *</FormLabel>
                       <FormControl>
-                        <Input
-                          placeholder="Tractor_8"
-                          data-testid="input-edit-tractor-id"
-                          {...field}
-                        />
+                        <div className="relative">
+                          <Truck className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+                          <Input
+                            placeholder="Tractor_8"
+                            className="pl-9"
+                            data-testid="input-edit-tractor-id"
+                            {...field}
+                          />
+                        </div>
                       </FormControl>
                       <FormMessage />
                     </FormItem>
