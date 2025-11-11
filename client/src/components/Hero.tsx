@@ -34,13 +34,15 @@ export default function Hero() {
           <div className="relative inline-block">
             <h1 className="text-8xl md:text-9xl lg:text-[12rem] font-bold mb-4 text-foreground tracking-tighter" style={{
               textShadow: `
-                0 0 40px hsl(195 100% 50% / 0.8),
-                0 0 80px hsl(195 100% 50% / 0.6),
-                0 0 120px hsl(195 100% 50% / 0.5),
-                0 0 160px hsl(195 100% 50% / 0.4),
-                0 0 200px hsl(195 100% 50% / 0.3)
+                0 0 20px rgba(255, 255, 255, 0.9),
+                0 0 40px rgba(255, 255, 255, 0.6),
+                0 0 60px rgba(255, 255, 255, 0.4),
+                0 0 80px hsl(195 100% 50% / 0.8),
+                0 0 120px hsl(195 100% 50% / 0.6),
+                0 0 160px hsl(195 100% 50% / 0.5),
+                0 0 200px hsl(195 100% 50% / 0.4)
               `,
-              filter: 'drop-shadow(0 0 60px hsl(195 100% 50% / 0.7)) drop-shadow(0 0 120px hsl(195 100% 50% / 0.5))'
+              filter: 'drop-shadow(0 0 60px rgba(255, 255, 255, 0.5)) drop-shadow(0 0 100px hsl(195 100% 50% / 0.6))'
             }}>
               Milo
             </h1>
