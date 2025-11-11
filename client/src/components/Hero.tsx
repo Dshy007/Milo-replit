@@ -78,11 +78,21 @@ export default function Hero() {
       {/* Foreground content */}
       <div className="relative z-10 max-w-5xl mx-auto px-8 py-40 text-center">
         <div className="mb-16">
-          <h1 className="text-7xl md:text-8xl font-bold mb-6 text-foreground tracking-tight" style={{
-            textShadow: '0 2px 40px rgba(0,0,0,0.1)'
-          }}>
-            Milo
-          </h1>
+          <div className="relative inline-block">
+            <div className="absolute -inset-32 bg-gradient-radial from-primary/40 via-primary/20 to-transparent rounded-full blur-[100px]"></div>
+            <div className="absolute -inset-40 bg-gradient-radial from-blue-400/30 via-cyan-300/15 to-transparent rounded-full blur-[140px]"></div>
+            
+            <h1 className="relative text-7xl md:text-8xl font-bold mb-6 tracking-tight" style={{
+              background: 'linear-gradient(135deg, hsl(220, 100%, 60%), hsl(195, 100%, 45%), hsl(180, 100%, 50%))',
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+              backgroundClip: 'text',
+              textShadow: '0 0 60px rgba(59, 130, 246, 0.5)',
+              filter: 'drop-shadow(0 0 40px hsl(195 100% 50% / 0.4)) drop-shadow(0 0 80px hsl(220 100% 60% / 0.3))'
+            }}>
+              Milo
+            </h1>
+          </div>
           
           <p className="text-3xl md:text-4xl text-primary/90 font-semibold mb-6">
             Your AI Operations Brain
