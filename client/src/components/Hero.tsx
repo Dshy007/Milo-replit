@@ -9,15 +9,15 @@ export default function Hero() {
 
   return (
     <section className="relative min-h-screen flex items-center justify-center overflow-hidden bg-gradient-to-br from-background via-background to-primary/5">
-      <div className="absolute inset-0 flex items-center justify-center opacity-12 pointer-events-none p-8">
-        <div className="grid grid-cols-7 gap-6 max-w-6xl w-full">
+      <div className="absolute inset-0 flex items-center justify-center opacity-[0.04] pointer-events-none p-8">
+        <div className="grid grid-cols-7 gap-4 max-w-5xl w-full">
           {calendarGrid.map((i) => (
             <div
               key={i}
-              className="aspect-square bg-primary/10 backdrop-blur-sm rounded-3xl border border-primary/20"
+              className="aspect-square bg-primary/5 rounded-2xl border border-primary/10"
               style={{
-                filter: 'drop-shadow(0 0 20px hsl(195 100% 50% / 0.3))',
-                boxShadow: 'inset 0 0 30px hsl(195 100% 50% / 0.1)'
+                filter: 'drop-shadow(0 0 10px hsl(195 100% 50% / 0.15))',
+                boxShadow: 'inset 0 0 15px hsl(195 100% 50% / 0.05)'
               }}
             />
           ))}
