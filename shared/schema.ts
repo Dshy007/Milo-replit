@@ -36,16 +36,20 @@ export const drivers = pgTable("drivers", {
   tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
   firstName: text("first_name").notNull(),
   lastName: text("last_name").notNull(),
-  licenseNumber: text("license_number").notNull(),
-  licenseExpiry: timestamp("license_expiry").notNull(),
+  licenseNumber: text("license_number"), // Optional - for tracking
+  licenseExpiry: timestamp("license_expiry"), // Optional - for tracking
   phoneNumber: text("phone_number"),
   email: text("email"),
+  domicile: text("domicile"), // Driver's base location (e.g., "MKC", "NYC")
+  profileVerified: boolean("profile_verified").default(false), // Indicates if profile is verified
+  loadEligible: boolean("load_eligible").default(true), // Whether driver is eligible for loads
   status: text("status").notNull().default("active"), // active, inactive, on_leave
   certifications: text("certifications").array(),
-  // DOT Compliance Fields
-  cdlClass: text("cdl_class").notNull().default("A"), // A, B, or C
-  medicalCertExpiry: timestamp("medical_cert_expiry").notNull(), // DOT medical certification
-  dateOfBirth: timestamp("date_of_birth").notNull(), // To validate age >= 21
+  // DOT Compliance Fields - Optional for tracking, validated if provided
+  requiresDotCompliance: boolean("requires_dot_compliance").default(false), // If true, DOT fields become mandatory
+  cdlClass: text("cdl_class"), // A, B, or C
+  medicalCertExpiry: timestamp("medical_cert_expiry"), // DOT medical certification
+  dateOfBirth: timestamp("date_of_birth"), // To validate age >= 21
   endorsements: text("endorsements"), // H (Hazmat), N (Tank), T (Doubles/Triples), P (Passenger), S (School Bus), X (Hazmat+Tank)
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -53,37 +57,56 @@ export const drivers = pgTable("drivers", {
 
 // Base schema without refinements - for frontend .extend() usage
 export const baseInsertDriverSchema = createInsertSchema(drivers, {
-  licenseExpiry: z.coerce.date(),
-  medicalCertExpiry: z.coerce.date(),
-  dateOfBirth: z.coerce.date(),
+  licenseExpiry: z.coerce.date().optional().nullable(),
+  medicalCertExpiry: z.coerce.date().optional().nullable(),
+  dateOfBirth: z.coerce.date().optional().nullable(),
 }).omit({ id: true, createdAt: true, updatedAt: true });
 
-// Full validated schema with refinements - for backend validation
+// Full schema with conditional DOT validation - fields optional but validated if provided
 export const insertDriverSchema = baseInsertDriverSchema
 .refine((data) => {
-  // Validate driver is at least 21 years old (interstate requirement)
-  const age = (Date.now() - data.dateOfBirth.getTime()) / (1000 * 60 * 60 * 24 * 365.25);
-  return age >= 21;
+  // If dateOfBirth is provided, validate driver is at least 21
+  if (data.dateOfBirth) {
+    const age = (Date.now() - data.dateOfBirth.getTime()) / (1000 * 60 * 60 * 24 * 365.25);
+    return age >= 21;
+  }
+  return true;
 }, {
   message: "Driver must be at least 21 years old for interstate commerce",
   path: ["dateOfBirth"],
 })
 .refine((data) => {
-  // Validate medical certification is not expired
-  return data.medicalCertExpiry > new Date();
+  // If medicalCertExpiry is provided, validate it's not expired
+  if (data.medicalCertExpiry) {
+    return data.medicalCertExpiry > new Date();
+  }
+  return true;
 }, {
   message: "Medical certification must not be expired",
   path: ["medicalCertExpiry"],
 })
 .refine((data) => {
-  // Validate CDL is not expired
-  return data.licenseExpiry > new Date();
+  // If licenseExpiry is provided, validate it's not expired
+  if (data.licenseExpiry) {
+    return data.licenseExpiry > new Date();
+  }
+  return true;
 }, {
   message: "CDL license must not be expired",
   path: ["licenseExpiry"],
+})
+.refine((data) => {
+  // If requiresDotCompliance is true, ensure all DOT fields are provided
+  if (data.requiresDotCompliance) {
+    return !!(data.licenseNumber && data.licenseExpiry && data.medicalCertExpiry && data.dateOfBirth && data.cdlClass);
+  }
+  return true;
+}, {
+  message: "All DOT compliance fields (license, medical cert, DOB, CDL class) are required when DOT compliance is enabled",
+  path: ["requiresDotCompliance"],
 });
 
-// Update schema must also enforce DOT compliance
+// Update schema with same conditional validation
 export const updateDriverSchema = baseInsertDriverSchema.omit({ tenantId: true }).partial()
 .refine((data) => {
   // If dateOfBirth is being updated, validate age

@@ -281,6 +281,190 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Bulk import drivers from CSV/Excel
+  app.post("/api/drivers/bulk-import", requireAuth, async (req, res) => {
+    try {
+      const Papa = await import("papaparse");
+      const XLSX = await import("xlsx");
+      
+      // Handle multipart form data
+      const formData = await new Promise<{ file?: Buffer; filename?: string }>((resolve, reject) => {
+        const chunks: Buffer[] = [];
+        req.on('data', (chunk) => chunks.push(chunk));
+        req.on('end', () => {
+          const buffer = Buffer.concat(chunks);
+          const boundary = req.headers['content-type']?.split('boundary=')[1];
+          if (!boundary) {
+            return reject(new Error('No boundary found in content-type'));
+          }
+          
+          // Simple multipart parser - extract file content and filename
+          const parts = buffer.toString('binary').split(`--${boundary}`);
+          for (const part of parts) {
+            if (part.includes('filename=')) {
+              // Extract filename
+              const filenameMatch = part.match(/filename="([^"]+)"/);
+              const filename = filenameMatch ? filenameMatch[1] : '';
+              
+              // Extract binary file content
+              const contentStart = part.indexOf('\r\n\r\n') + 4;
+              const contentEnd = part.lastIndexOf('\r\n');
+              const binaryContent = part.substring(contentStart, contentEnd);
+              const fileBuffer = Buffer.from(binaryContent, 'binary');
+              
+              resolve({ file: fileBuffer, filename });
+              return;
+            }
+          }
+          reject(new Error('No file found in request'));
+        });
+        req.on('error', reject);
+      });
+
+      if (!formData.file || !formData.filename) {
+        return res.status(400).json({ message: "No file provided" });
+      }
+
+      // Normalize headers helper
+      const normalizeHeader = (header: string): string => {
+        const normalized = header.toLowerCase().trim();
+        const headerMap: Record<string, string> = {
+          'first name': 'firstName',
+          'firstname': 'firstName',
+          'last name': 'lastName',
+          'lastname': 'lastName',
+          'phone': 'phoneNumber',
+          'phone number': 'phoneNumber',
+          'mobile': 'phoneNumber',
+          'mobile phone': 'phoneNumber',
+          'mobile phone number': 'phoneNumber',
+          'email': 'email',
+          'domicile': 'domicile',
+          'domiciles': 'domicile',
+          'license': 'licenseNumber',
+          'license number': 'licenseNumber',
+          'cdl': 'licenseNumber',
+          'eligible': 'loadEligible',
+          'load eligible': 'loadEligible',
+          'load eligibility': 'loadEligible',
+        };
+        return headerMap[normalized] || normalized;
+      };
+
+      let parsedData: any[] = [];
+
+      // Detect file type and parse accordingly (case-insensitive)
+      const filenameLower = formData.filename.toLowerCase();
+      const isExcel = filenameLower.endsWith('.xlsx') || filenameLower.endsWith('.xls');
+      const isCSV = filenameLower.endsWith('.csv');
+      
+      // Validate file type
+      if (!isExcel && !isCSV) {
+        return res.status(400).json({ 
+          message: `Unsupported file format. Please upload a CSV (.csv) or Excel (.xlsx, .xls) file. Received: ${formData.filename}` 
+        });
+      }
+      
+      if (isExcel) {
+        // Parse Excel file
+        const workbook = XLSX.read(formData.file, { type: 'buffer' });
+        
+        // Validate workbook has sheets
+        if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+          return res.status(400).json({ 
+            message: "Excel file contains no sheets. Please upload a valid Excel file with data." 
+          });
+        }
+        
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        
+        // Convert to JSON with header normalization
+        const rawData = XLSX.utils.sheet_to_json(worksheet, { defval: null });
+        
+        // Validate sheet has data
+        if (!rawData || rawData.length === 0) {
+          return res.status(400).json({ 
+            message: "Excel sheet is empty. Please upload a file with driver data." 
+          });
+        }
+        
+        // Normalize headers
+        parsedData = rawData.map((row: any) => {
+          const normalizedRow: any = {};
+          for (const [key, value] of Object.entries(row)) {
+            const normalizedKey = normalizeHeader(key);
+            normalizedRow[normalizedKey] = value;
+          }
+          return normalizedRow;
+        });
+      } else {
+        // Parse CSV file
+        const csvContent = formData.file.toString('utf-8');
+        const parseResult = Papa.parse(csvContent, {
+          header: true,
+          skipEmptyLines: true,
+          transformHeader: normalizeHeader,
+        });
+        
+        // Validate CSV has data
+        if (!parseResult.data || parseResult.data.length === 0) {
+          return res.status(400).json({ 
+            message: "CSV file is empty. Please upload a file with driver data." 
+          });
+        }
+        
+        parsedData = parseResult.data;
+      }
+
+      const errors: Array<{ row: number; error: string }> = [];
+      const imported: any[] = [];
+
+      for (let i = 0; i < parsedData.length; i++) {
+        const row = parsedData[i] as any;
+        
+        try {
+          // Convert load eligibility to boolean
+          let loadEligible = true;
+          if (row.loadEligible !== undefined) {
+            const val = String(row.loadEligible).toLowerCase();
+            loadEligible = !['no', 'false', 'ineligible', '0', 'n'].includes(val);
+          }
+
+          const driverData = insertDriverSchema.parse({
+            firstName: row.firstName || row.first_name,
+            lastName: row.lastName || row.last_name,
+            email: row.email || null,
+            phoneNumber: row.phoneNumber || row.phone_number || null,
+            domicile: row.domicile || null,
+            licenseNumber: row.licenseNumber || row.license_number || null,
+            loadEligible,
+            profileVerified: false,
+            status: 'active',
+            tenantId: req.session.tenantId,
+          });
+
+          const driver = await dbStorage.createDriver(driverData);
+          imported.push(driver);
+        } catch (error: any) {
+          errors.push({
+            row: i + 2, // +2 because CSV is 1-indexed and has header row
+            error: error.name === "ZodError" ? fromZodError(error).message : error.message,
+          });
+        }
+      }
+
+      res.json({
+        imported: imported.length,
+        errors: errors.length > 0 ? errors : undefined,
+        message: `Successfully imported ${imported.length} driver(s)${errors.length > 0 ? `, ${errors.length} error(s)` : ""}`,
+      });
+    } catch (error: any) {
+      console.error('Bulk import error:', error);
+      res.status(500).json({ message: "Failed to import drivers", error: error.message });
+    }
+  });
+
   // ==================== TRUCKS ====================
   
   app.get("/api/trucks", requireAuth, async (req, res) => {
