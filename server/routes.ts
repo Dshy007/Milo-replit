@@ -134,7 +134,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Login
   app.post("/api/auth/login", async (req, res) => {
     try {
-      const { username, password } = req.body;
+      const { username, password, rememberMe } = req.body;
 
       const user = await dbStorage.getUserByUsername(username);
       if (!user) {
@@ -156,6 +156,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Set session data after regeneration
         req.session.userId = user.id;
         req.session.tenantId = user.tenantId;
+
+        // Extend session duration if "Remember Me" is checked
+        if (rememberMe) {
+          req.session.cookie.maxAge = 1000 * 60 * 60 * 24 * 30; // 30 days
+        } else {
+          req.session.cookie.maxAge = 1000 * 60 * 60 * 24 * 7; // 7 days (default)
+        }
 
         req.session.save((err) => {
           if (err) {

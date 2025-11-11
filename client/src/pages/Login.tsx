@@ -2,6 +2,7 @@ import { Link } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { LogIn, Sparkles } from "lucide-react";
@@ -13,6 +14,7 @@ import { z } from "zod";
 const loginSchema = z.object({
   username: z.string().min(1, "Username is required"),
   password: z.string().min(1, "Password is required"),
+  rememberMe: z.boolean().default(false),
 });
 
 type LoginFormData = z.infer<typeof loginSchema>;
@@ -26,12 +28,13 @@ export default function Login() {
     defaultValues: {
       username: "",
       password: "",
+      rememberMe: false,
     },
   });
 
   async function onSubmit(data: LoginFormData) {
     try {
-      await login(data.username, data.password);
+      await login(data.username, data.password, data.rememberMe);
     } catch (error: any) {
       toast({
         variant: "destructive",
@@ -96,6 +99,24 @@ export default function Login() {
                         />
                       </FormControl>
                       <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="rememberMe"
+                  render={({ field }) => (
+                    <FormItem className="flex flex-row items-center space-x-2 space-y-0">
+                      <FormControl>
+                        <Checkbox
+                          checked={field.value}
+                          onCheckedChange={field.onChange}
+                          data-testid="checkbox-remember-me"
+                        />
+                      </FormControl>
+                      <FormLabel className="text-sm font-normal cursor-pointer">
+                        Remember me for 30 days
+                      </FormLabel>
                     </FormItem>
                   )}
                 />

@@ -11,7 +11,7 @@ type User = {
 
 type AuthContextType = {
   user: User | null;
-  login: (username: string, password: string) => Promise<void>;
+  login: (username: string, password: string, rememberMe?: boolean) => Promise<void>;
   signup: (username: string, email: string, password: string, companyName: string) => Promise<void>;
   logout: () => Promise<void>;
   isLoading: boolean;
@@ -46,11 +46,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-  async function login(username: string, password: string) {
+  async function login(username: string, password: string, rememberMe: boolean = false) {
     const response = await fetch("/api/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, rememberMe }),
       credentials: "include",
     });
 
