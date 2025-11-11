@@ -154,7 +154,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Debug logging
       console.log('Login attempt for username:', JSON.stringify(username), 'Length:', username?.length);
 
-      const user = await dbStorage.getUserByUsername(username);
+      // Make username case-insensitive
+      const user = await dbStorage.getUserByUsername(username.toLowerCase());
       if (!user) {
         console.log('User not found for username:', JSON.stringify(username));
         return res.status(401).json({ message: "Invalid credentials" });
