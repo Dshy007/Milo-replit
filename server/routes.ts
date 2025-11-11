@@ -13,6 +13,7 @@ import {
 import session from "express-session";
 import { fromZodError } from "zod-validation-error";
 import bcrypt from "bcryptjs";
+import { benchContracts } from "./seed-data";
 
 // Require SESSION_SECRET
 const SESSION_SECRET = process.env.SESSION_SECRET!;
@@ -570,6 +571,74 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ message: "Contract deleted successfully" });
     } catch (error: any) {
       res.status(500).json({ message: "Failed to delete contract", error: error.message });
+    }
+  });
+
+  // Admin endpoint: Seed bench contracts
+  app.post("/api/admin/seed-contracts", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const results = {
+        created: 0,
+        updated: 0,
+        skipped: 0,
+        errors: [] as string[],
+      };
+
+      // Get existing contracts for this tenant
+      const existing = await dbStorage.getContractsByTenant(tenantId);
+      const existingMap = new Map(
+        existing.map((c) => [`${c.type}-${c.startTime}-${c.tractorId}`, c])
+      );
+
+      // Upsert each bench contract
+      for (const benchContract of benchContracts) {
+        const key = `${benchContract.type}-${benchContract.startTime}-${benchContract.tractorId}`;
+        const existingContract = existingMap.get(key);
+
+        try {
+          if (existingContract) {
+            // Update if duration or baseRoutes changed
+            if (
+              existingContract.duration !== benchContract.duration ||
+              existingContract.baseRoutes !== benchContract.baseRoutes
+            ) {
+              await dbStorage.updateContract(existingContract.id, {
+                duration: benchContract.duration,
+                baseRoutes: benchContract.baseRoutes,
+              });
+              results.updated++;
+            } else {
+              results.skipped++;
+            }
+          } else {
+            // Create new contract
+            const contractData = insertContractSchema.parse({
+              tenantId,
+              name: `${benchContract.type.toUpperCase()} ${benchContract.startTime} ${benchContract.tractorId}`,
+              type: benchContract.type,
+              startTime: benchContract.startTime,
+              tractorId: benchContract.tractorId,
+              duration: benchContract.duration,
+              baseRoutes: benchContract.baseRoutes,
+              daysPerWeek: 6, // Rolling 6-day pattern
+              protectedDrivers: false,
+            });
+            await dbStorage.createContract(contractData);
+            results.created++;
+          }
+        } catch (error: any) {
+          results.errors.push(`${key}: ${error.message}`);
+        }
+      }
+
+      res.json({
+        message: "Contract seeding complete",
+        total: benchContracts.length,
+        ...results,
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: "Failed to seed contracts", error: error.message });
     }
   });
 

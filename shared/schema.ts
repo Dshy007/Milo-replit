@@ -283,17 +283,23 @@ export type InsertRoute = z.infer<typeof insertRouteSchema>;
 export type UpdateRoute = z.infer<typeof updateRouteSchema>;
 export type Route = typeof routes.$inferSelect;
 
-// Contracts
+// Contracts (Bench Contracts with specific start times and tractors)
 export const contracts = pgTable("contracts", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
-  name: text("name").notNull(), // e.g., "Solo1", "Solo2"
+  name: text("name").notNull(), // e.g., "Solo1 16:30 Tractor_1"
   type: text("type").notNull(), // solo1, solo2, team
+  startTime: text("start_time").notNull(), // HH:MM format (e.g., "16:30") - facility local time
+  tractorId: text("tractor_id").notNull(), // e.g., "Tractor_1", "Tractor_2"
+  duration: integer("duration").notNull(), // hours: 14 for Solo1, 38 for Solo2
   baseRoutes: integer("base_routes").notNull(), // number of base routes (10 for Solo1, 7 for Solo2)
   daysPerWeek: integer("days_per_week").notNull().default(6), // rolling 6-day pattern
   protectedDrivers: boolean("protected_drivers").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  // Unique constraint: one contract per (tenant, type, startTime, tractor)
+  uniqueContract: sql`UNIQUE (${table.tenantId}, ${table.type}, ${table.startTime}, ${table.tractorId})`,
+}));
 
 export const insertContractSchema = createInsertSchema(contracts).omit({ id: true, createdAt: true });
 export const updateContractSchema = insertContractSchema.omit({ tenantId: true }).partial();
