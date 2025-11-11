@@ -1,64 +1,19 @@
 import { Button } from "@/components/ui/button";
 import { ArrowRight } from "lucide-react";
+import calendarBg from "@assets/generated_images/Calendar_background_with_text_only_52a55f42.png";
 
 export default function Hero() {
-  const currentDate = new Date();
-  const currentMonth = currentDate.getMonth();
-  const currentYear = currentDate.getFullYear();
-  const today = currentDate.getDate();
-  
-  const firstDay = new Date(currentYear, currentMonth, 1).getDay();
-  const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
-  
-  const calendarDays = [];
-  for (let i = 0; i < firstDay; i++) {
-    calendarDays.push(null);
-  }
-  for (let day = 1; day <= daysInMonth; day++) {
-    calendarDays.push(day);
-  }
-  
-  const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-  const daysOfWeek = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-  const floatingDates = [
-    { date: 1, top: '10%', left: '15%', blur: '2px', opacity: 0.2, size: 'text-4xl' },
-    { date: 5, top: '15%', left: '75%', blur: '3px', opacity: 0.15, size: 'text-5xl' },
-    { date: 11, top: '25%', left: '85%', blur: '1.5px', opacity: 0.3, size: 'text-3xl' },
-    { date: 14, top: '35%', left: '20%', blur: '2.5px', opacity: 0.18, size: 'text-6xl' },
-    { date: 16, top: '20%', left: '45%', blur: '2px', opacity: 0.25, size: 'text-4xl' },
-    { date: 21, top: '45%', left: '10%', blur: '3px', opacity: 0.15, size: 'text-5xl' },
-    { date: 23, top: '55%', left: '80%', blur: '2px', opacity: 0.22, size: 'text-7xl' },
-    { date: 27, top: '65%', left: '25%', blur: '2.5px', opacity: 0.2, size: 'text-4xl' },
-    { date: 30, top: '75%', left: '70%', blur: '1.5px', opacity: 0.28, size: 'text-3xl' },
-    { date: 7, top: '80%', left: '40%', blur: '3px', opacity: 0.16, size: 'text-5xl' },
-    { date: 12, top: '30%', left: '60%', blur: '2px', opacity: 0.2, size: 'text-4xl' },
-    { date: 18, top: '70%', left: '55%', blur: '2.5px', opacity: 0.18, size: 'text-6xl' },
-  ];
-
   return (
-    <section className="relative min-h-screen flex items-center justify-center overflow-hidden bg-gradient-to-br from-background via-slate-50 to-background">
-      <div className="absolute inset-0 pointer-events-none">
-        {floatingDates.map((item, index) => (
-          <div
-            key={index}
-            className={`absolute ${item.size} font-bold text-primary/30`}
-            style={{
-              top: item.top,
-              left: item.left,
-              filter: `blur(${item.blur})`,
-              opacity: item.opacity,
-              transform: `rotate(${Math.random() * 30 - 15}deg)`
-            }}
-          >
-            {item.date}
-          </div>
-        ))}
-      </div>
-
-      <div className="absolute inset-0">
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-gradient-radial from-orange-200/30 via-primary/10 to-transparent rounded-full blur-[120px]"></div>
-      </div>
+    <section className="relative min-h-screen flex items-center justify-center overflow-hidden">
+      <div 
+        className="absolute inset-0 bg-cover bg-center"
+        style={{
+          backgroundImage: `url(${calendarBg})`,
+          opacity: 0.6
+        }}
+      ></div>
+      
+      <div className="absolute inset-0 bg-gradient-to-br from-background/80 via-transparent to-background/80"></div>
 
       <div className="relative z-10 max-w-5xl mx-auto px-8 py-40 text-center">
         <div className="mb-16">
