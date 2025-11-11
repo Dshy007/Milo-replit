@@ -51,7 +51,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { insertLoadSchema, type Load, type InsertLoad, type Schedule } from "@shared/schema";
+import { baseInsertLoadSchema, type Load, type InsertLoad, type Schedule } from "@shared/schema";
 import { Plus, Pencil, Trash2, Search, Package } from "lucide-react";
 import { format } from "date-fns";
 
@@ -73,7 +73,7 @@ export default function Loads() {
   });
 
   const addForm = useForm<InsertLoad>({
-    resolver: zodResolver(insertLoadSchema.omit({ tenantId: true })),
+    resolver: zodResolver(baseInsertLoadSchema.omit({ tenantId: true })),
     defaultValues: {
       loadNumber: "",
       pickupLocation: "",
@@ -88,7 +88,7 @@ export default function Loads() {
   });
 
   const editForm = useForm<InsertLoad>({
-    resolver: zodResolver(insertLoadSchema.omit({ tenantId: true })),
+    resolver: zodResolver(baseInsertLoadSchema.omit({ tenantId: true })),
   });
 
   const cleanLoadData = (data: InsertLoad) => {

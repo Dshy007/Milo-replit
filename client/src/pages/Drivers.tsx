@@ -49,13 +49,13 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { insertDriverSchema } from "@shared/schema";
+import { baseInsertDriverSchema } from "@shared/schema";
 import { z } from "zod";
 import { Plus, Search, Edit, Trash2, Phone, Mail } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 
-const driverFormSchema = insertDriverSchema.extend({
+const driverFormSchema = baseInsertDriverSchema.extend({
   licenseExpiry: z.string().min(1, "License expiry is required"),
 }).omit({ tenantId: true });
 

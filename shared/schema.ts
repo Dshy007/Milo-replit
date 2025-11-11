@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import { pgTable, text, varchar, timestamp, integer, boolean, decimal } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
+import { addYears, isAfter } from "date-fns";
 
 // Tenants (Organizations)
 export const tenants = pgTable("tenants", {
@@ -41,14 +42,80 @@ export const drivers = pgTable("drivers", {
   email: text("email"),
   status: text("status").notNull().default("active"), // active, inactive, on_leave
   certifications: text("certifications").array(),
+  // DOT Compliance Fields
+  cdlClass: text("cdl_class").notNull().default("A"), // A, B, or C
+  medicalCertExpiry: timestamp("medical_cert_expiry").notNull(), // DOT medical certification
+  dateOfBirth: timestamp("date_of_birth").notNull(), // To validate age >= 21
+  endorsements: text("endorsements"), // H (Hazmat), N (Tank), T (Doubles/Triples), P (Passenger), S (School Bus), X (Hazmat+Tank)
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-export const insertDriverSchema = createInsertSchema(drivers, {
+// Base schema without refinements - for frontend .extend() usage
+export const baseInsertDriverSchema = createInsertSchema(drivers, {
   licenseExpiry: z.coerce.date(),
+  medicalCertExpiry: z.coerce.date(),
+  dateOfBirth: z.coerce.date(),
 }).omit({ id: true, createdAt: true, updatedAt: true });
-export const updateDriverSchema = insertDriverSchema.omit({ tenantId: true }).partial();
+
+// Full validated schema with refinements - for backend validation
+export const insertDriverSchema = baseInsertDriverSchema
+.refine((data) => {
+  // Validate driver is at least 21 years old (interstate requirement)
+  const age = (Date.now() - data.dateOfBirth.getTime()) / (1000 * 60 * 60 * 24 * 365.25);
+  return age >= 21;
+}, {
+  message: "Driver must be at least 21 years old for interstate commerce",
+  path: ["dateOfBirth"],
+})
+.refine((data) => {
+  // Validate medical certification is not expired
+  return data.medicalCertExpiry > new Date();
+}, {
+  message: "Medical certification must not be expired",
+  path: ["medicalCertExpiry"],
+})
+.refine((data) => {
+  // Validate CDL is not expired
+  return data.licenseExpiry > new Date();
+}, {
+  message: "CDL license must not be expired",
+  path: ["licenseExpiry"],
+});
+
+// Update schema must also enforce DOT compliance
+export const updateDriverSchema = baseInsertDriverSchema.omit({ tenantId: true }).partial()
+.refine((data) => {
+  // If dateOfBirth is being updated, validate age
+  if (data.dateOfBirth) {
+    const age = (Date.now() - data.dateOfBirth.getTime()) / (1000 * 60 * 60 * 24 * 365.25);
+    return age >= 21;
+  }
+  return true;
+}, {
+  message: "Driver must be at least 21 years old for interstate commerce",
+  path: ["dateOfBirth"],
+})
+.refine((data) => {
+  // If medicalCertExpiry is being updated, validate it's not expired
+  if (data.medicalCertExpiry) {
+    return data.medicalCertExpiry > new Date();
+  }
+  return true;
+}, {
+  message: "Medical certification must not be expired",
+  path: ["medicalCertExpiry"],
+})
+.refine((data) => {
+  // If licenseExpiry is being updated, validate it's not expired
+  if (data.licenseExpiry) {
+    return data.licenseExpiry > new Date();
+  }
+  return true;
+}, {
+  message: "CDL license must not be expired",
+  path: ["licenseExpiry"],
+});
 export type InsertDriver = z.infer<typeof insertDriverSchema>;
 export type UpdateDriver = z.infer<typeof updateDriverSchema>;
 export type Driver = typeof drivers.$inferSelect;
@@ -66,12 +133,129 @@ export const trucks = pgTable("trucks", {
   status: text("status").notNull().default("available"), // available, in_use, maintenance, retired
   lastInspection: timestamp("last_inspection"),
   nextInspection: timestamp("next_inspection"),
+  // DOT Compliance Fields
+  usdotNumber: text("usdot_number").notNull(), // Required for interstate commerce
+  gvwr: integer("gvwr").notNull(), // Gross Vehicle Weight Rating in lbs (triggers DOT if >= 10,001)
+  registrationExpiry: timestamp("registration_expiry").notNull(),
+  insuranceExpiry: timestamp("insurance_expiry").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-export const insertTruckSchema = createInsertSchema(trucks).omit({ id: true, createdAt: true, updatedAt: true });
-export const updateTruckSchema = insertTruckSchema.omit({ tenantId: true }).partial();
+// Base schema without refinements - for frontend .extend() usage
+export const baseInsertTruckSchema = createInsertSchema(trucks, {
+  lastInspection: z.coerce.date().optional().nullable(),
+  nextInspection: z.coerce.date().optional().nullable(),
+  registrationExpiry: z.coerce.date(),
+  insuranceExpiry: z.coerce.date(),
+}).omit({ id: true, createdAt: true, updatedAt: true });
+
+// Full validated schema with refinements - for backend validation
+export const insertTruckSchema = baseInsertTruckSchema
+.refine((data) => {
+  // Validate both inspection dates are provided or neither
+  const hasLast = data.lastInspection !== undefined && data.lastInspection !== null;
+  const hasNext = data.nextInspection !== undefined && data.nextInspection !== null;
+  
+  if (hasLast !== hasNext) {
+    return false; // Both must be provided or both omitted
+  }
+  
+  // If both provided, validate chronological order and 12-month requirement
+  if (hasLast && hasNext) {
+    // Next must be after last
+    if (data.nextInspection! <= data.lastInspection!) {
+      return false;
+    }
+    // Next must be within 12 calendar months of last (handles leap years)
+    const limit = addYears(data.lastInspection!, 1);
+    return !isAfter(data.nextInspection!, limit);
+  }
+  
+  return true;
+}, {
+  message: "Inspection dates must both be provided, in chronological order, and next inspection within 12 months of last (DOT requirement)",
+  path: ["nextInspection"],
+})
+.refine((data) => {
+  // Validate registration is not expired
+  return data.registrationExpiry > new Date();
+}, {
+  message: "Vehicle registration must not be expired",
+  path: ["registrationExpiry"],
+})
+.refine((data) => {
+  // Validate insurance is not expired
+  return data.insuranceExpiry > new Date();
+}, {
+  message: "Vehicle insurance must not be expired",
+  path: ["insuranceExpiry"],
+})
+.refine((data) => {
+  // Validate GVWR is within DOT threshold (10,001+ lbs requires DOT compliance)
+  return data.gvwr >= 10001;
+}, {
+  message: "GVWR must be at least 10,001 lbs for DOT compliance tracking",
+  path: ["gvwr"],
+});
+
+// Update schema must also enforce DOT compliance
+export const updateTruckSchema = baseInsertTruckSchema.omit({ tenantId: true }).partial()
+.refine((data) => {
+  // If inspection dates are being updated, validate them
+  const hasLast = data.lastInspection !== undefined && data.lastInspection !== null;
+  const hasNext = data.nextInspection !== undefined && data.nextInspection !== null;
+  
+  // If updating, both must be provided or both omitted
+  if ((hasLast && !hasNext) || (!hasLast && hasNext)) {
+    return false;
+  }
+  
+  // If both provided, validate order and interval
+  if (hasLast && hasNext) {
+    if (data.nextInspection! <= data.lastInspection!) {
+      return false;
+    }
+    // Next must be within 12 calendar months of last (handles leap years)
+    const limit = addYears(data.lastInspection!, 1);
+    return !isAfter(data.nextInspection!, limit);
+  }
+  
+  return true;
+}, {
+  message: "Inspection dates must be in chronological order and within 12 months (DOT requirement)",
+  path: ["nextInspection"],
+})
+.refine((data) => {
+  // If registrationExpiry is being updated, validate it's not expired
+  if (data.registrationExpiry) {
+    return data.registrationExpiry > new Date();
+  }
+  return true;
+}, {
+  message: "Vehicle registration must not be expired",
+  path: ["registrationExpiry"],
+})
+.refine((data) => {
+  // If insuranceExpiry is being updated, validate it's not expired
+  if (data.insuranceExpiry) {
+    return data.insuranceExpiry > new Date();
+  }
+  return true;
+}, {
+  message: "Vehicle insurance must not be expired",
+  path: ["insuranceExpiry"],
+})
+.refine((data) => {
+  // If GVWR is being updated, validate it meets DOT threshold
+  if (data.gvwr !== undefined) {
+    return data.gvwr >= 10001;
+  }
+  return true;
+}, {
+  message: "GVWR must be at least 10,001 lbs for DOT compliance tracking",
+  path: ["gvwr"],
+});
 export type InsertTruck = z.infer<typeof insertTruckSchema>;
 export type UpdateTruck = z.infer<typeof updateTruckSchema>;
 export type Truck = typeof trucks.$inferSelect;
@@ -85,6 +269,9 @@ export const routes = pgTable("routes", {
   destination: text("destination").notNull(),
   distance: decimal("distance", { precision: 10, scale: 2 }), // miles
   estimatedDuration: integer("estimated_duration"), // minutes
+  // DOT Compliance Fields
+  maxWeight: integer("max_weight"), // Maximum weight allowed on route in lbs (bridge/road restrictions)
+  hazmatAllowed: boolean("hazmat_allowed").notNull().default(true), // Some routes prohibit hazmat
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -153,16 +340,76 @@ export const loads = pgTable("loads", {
   deliveryTime: timestamp("delivery_time").notNull(),
   weight: decimal("weight", { precision: 10, scale: 2 }), // pounds
   description: text("description"),
+  // DOT Compliance Fields
+  hazmatClass: text("hazmat_class"), // DOT Hazmat Classes: 1 (Explosives), 2 (Gases), 3 (Flammable Liquids), 4 (Flammable Solids), 5 (Oxidizers), 6 (Toxic), 7 (Radioactive), 8 (Corrosive), 9 (Miscellaneous)
+  requiresPlacard: boolean("requires_placard").notNull().default(false), // Hazmat placarding required
   status: text("status").notNull().default("pending"), // pending, picked_up, in_transit, delivered, cancelled
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-export const insertLoadSchema = createInsertSchema(loads, {
+// Base schema without refinements - for frontend .extend() usage
+export const baseInsertLoadSchema = createInsertSchema(loads, {
   pickupTime: z.coerce.date(),
   deliveryTime: z.coerce.date(),
 }).omit({ id: true, createdAt: true, updatedAt: true });
-export const updateLoadSchema = insertLoadSchema.omit({ tenantId: true }).partial();
+
+// Full validated schema with refinements - for backend validation
+export const insertLoadSchema = baseInsertLoadSchema
+.refine((data) => {
+  // Validate hazmat class is valid DOT classification (1-9) if provided
+  if (data.hazmatClass) {
+    const validClasses = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
+    return validClasses.includes(data.hazmatClass);
+  }
+  return true;
+}, {
+  message: "Hazmat class must be a valid DOT classification (1-9)",
+  path: ["hazmatClass"],
+})
+.refine((data) => {
+  // Validate weight is positive if provided
+  if (data.weight) {
+    return parseFloat(data.weight.toString()) > 0;
+  }
+  return true;
+}, {
+  message: "Load weight must be positive",
+  path: ["weight"],
+})
+.refine((data) => {
+  // If hazmat class is provided, placard is usually required
+  // Exception: small quantities may not require placarding
+  // This is a warning-level check - we'll accept both but validate consistency
+  return true; // Allow flexibility for small quantities
+}, {
+  message: "Consider whether placard is required for this hazmat class",
+  path: ["requiresPlacard"],
+});
+
+export const updateLoadSchema = baseInsertLoadSchema.omit({ tenantId: true }).partial()
+.refine((data) => {
+  // Validate hazmat class if being updated
+  if (data.hazmatClass) {
+    const validClasses = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
+    return validClasses.includes(data.hazmatClass);
+  }
+  return true;
+}, {
+  message: "Hazmat class must be a valid DOT classification (1-9)",
+  path: ["hazmatClass"],
+})
+.refine((data) => {
+  // Validate weight is positive if being updated
+  if (data.weight !== undefined) {
+    return data.weight === null || parseFloat(data.weight.toString()) > 0;
+  }
+  return true;
+}, {
+  message: "Load weight must be positive",
+  path: ["weight"],
+});
+
 export type InsertLoad = z.infer<typeof insertLoadSchema>;
 export type UpdateLoad = z.infer<typeof updateLoadSchema>;
 export type Load = typeof loads.$inferSelect;

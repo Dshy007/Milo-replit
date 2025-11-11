@@ -49,12 +49,12 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { insertTruckSchema, type Truck, type InsertTruck } from "@shared/schema";
+import { baseInsertTruckSchema, type Truck, type InsertTruck } from "@shared/schema";
 import { Plus, Pencil, Trash2, Search, Truck as TruckIcon } from "lucide-react";
 import { format } from "date-fns";
 import { z } from "zod";
 
-const formSchema = insertTruckSchema.extend({
+const formSchema = baseInsertTruckSchema.extend({
   lastInspection: z.string().optional(),
   nextInspection: z.string().optional(),
 });
