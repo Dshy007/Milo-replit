@@ -131,7 +131,11 @@ export const schedules = pgTable("schedules", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-export const insertScheduleSchema = createInsertSchema(schedules).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertScheduleSchema = createInsertSchema(schedules, {
+  scheduledDate: z.coerce.date(),
+  startTime: z.coerce.date().optional().nullable(),
+  endTime: z.coerce.date().optional().nullable(),
+}).omit({ id: true, createdAt: true, updatedAt: true });
 export const updateScheduleSchema = insertScheduleSchema.omit({ tenantId: true }).partial();
 export type InsertSchedule = z.infer<typeof insertScheduleSchema>;
 export type UpdateSchedule = z.infer<typeof updateScheduleSchema>;
