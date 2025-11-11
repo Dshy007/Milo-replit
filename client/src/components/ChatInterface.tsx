@@ -13,8 +13,13 @@ export default function ChatInterface() {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
+      role: 'user',
+      content: "show me J. Smith upcoming week"
+    },
+    {
+      id: '2',
       role: 'assistant',
-      content: "Hi! I'm Milo, your AI scheduling assistant. I can help you assign drivers, check compliance, and manage your fleet. Try asking me something like 'How many drivers do I have?' or 'Show me next week's schedule'."
+      content: "Here's J. Smith's schedule for the upcoming week:\n\n📅 Monday, Nov 11 - Block #1234, 6:00 AM - 2:00 PM\n📅 Tuesday, Nov 12 - Block #1245, 2:00 PM - 10:00 PM\n📅 Wednesday, Nov 13 - Off\n📅 Thursday, Nov 14 - Block #1256, 6:00 AM - 2:00 PM\n📅 Friday, Nov 15 - Block #1267, 2:00 PM - 10:00 PM\n📅 Saturday, Nov 16 - Block #1278, 10:00 AM - 6:00 PM\n📅 Sunday, Nov 17 - Off\n\n✅ All shifts are DOT compliant with proper rest periods."
     }
   ]);
   const [input, setInput] = useState('');

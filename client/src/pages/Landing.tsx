@@ -4,8 +4,8 @@ import FeatureSection from "@/components/FeatureSection";
 import FeatureGrid from "@/components/FeatureGrid";
 import CTASection from "@/components/CTASection";
 import Footer from "@/components/Footer";
+import ChatInterface from "@/components/ChatInterface";
 import { Calendar, FileUp, Shield, Brain, Users, TrendingUp } from "lucide-react";
-import aiChatImage from "@assets/generated_images/AI_chat_feature_showcase_4b227a38.png";
 import dragDropImage from "@assets/generated_images/Drag_drop_upload_feature_b5e469a9.png";
 import complianceImage from "@assets/generated_images/Compliance_dashboard_feature_dac05b17.png";
 
@@ -39,18 +39,38 @@ export default function Landing() {
         
         <Hero />
 
-        <FeatureSection
-          title="An Evolution in Intelligence"
-          description="Milo isn't software—it's a self-adapting AI that evolves with your operation. Talk naturally, make decisions faster, and watch complexity transform into simplicity."
-          image={aiChatImage}
-          imageAlt="Milo AI chat interface showing scheduling conversation"
-          features={[
-            "Self-adapting AI that learns your patterns",
-            "Natural conversation replaces complex interfaces",
-            "Instant conflict resolution and optimization",
-            "Spectacular speed meets effortless control"
-          ]}
-        />
+        <section className="py-20 px-8">
+          <div className="max-w-7xl mx-auto">
+            <div className="grid md:grid-cols-2 gap-12 items-center">
+              <div>
+                <h2 className="text-4xl md:text-5xl font-bold mb-6 text-foreground tracking-tight">
+                  An Evolution in Intelligence
+                </h2>
+                <p className="text-lg text-muted-foreground mb-8 font-light leading-relaxed">
+                  Milo isn't software—it's a self-adapting AI that evolves with your operation. Talk naturally, make decisions faster, and watch complexity transform into simplicity.
+                </p>
+                <ul className="space-y-4">
+                  {[
+                    "Self-adapting AI that learns your patterns",
+                    "Natural conversation replaces complex interfaces",
+                    "Instant conflict resolution and optimization",
+                    "Spectacular speed meets effortless control"
+                  ].map((feature, index) => (
+                    <li key={index} className="flex items-start gap-3">
+                      <div className="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0 mt-0.5">
+                        <div className="w-2 h-2 rounded-full bg-primary"></div>
+                      </div>
+                      <span className="text-foreground font-light">{feature}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div>
+                <ChatInterface />
+              </div>
+            </div>
+          </div>
+        </section>
 
         <FeatureSection
           title="Instant Import"
