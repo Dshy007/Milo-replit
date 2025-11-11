@@ -1,4 +1,4 @@
-import { Home, Users, Calendar, Route, Truck, FileText, Package, Sparkles, Settings, LogOut } from "lucide-react";
+import { Home, Users, Calendar, Route, Truck, FileText, Package, Upload, Sparkles, Settings, LogOut } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import {
@@ -58,6 +58,12 @@ const navItems = [
     url: "/loads",
     icon: Package,
     testId: "nav-loads",
+  },
+  {
+    title: "Import Data",
+    url: "/import",
+    icon: Upload,
+    testId: "nav-import",
   },
   {
     title: "AI Assistant",

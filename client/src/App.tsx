@@ -17,6 +17,7 @@ import Routes from "@/pages/Routes";
 import Trucks from "@/pages/Trucks";
 import Contracts from "@/pages/Contracts";
 import Loads from "@/pages/Loads";
+import Import from "@/pages/Import";
 import Chat from "@/pages/Chat";
 import NotFound from "@/pages/not-found";
 
@@ -95,6 +96,13 @@ function Router() {
         <ProtectedRoute>
           <ProtectedLayout>
             <Loads />
+          </ProtectedLayout>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/import">
+        <ProtectedRoute>
+          <ProtectedLayout>
+            <Import />
           </ProtectedLayout>
         </ProtectedRoute>
       </Route>

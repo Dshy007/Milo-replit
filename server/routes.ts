@@ -645,6 +645,123 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ==================== CSV IMPORT ====================
+
+  app.post("/api/import/:entityType", requireAuth, async (req, res) => {
+    try {
+      const { entityType } = req.params;
+      const { rows } = req.body;
+
+      if (!rows || !Array.isArray(rows) || rows.length === 0) {
+        return res.status(400).json({ message: "No data provided" });
+      }
+
+      if (rows.length > 5000) {
+        return res.status(400).json({ message: "Too many rows. Maximum 5000 allowed." });
+      }
+
+      const validRows: any[] = [];
+      const errors: { row: number, errors: string[] }[] = [];
+      let schema: any;
+
+      // Select appropriate schema based on entity type
+      switch (entityType) {
+        case "drivers":
+          schema = insertDriverSchema;
+          break;
+        case "routes":
+          schema = insertRouteSchema;
+          break;
+        case "trucks":
+          schema = insertTruckSchema;
+          break;
+        case "loads":
+          schema = insertLoadSchema;
+          break;
+        default:
+          return res.status(400).json({ message: "Invalid entity type" });
+      }
+
+      // Validate each row individually
+      for (let i = 0; i < rows.length; i++) {
+        try {
+          const rowData = {
+            ...rows[i],
+            tenantId: req.session.tenantId,
+          };
+
+          // Clean up empty strings to undefined for optional fields
+          Object.keys(rowData).forEach(key => {
+            if (rowData[key] === "" || rowData[key] === null) {
+              rowData[key] = undefined;
+            }
+          });
+
+          const validated = schema.parse(rowData);
+          validRows.push(validated);
+        } catch (error: any) {
+          if (error.name === "ZodError") {
+            const errorMessages = error.errors.map((err: any) => 
+              `${err.path.join('.')}: ${err.message}`
+            );
+            errors.push({ row: i + 1, errors: errorMessages });
+          } else {
+            errors.push({ row: i + 1, errors: [error.message] });
+          }
+        }
+      }
+
+      // Insert valid rows
+      let insertedCount = 0;
+      if (validRows.length > 0) {
+        try {
+          switch (entityType) {
+            case "drivers":
+              for (const row of validRows) {
+                await dbStorage.createDriver(row);
+                insertedCount++;
+              }
+              break;
+            case "routes":
+              for (const row of validRows) {
+                await dbStorage.createRoute(row);
+                insertedCount++;
+              }
+              break;
+            case "trucks":
+              for (const row of validRows) {
+                await dbStorage.createTruck(row);
+                insertedCount++;
+              }
+              break;
+            case "loads":
+              for (const row of validRows) {
+                await dbStorage.createLoad(row);
+                insertedCount++;
+              }
+              break;
+          }
+        } catch (error: any) {
+          console.error("Error inserting rows:", error);
+          return res.status(500).json({ 
+            message: "Failed to insert some rows", 
+            count: insertedCount,
+            errors: [...errors, { row: -1, errors: [error.message] }]
+          });
+        }
+      }
+
+      res.json({
+        count: insertedCount,
+        total: rows.length,
+        errors: errors,
+        message: `Successfully imported ${insertedCount} of ${rows.length} rows`
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: "Import failed", error: error.message });
+    }
+  });
+
   // ==================== AI CHAT ====================
 
   app.post("/api/chat", requireAuth, async (req, res) => {
