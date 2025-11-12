@@ -254,18 +254,21 @@ async function handleGetDriversByType(
   }
   
   // Create a map of driverId -> soloType (from their most recent assignment)
+  // Normalize soloType to lowercase for case-insensitive matching
   const driverTypeMap = new Map<string, string>();
   allAssignments.forEach(assignment => {
     const block = blockMap.get(assignment.blockId);
     if (block && !driverTypeMap.has(assignment.driverId)) {
-      driverTypeMap.set(assignment.driverId, block.soloType);
+      driverTypeMap.set(assignment.driverId, block.soloType.toLowerCase());
     }
   });
   
-  // Filter drivers by type
+  // Filter drivers by type (case-insensitive)
+  // Note: Drivers with no assignment history are excluded from results
+  const normalizedDriverType = driverType.toLowerCase();
   const filteredDrivers = allDrivers.filter(driver => {
     const assignedType = driverTypeMap.get(driver.id);
-    return assignedType === driverType;
+    return assignedType === normalizedDriverType;
   });
   
   // If includeUpcoming, get assignments for next 7 days
