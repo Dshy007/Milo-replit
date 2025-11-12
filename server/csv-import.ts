@@ -1,6 +1,6 @@
 import { db } from "./db";
 import { drivers, contracts, blocks, blockAssignments, protectedDriverRules } from "@shared/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { validateBlockAssignment } from "./rolling6-calculator";
 import { format, getDay, startOfDay } from "date-fns";
 
@@ -29,6 +29,8 @@ interface CommitResult {
   created: number;
   failed: number;
   errors: string[];
+  warnings: string[];
+  committedWithWarnings: number;
 }
 
 /**
@@ -231,8 +233,12 @@ export async function validateCSVImport(
     }
 
     // Check for driver overlaps (within this CSV and existing assignments)
-    const driverAssignments = existingAssignments.filter(
-      (a) => a.driverId === driver.id
+    const driverAssignmentIds = existingAssignments
+      .filter((a) => a.driverId === driver.id)
+      .map((a) => a.blockId);
+    
+    const driverAssignmentBlocks = allBlocks.filter((b) =>
+      driverAssignmentIds.includes(b.id)
     );
 
     // Also check within this CSV batch for overlaps
@@ -245,7 +251,7 @@ export async function validateCSVImport(
       .filter((b): b is typeof allBlocks[0] => !!b);
 
     const allDriverBlocks = [
-      ...driverAssignments.map((a) => a.block),
+      ...driverAssignmentBlocks,
       ...csvDriverAssignments,
     ];
 
@@ -268,10 +274,13 @@ export async function validateCSVImport(
       }
     }
 
-    // Validate DOT compliance - need to fetch data for full validation
-    const driverObj = await db.query.drivers.findFirst({
-      where: eq(drivers.id, driver.id),
-    });
+    // Validate DOT compliance - need to fetch data for full validation (use select to avoid relation errors)
+    const driverResults = await db
+      .select()
+      .from(drivers)
+      .where(eq(drivers.id, driver.id))
+      .limit(1);
+    const driverObj = driverResults[0];
 
     if (!driverObj) {
       result.errors.push("Driver not found in database");
@@ -298,19 +307,23 @@ export async function validateCSVImport(
     // Manually fetch blocks for these assignments
     const assignmentBlockIds = driverExistingAssignmentRows.map(a => a.blockId);
     const assignmentBlocks = assignmentBlockIds.length > 0
-      ? await db.select().from(blocks).where(eq(blocks.id, assignmentBlockIds[0])) // Simplified for now
+      ? await db.select().from(blocks).where(inArray(blocks.id, assignmentBlockIds))
       : [];
     
+    // Create a map for fast lookup
+    const blockMap = new Map(assignmentBlocks.map(b => [b.id, b]));
+    
     // Create the combined structure manually
-    const driverExistingAssignments = driverExistingAssignmentRows.map((assignment, idx) => ({
+    const driverExistingAssignments = driverExistingAssignmentRows.map((assignment) => ({
       ...assignment,
-      block: assignmentBlocks[idx] || matchingBlock, // Use matching block as fallback
+      block: blockMap.get(assignment.blockId) || matchingBlock, // Use matching block as fallback
     }));
 
-    // Get all block assignments for checking duplicates
-    const allTenantAssignments = await db.query.blockAssignments.findMany({
-      where: eq(blockAssignments.tenantId, tenantId),
-    });
+    // Get all block assignments for checking duplicates (use select to avoid relation errors)
+    const allTenantAssignments = await db
+      .select()
+      .from(blockAssignments)
+      .where(eq(blockAssignments.tenantId, tenantId));
 
     const validation = await validateBlockAssignment(
       driverObj,
@@ -320,21 +333,24 @@ export async function validateCSVImport(
       allTenantAssignments
     );
 
+    // Check for hard-stop issues: protected rules or conflicts
     if (!validation.canAssign) {
       if (validation.protectedRuleViolations.length > 0) {
         result.errors.push(...validation.protectedRuleViolations);
+        result.status = "error";
       }
       if (validation.conflictingAssignments.length > 0) {
         result.errors.push(`Conflicting assignments exist`);
+        result.status = "error";
       }
-      result.status = "error";
     }
 
-    if (validation.validationResult.status === "violation") {
-      result.errors.push(`DOT violation: ${validation.validationResult.reason}`);
+    // Check DOT compliance - violations block, warnings allow with notice
+    if (validation.validationResult.validationStatus === "violation") {
+      result.errors.push(`DOT violation: ${validation.validationResult.messages.join(", ")}`);
       result.status = "error";
-    } else if (validation.validationResult.status === "warning") {
-      result.warnings.push(validation.validationResult.reason);
+    } else if (validation.validationResult.validationStatus === "warning") {
+      result.warnings.push(...validation.validationResult.messages);
       if (result.status !== "error") {
         result.status = "warning";
       }
@@ -358,6 +374,8 @@ export async function commitCSVImport(
     created: 0,
     failed: 0,
     errors: [],
+    warnings: [],
+    committedWithWarnings: 0,
   };
 
   // Only commit rows with status "valid" or "warning"
@@ -376,9 +394,12 @@ export async function commitCSVImport(
 
     try {
       // Re-validate before committing (in case data changed)
-      const block = await db.query.blocks.findFirst({
-        where: eq(blocks.id, row.blockId),
-      });
+      const blockResults = await db
+        .select()
+        .from(blocks)
+        .where(eq(blocks.id, row.blockId))
+        .limit(1);
+      const block = blockResults[0];
 
       if (!block) {
         result.failed++;
@@ -386,10 +407,13 @@ export async function commitCSVImport(
         continue;
       }
 
-      // Re-validate with full parameters
-      const driverObj = await db.query.drivers.findFirst({
-        where: eq(drivers.id, row.driverId),
-      });
+      // Re-validate with full parameters (use select to avoid relation errors)
+      const driverResults = await db
+        .select()
+        .from(drivers)
+        .where(eq(drivers.id, row.driverId))
+        .limit(1);
+      const driverObj = driverResults[0];
 
       if (!driverObj) {
         result.failed++;
@@ -402,19 +426,33 @@ export async function commitCSVImport(
         .from(protectedDriverRules)
         .where(eq(protectedDriverRules.tenantId, tenantId));
 
-      const driverExistingAssignments = await db.query.blockAssignments.findMany({
-        where: and(
+      // Get existing assignments for this driver (use select to avoid relation errors)
+      const driverExistingAssignmentRows = await db
+        .select()
+        .from(blockAssignments)
+        .where(and(
           eq(blockAssignments.tenantId, tenantId),
           eq(blockAssignments.driverId, row.driverId)
-        ),
-        with: {
-          block: true,
-        },
-      });
+        ));
+      
+      // Manually fetch blocks for these assignments
+      const assignmentBlockIds = driverExistingAssignmentRows.map(a => a.blockId);
+      const assignmentBlocks = assignmentBlockIds.length > 0
+        ? await db.select().from(blocks).where(inArray(blocks.id, assignmentBlockIds))
+        : [];
+      
+      // Create a map for fast lookup
+      const blockMap = new Map(assignmentBlocks.map(b => [b.id, b]));
+      
+      const driverExistingAssignments = driverExistingAssignmentRows.map((assignment) => ({
+        ...assignment,
+        block: blockMap.get(assignment.blockId) || block,
+      }));
 
-      const allTenantAssignments = await db.query.blockAssignments.findMany({
-        where: eq(blockAssignments.tenantId, tenantId),
-      });
+      const allTenantAssignments = await db
+        .select()
+        .from(blockAssignments)
+        .where(eq(blockAssignments.tenantId, tenantId));
 
       const validation = await validateBlockAssignment(
         driverObj,
@@ -424,12 +462,31 @@ export async function commitCSVImport(
         allTenantAssignments
       );
 
-      if (!validation.canAssign) {
+      // Block on hard-stops: protected rules, conflicts, or DOT violations
+      if (!validation.canAssign || validation.validationResult.validationStatus === "violation") {
         result.failed++;
-        result.errors.push(
-          `Row ${row.rowIndex}: Cannot assign - ${validation.protectedRuleViolations.join(", ")}`
-        );
+        const errorMessages = [];
+        
+        if (validation.protectedRuleViolations.length > 0) {
+          errorMessages.push(...validation.protectedRuleViolations);
+        }
+        if (validation.conflictingAssignments.length > 0) {
+          errorMessages.push("Conflicting assignments exist");
+        }
+        if (validation.validationResult.validationStatus === "violation") {
+          errorMessages.push(`DOT violation: ${validation.validationResult.messages.join(", ")}`);
+        }
+        
+        result.errors.push(`Row ${row.rowIndex}: ${errorMessages.join("; ")}`);
         continue;
+      }
+
+      // Track warnings for committed rows
+      if (validation.validationResult.validationStatus === "warning") {
+        result.committedWithWarnings++;
+        result.warnings.push(
+          `Row ${row.rowIndex}: Committed with warning - ${validation.validationResult.messages.join(", ")}`
+        );
       }
 
       await db.insert(blockAssignments).values({
@@ -437,9 +494,9 @@ export async function commitCSVImport(
         blockId: row.blockId,
         driverId: row.driverId,
         assignedBy: userId,
-        validationStatus: validation.validationResult.status,
-        validationSummary: validation.validationResult.summary
-          ? JSON.stringify(validation.validationResult.summary)
+        validationStatus: validation.validationResult.validationStatus,
+        validationSummary: validation.validationResult.metrics
+          ? JSON.stringify(validation.validationResult.metrics)
           : null,
         notes: `Imported from CSV`,
       });

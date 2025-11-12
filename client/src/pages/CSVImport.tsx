@@ -69,13 +69,35 @@ export default function CSVImport() {
   const commitMutation = useMutation({
     mutationFn: async (rows: ValidationResult[]) => {
       const response = await apiRequest("POST", "/api/schedules/import-commit", { validatedRows: rows });
-      return response.json() as Promise<{ created: number; failed: number; errors: string[] }>;
+      return response.json() as Promise<{ 
+        created: number; 
+        failed: number; 
+        errors: string[];
+        warnings: string[];
+        committedWithWarnings: number;
+      }>;
     },
     onSuccess: (data) => {
+      const messages = [];
+      if (data.created > 0) {
+        messages.push(`✅ Created ${data.created} assignments`);
+      }
+      if (data.committedWithWarnings > 0) {
+        messages.push(`⚠️ ${data.committedWithWarnings} with warnings`);
+      }
+      if (data.failed > 0) {
+        messages.push(`❌ ${data.failed} failed`);
+      }
+
       toast({
         title: "Import Complete",
-        description: `✅ Created ${data.created} assignments${data.failed > 0 ? `, ❌ ${data.failed} failed` : ""}`,
+        description: messages.join(", "),
       });
+
+      // Show warnings if any
+      if (data.warnings.length > 0) {
+        console.log("Import warnings:", data.warnings);
+      }
 
       // Reset state
       setCSVRows([]);
