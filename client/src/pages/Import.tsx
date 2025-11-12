@@ -23,8 +23,9 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 import { Upload, FileText, AlertCircle, CheckCircle2, Download } from "lucide-react";
 import Papa from "papaparse";
+import * as XLSX from "xlsx";
 
-type EntityType = "drivers" | "routes" | "trucks" | "loads";
+type EntityType = "drivers" | "routes" | "trucks" | "loads" | "blocks" | "assignments";
 
 interface PreviewRow {
   data: Record<string, any>;
@@ -40,6 +41,7 @@ export default function Import() {
   const [headers, setHeaders] = useState<string[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
+  const [fullData, setFullData] = useState<any[]>([]); // Store all parsed rows for import
 
   const importMutation = useMutation({
     mutationFn: async (data: { entityType: EntityType; rows: any[] }) => {
@@ -76,6 +78,7 @@ export default function Import() {
         setPreviewData([]);
         setHeaders([]);
         setValidationErrors([]);
+        setFullData([]);
       }
     },
     onError: (error: Error) => {
@@ -113,15 +116,15 @@ export default function Import() {
   };
 
   const isValidFile = (file: File): boolean => {
-    const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+    const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
     
     // Check file extension
     const fileExt = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
-    if (fileExt !== '.csv') {
+    if (fileExt !== '.csv' && fileExt !== '.xlsx') {
       toast({
         variant: "destructive",
         title: "Invalid File Type",
-        description: "Please upload a CSV file only",
+        description: "Please upload a CSV or Excel (.xlsx) file",
       });
       return false;
     }
@@ -131,7 +134,7 @@ export default function Import() {
       toast({
         variant: "destructive",
         title: "File Too Large",
-        description: "File size must be less than 5MB",
+        description: "File size must be less than 10MB",
       });
       return false;
     }
@@ -143,49 +146,111 @@ export default function Import() {
     setFile(selectedFile);
     setValidationErrors([]);
 
-    Papa.parse(selectedFile, {
-      header: true,
-      skipEmptyLines: true,
-      complete: (results) => {
-        if (results.data && results.data.length > 0) {
-          const MAX_ROWS = 5000;
+    const fileExt = selectedFile.name.substring(selectedFile.name.lastIndexOf('.')).toLowerCase();
+    
+    if (fileExt === '.xlsx') {
+      // Parse Excel file
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = new Uint8Array(e.target?.result as ArrayBuffer);
+          const workbook = XLSX.read(data, { type: 'array' });
+          const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+          const jsonData = XLSX.utils.sheet_to_json(firstSheet, { header: 1 });
           
-          // Check row count limit
-          if (results.data.length > MAX_ROWS) {
+          if (jsonData.length < 2) {
             toast({
               variant: "destructive",
-              title: "Too Many Rows",
-              description: `File contains ${results.data.length} rows. Maximum allowed is ${MAX_ROWS}.`,
+              title: "Empty File",
+              description: "The uploaded file contains no data",
             });
             return;
           }
-
-          const headers = Object.keys(results.data[0] as object);
+          
+          const headers = jsonData[0] as string[];
+          const rows = jsonData.slice(1) as any[][];
+          
+          const MAX_ROWS = 5000;
+          if (rows.length > MAX_ROWS) {
+            toast({
+              variant: "destructive",
+              title: "Too Many Rows",
+              description: `File contains ${rows.length} rows. Maximum allowed is ${MAX_ROWS}.`,
+            });
+            return;
+          }
+          
+          const csvData = rows.map(row => {
+            const obj: any = {};
+            headers.forEach((header, index) => {
+              obj[header] = row[index];
+            });
+            return obj;
+          });
+          
           setHeaders(headers);
-
-          const preview = results.data.slice(0, 10).map((row, index) => ({
-            data: row as Record<string, any>,
+          setFullData(csvData); // Store full data for import
+          const preview = csvData.slice(0, 10).map((row, index) => ({
+            data: row,
             rowIndex: index + 1,
           }));
           setPreviewData(preview);
-
-          validateData(results.data as any[], headers);
-        } else {
+          validateData(csvData, headers);
+        } catch (error: any) {
           toast({
             variant: "destructive",
-            title: "Empty File",
-            description: "The uploaded file contains no data",
+            title: "Parse Error",
+            description: error.message,
           });
         }
-      },
-      error: (error) => {
-        toast({
-          variant: "destructive",
-          title: "Parse Error",
-          description: error.message,
-        });
-      },
-    });
+      };
+      reader.readAsArrayBuffer(selectedFile);
+    } else {
+      // Parse CSV file
+      Papa.parse(selectedFile, {
+        header: true,
+        skipEmptyLines: true,
+        complete: (results) => {
+          if (results.data && results.data.length > 0) {
+            const MAX_ROWS = 5000;
+            
+            if (results.data.length > MAX_ROWS) {
+              toast({
+                variant: "destructive",
+                title: "Too Many Rows",
+                description: `File contains ${results.data.length} rows. Maximum allowed is ${MAX_ROWS}.`,
+              });
+              return;
+            }
+
+            const headers = Object.keys(results.data[0] as object);
+            setHeaders(headers);
+            setFullData(results.data as any[]); // Store full data for import
+
+            const preview = results.data.slice(0, 10).map((row, index) => ({
+              data: row as Record<string, any>,
+              rowIndex: index + 1,
+            }));
+            setPreviewData(preview);
+
+            validateData(results.data as any[], headers);
+          } else {
+            toast({
+              variant: "destructive",
+              title: "Empty File",
+              description: "The uploaded file contains no data",
+            });
+          }
+        },
+        error: (error) => {
+          toast({
+            variant: "destructive",
+            title: "Parse Error",
+            description: error.message,
+          });
+        },
+      });
+    }
   };
 
   const validateData = (data: any[], headers: string[]) => {
@@ -224,13 +289,17 @@ export default function Import() {
   const getRequiredFields = (type: EntityType): string[] => {
     switch (type) {
       case "drivers":
-        return ["firstName", "lastName", "licenseNumber"];
+        return ["firstName", "lastName"];
       case "routes":
         return ["name", "origin", "destination"];
       case "trucks":
         return ["truckNumber", "make", "model"];
       case "loads":
         return ["loadNumber", "pickupLocation", "deliveryLocation", "pickupTime", "deliveryTime"];
+      case "blocks":
+        return ["contractId", "soloType", "startTimestamp", "duration"];
+      case "assignments":
+        return ["blockId", "driverId"];
       default:
         return [];
     }
@@ -255,25 +324,21 @@ export default function Import() {
       return;
     }
 
-    // Re-parse the full file for import
-    Papa.parse(file, {
-      header: true,
-      skipEmptyLines: true,
-      complete: (results) => {
-        importMutation.mutate({
-          entityType,
-          rows: results.data as any[],
-        });
-      },
+    // Use stored full data instead of re-parsing (supports both CSV and Excel)
+    importMutation.mutate({
+      entityType,
+      rows: fullData,
     });
   };
 
   const downloadTemplate = () => {
     const templates = {
-      drivers: "firstName,lastName,email,phone,licenseNumber,licenseExpiry,address\nJohn,Doe,john@example.com,555-1234,DL123456,2025-12-31,123 Main St\n",
+      drivers: "firstName,lastName,email,phoneNumber,licenseNumber,licenseExpiry\nJohn,Doe,john@example.com,555-1234,DL123456,2025-12-31\n",
       routes: "name,origin,destination,distance,estimatedDuration,notes\nRoute 1,Chicago IL,New York NY,790.5,720,Main interstate route\n",
       trucks: "truckNumber,make,model,year,vin,licensePlate,status,lastInspection\nTRK-001,Freightliner,Cascadia,2022,1FUJGHDV8MLJA1234,IL-ABC123,active,2024-01-15\n",
       loads: "loadNumber,pickupLocation,deliveryLocation,pickupTime,deliveryTime,weight,status,description\nLD-001,123 Main St Chicago,456 Oak Ave NYC,2024-12-01 08:00,2024-12-01 17:00,5000,pending,Test shipment\n",
+      blocks: "contractId,blockId,soloType,startTimestamp,endTimestamp,duration,tractorId\ncontract-uuid-1,BLOCK-001,Solo1,2024-12-01 08:00,2024-12-01 22:00,14,Tractor_1\n",
+      assignments: "blockId,driverId\nblock-uuid-1,driver-uuid-1\n",
     };
 
     const csvContent = templates[entityType];
@@ -328,6 +393,7 @@ export default function Import() {
               setPreviewData([]);
               setHeaders([]);
               setValidationErrors([]);
+              setFullData([]);
             }}
           >
             <SelectTrigger className="w-[280px]" data-testid="select-entity-type">
@@ -335,8 +401,10 @@ export default function Import() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="drivers">Drivers</SelectItem>
-              <SelectItem value="routes">Routes</SelectItem>
               <SelectItem value="trucks">Trucks</SelectItem>
+              <SelectItem value="blocks">Blocks</SelectItem>
+              <SelectItem value="assignments">Block Assignments</SelectItem>
+              <SelectItem value="routes">Routes</SelectItem>
               <SelectItem value="loads">Loads</SelectItem>
             </SelectContent>
           </Select>
@@ -375,13 +443,13 @@ export default function Import() {
 
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <FileText className="w-4 h-4" />
-              <span>CSV files only</span>
+              <span>CSV or Excel files (.xlsx)</span>
             </div>
 
             <input
               id="file-input"
               type="file"
-              accept=".csv"
+              accept=".csv,.xlsx"
               className="hidden"
               onChange={handleFileSelect}
               data-testid="file-input"

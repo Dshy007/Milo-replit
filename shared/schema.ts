@@ -302,7 +302,7 @@ export const updateTruckSchema = baseInsertTruckSchema.omit({ tenantId: true }).
 })
 .refine((data) => {
   // If GVWR is being updated, validate it meets DOT threshold
-  if (data.gvwr !== undefined) {
+  if (data.gvwr !== undefined && data.gvwr !== null) {
     return data.gvwr >= 10001;
   }
   return true;

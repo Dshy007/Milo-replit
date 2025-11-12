@@ -542,13 +542,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Delete all trucks for current tenant
   app.delete("/api/trucks", requireAuth, async (req, res) => {
     try {
-      const trucks = await dbStorage.getTrucks(req.session.tenantId!);
-      let deleteCount = 0;
-      for (const truck of trucks) {
-        await dbStorage.deleteTruck(truck.id);
-        deleteCount++;
-      }
-      res.json({ message: `Successfully deleted ${deleteCount} trucks` });
+      const result = await dbStorage.db.delete(trucks).where(eq(trucks.tenantId, req.session.tenantId!)).returning();
+      res.json({ message: `Successfully deleted ${result.length} trucks` });
     } catch (error: any) {
       res.status(500).json({ message: "Failed to delete trucks", error: error.message });
     }
@@ -1791,7 +1786,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Too many rows. Maximum 5000 allowed." });
       }
 
-      const validRows: any[] = [];
+      const validRows: Array<{ data: any, originalRowIndex: number }> = [];
       const errors: { row: number, errors: string[] }[] = [];
       let schema: any;
 
@@ -1809,11 +1804,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         case "loads":
           schema = insertLoadSchema;
           break;
+        case "blocks":
+          schema = insertBlockSchema;
+          break;
+        case "assignments":
+          schema = insertBlockAssignmentSchema;
+          break;
         default:
           return res.status(400).json({ message: "Invalid entity type" });
       }
 
-      // Validate each row individually
+      // Validate each row individually and track original row indices
       for (let i = 0; i < rows.length; i++) {
         try {
           const rowData = {
@@ -1829,7 +1830,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
 
           const validated = schema.parse(rowData);
-          validRows.push(validated);
+          validRows.push({ data: validated, originalRowIndex: i + 1 });
         } catch (error: any) {
           if (error.name === "ZodError") {
             const errorMessages = error.errors.map((err: any) => 
@@ -1848,26 +1849,106 @@ export async function registerRoutes(app: Express): Promise<Server> {
         try {
           switch (entityType) {
             case "drivers":
-              for (const row of validRows) {
-                await dbStorage.createDriver(row);
+              for (const { data } of validRows) {
+                await dbStorage.createDriver(data);
                 insertedCount++;
               }
               break;
             case "routes":
-              for (const row of validRows) {
-                await dbStorage.createRoute(row);
+              for (const { data } of validRows) {
+                await dbStorage.createRoute(data);
                 insertedCount++;
               }
               break;
             case "trucks":
-              for (const row of validRows) {
-                await dbStorage.createTruck(row);
+              for (const { data } of validRows) {
+                await dbStorage.createTruck(data);
                 insertedCount++;
               }
               break;
             case "loads":
-              for (const row of validRows) {
-                await dbStorage.createLoad(row);
+              for (const { data } of validRows) {
+                await dbStorage.createLoad(data);
+                insertedCount++;
+              }
+              break;
+            case "blocks":
+              for (const { data } of validRows) {
+                await dbStorage.createBlock(data);
+                insertedCount++;
+              }
+              break;
+            case "assignments":
+              for (const { data: row, originalRowIndex } of validRows) {
+                // Validate tenant ownership
+                const block = await dbStorage.getBlock(row.blockId);
+                if (!block || block.tenantId !== req.session.tenantId) {
+                  errors.push({ 
+                    row: originalRowIndex, 
+                    errors: ["Invalid block ID or block belongs to different tenant"] 
+                  });
+                  continue;
+                }
+                
+                const driver = await dbStorage.getDriver(row.driverId);
+                if (!driver || driver.tenantId !== req.session.tenantId) {
+                  errors.push({ 
+                    row: originalRowIndex, 
+                    errors: ["Invalid driver ID or driver belongs to different tenant"] 
+                  });
+                  continue;
+                }
+                
+                // Run rolling-6 and protected driver validation
+                const normalizedSoloType = normalizeSoloType(block.soloType);
+                const lookbackDays = normalizedSoloType === "solo1" ? 1 : 2;
+                const lookbackStart = subDays(new Date(block.startTimestamp), lookbackDays);
+                const lookbackEnd = new Date(block.startTimestamp);
+                
+                const existingAssignments = await dbStorage.getBlockAssignmentsWithBlocksByDriverAndDateRange(
+                  driver.id,
+                  req.session.tenantId!,
+                  lookbackStart,
+                  lookbackEnd
+                );
+                
+                const protectedRules = await dbStorage.getProtectedDriverRulesByDriver(driver.id);
+                
+                // Get all block assignments for the tenant to check for multi-driver conflicts
+                const allBlockAssignments = await dbStorage.getBlockAssignments(req.session.tenantId!);
+                
+                const validationResult = await validateBlockAssignment(
+                  driver,
+                  block,
+                  existingAssignments,
+                  protectedRules,
+                  allBlockAssignments
+                );
+                
+                if (!validationResult.canAssign) {
+                  errors.push({
+                    row: originalRowIndex,
+                    errors: [
+                      ...validationResult.validationResult.messages,
+                      ...validationResult.protectedRuleViolations,
+                    ]
+                  });
+                  continue;
+                }
+                
+                // Store assignment with validation summary
+                const validationSummary = JSON.stringify({
+                  status: validationResult.validationResult.validationStatus,
+                  messages: validationResult.validationResult.messages,
+                  metrics: validationResult.validationResult.metrics,
+                  validatedAt: new Date().toISOString(),
+                });
+                
+                await dbStorage.createBlockAssignment({
+                  ...row,
+                  validationStatus: validationResult.validationResult.validationStatus,
+                  validationSummary,
+                });
                 insertedCount++;
               }
               break;
