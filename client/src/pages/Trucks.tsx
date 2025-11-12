@@ -53,6 +53,7 @@ import { baseInsertTruckSchema, type Truck, type InsertTruck } from "@shared/sch
 import { Plus, Pencil, Trash2, Search, Truck as TruckIcon, Upload } from "lucide-react";
 import { format } from "date-fns";
 import { z } from "zod";
+import { useRef } from "react";
 
 const formSchema = baseInsertTruckSchema.extend({
   lastInspection: z.string().optional(),
@@ -70,6 +71,8 @@ export default function Trucks() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [selectedTruck, setSelectedTruck] = useState<Truck | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: trucks = [], isLoading } = useQuery<Truck[]>({
     queryKey: ["/api/trucks"],
@@ -173,6 +176,68 @@ export default function Trucks() {
     },
   });
 
+  const importTrucksMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      const response = await fetch("/api/trucks/import", {
+        method: "POST",
+        body: formData,
+        credentials: "include",
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || "Failed to import trucks");
+      }
+      return response.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/trucks"] });
+      toast({
+        title: "Success",
+        description: `Imported ${data.count} trucks successfully`,
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Import Error",
+        description: error.message || "Failed to import trucks",
+      });
+    },
+  });
+
+  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      importTrucksMutation.mutate(file);
+      setImportDialogOpen(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
+  };
+
+  const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDragging(false);
+    const file = event.dataTransfer.files?.[0];
+    if (file) {
+      importTrucksMutation.mutate(file);
+      setImportDialogOpen(false);
+    }
+  };
+
+  const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDragging(false);
+  };
+
   const filteredTrucks = trucks.filter((truck) => {
     const matchesSearch =
       truck.truckNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -258,14 +323,26 @@ export default function Trucks() {
         </div>
 
         <div className="flex gap-2">
-          <Button
-            variant="outline"
-            onClick={() => setImportDialogOpen(true)}
-            data-testid="button-import-trucks"
-          >
-            <Upload className="w-4 h-4 mr-2" />
-            Import CSV/Excel
-          </Button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".csv,.xlsx,.xls"
+            onChange={handleFileSelect}
+            className="hidden"
+            data-testid="input-file-upload"
+          />
+          <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
+            <DialogTrigger asChild>
+              <Button
+                variant="outline"
+                disabled={importTrucksMutation.isPending}
+                data-testid="button-import-trucks"
+              >
+                <Upload className="w-4 h-4 mr-2" />
+                {importTrucksMutation.isPending ? "Importing..." : "Import CSV/Excel"}
+              </Button>
+            </DialogTrigger>
+          </Dialog>
           <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
             <DialogTrigger asChild>
               <Button data-testid="button-add-truck">
@@ -537,53 +614,44 @@ export default function Trucks() {
             <DialogHeader>
               <DialogTitle>Import Trucks from CSV/Excel</DialogTitle>
               <DialogDescription>
-                Upload a CSV or Excel file with your truck data. Columns: Truck Number, Make, Model, Year, VIN, License Plate, Status
+                Upload a CSV or Excel file with your truck data
               </DialogDescription>
             </DialogHeader>
-            <div className="space-y-4">
-              <Input
-                type="file"
-                accept=".csv,.xlsx,.xls"
-                onChange={async (e) => {
-                  const file = e.target.files?.[0];
-                  if (!file) return;
-
-                  const formData = new FormData();
-                  formData.append('file', file);
-
-                  try {
-                    const response = await fetch('/api/trucks/bulk-import', {
-                      method: 'POST',
-                      body: formData,
-                      credentials: 'include',
-                    });
-
-                    const result = await response.json();
-                    
-                    if (response.ok) {
-                      queryClient.invalidateQueries({ queryKey: ["/api/trucks"] });
-                      setImportDialogOpen(false);
-                      toast({
-                        title: "Import successful",
-                        description: `Imported ${result.imported} trucks${result.errors?.length ? ` with ${result.errors.length} errors` : ''}`,
-                      });
-                    } else {
-                      toast({
-                        variant: "destructive",
-                        title: "Import failed",
-                        description: result.message || "Failed to import trucks",
-                      });
-                    }
-                  } catch (error) {
-                    toast({
-                      variant: "destructive",
-                      title: "Import error",
-                      description: "An error occurred during import",
-                    });
-                  }
-                }}
-                data-testid="input-import-file"
-              />
+            <div
+              onDrop={handleDrop}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
+                isDragging
+                  ? "border-primary bg-primary/5"
+                  : "border-muted-foreground/25 hover:border-primary/50"
+              }`}
+            >
+              <Upload className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
+              <p className="text-sm font-medium mb-2">
+                Drag and drop your file here
+              </p>
+              <p className="text-xs text-muted-foreground mb-4">
+                or click the button below to browse
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={importTrucksMutation.isPending}
+                data-testid="button-browse-file"
+              >
+                Choose File
+              </Button>
+              <p className="text-xs text-muted-foreground mt-4">
+                Supports CSV, XLSX, XLS files
+              </p>
+            </div>
+            <div className="text-xs text-muted-foreground space-y-2">
+              <p className="font-medium">Expected columns:</p>
+              <ul className="list-disc list-inside space-y-1 ml-2">
+                <li>Truck Number, Type, Make, Model, Year, VIN, License Plate, Status, Fuel</li>
+              </ul>
             </div>
           </DialogContent>
         </Dialog>
