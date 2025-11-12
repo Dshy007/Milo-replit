@@ -711,13 +711,12 @@ export default function Trucks() {
                   <TableHead>VIN</TableHead>
                   <TableHead>Last known location</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filteredTrucks.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={9} className="text-center py-8">
+                    <TableCell colSpan={8} className="text-center py-8">
                       <div className="text-muted-foreground" data-testid="empty-state">
                         {searchTerm || statusFilter !== "all"
                           ? "No trucks found matching your filters"
@@ -756,26 +755,6 @@ export default function Trucks() {
                         >
                           {formatStatus(truck.status)}
                         </Badge>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-2">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => handleEdit(truck)}
-                            data-testid={`button-edit-${truck.id}`}
-                          >
-                            <Pencil className="w-4 h-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => handleDelete(truck)}
-                            data-testid={`button-delete-${truck.id}`}
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
-                        </div>
                       </TableCell>
                     </TableRow>
                   ))
