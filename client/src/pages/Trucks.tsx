@@ -342,6 +342,50 @@ export default function Trucks() {
                 {importTrucksMutation.isPending ? "Importing..." : "Import CSV/Excel"}
               </Button>
             </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Import Trucks from CSV/Excel</DialogTitle>
+                <DialogDescription>
+                  Upload a CSV or Excel file with your truck data
+                </DialogDescription>
+              </DialogHeader>
+              <div
+                onDrop={handleDrop}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
+                  isDragging
+                    ? "border-primary bg-primary/5"
+                    : "border-muted-foreground/25 hover:border-primary/50"
+                }`}
+              >
+                <Upload className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
+                <p className="text-sm font-medium mb-2">
+                  Drag and drop your file here
+                </p>
+                <p className="text-xs text-muted-foreground mb-4">
+                  or click the button below to browse
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={importTrucksMutation.isPending}
+                  data-testid="button-browse-file"
+                >
+                  Choose File
+                </Button>
+                <p className="text-xs text-muted-foreground mt-4">
+                  Supports CSV, XLSX, XLS files
+                </p>
+              </div>
+              <div className="text-xs text-muted-foreground space-y-2">
+                <p className="font-medium">Expected columns:</p>
+                <ul className="list-disc list-inside space-y-1 ml-2">
+                  <li>Truck Number, Type, Make, Model, Year, VIN, License Plate, Status, Fuel</li>
+                </ul>
+              </div>
+            </DialogContent>
           </Dialog>
           <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
             <DialogTrigger asChild>
@@ -606,53 +650,6 @@ export default function Trucks() {
                 </div>
               </form>
             </Form>
-          </DialogContent>
-        </Dialog>
-
-        <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Import Trucks from CSV/Excel</DialogTitle>
-              <DialogDescription>
-                Upload a CSV or Excel file with your truck data
-              </DialogDescription>
-            </DialogHeader>
-            <div
-              onDrop={handleDrop}
-              onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
-              className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
-                isDragging
-                  ? "border-primary bg-primary/5"
-                  : "border-muted-foreground/25 hover:border-primary/50"
-              }`}
-            >
-              <Upload className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
-              <p className="text-sm font-medium mb-2">
-                Drag and drop your file here
-              </p>
-              <p className="text-xs text-muted-foreground mb-4">
-                or click the button below to browse
-              </p>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={importTrucksMutation.isPending}
-                data-testid="button-browse-file"
-              >
-                Choose File
-              </Button>
-              <p className="text-xs text-muted-foreground mt-4">
-                Supports CSV, XLSX, XLS files
-              </p>
-            </div>
-            <div className="text-xs text-muted-foreground space-y-2">
-              <p className="font-medium">Expected columns:</p>
-              <ul className="list-disc list-inside space-y-1 ml-2">
-                <li>Truck Number, Type, Make, Model, Year, VIN, License Plate, Status, Fuel</li>
-              </ul>
-            </div>
           </DialogContent>
         </Dialog>
       </div>
