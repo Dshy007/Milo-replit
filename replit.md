@@ -4,6 +4,54 @@
 
 Milo is an AI-powered trucking operations management platform designed to streamline driver scheduling, DOT compliance, and fleet management. Its core purpose is to provide an intuitive interface for managing complex logistics, featuring an AI assistant for natural language interactions. The platform emphasizes efficient, data-dense information presentation within a Material Design 3-inspired interface. Milo aims to enhance operational efficiency, ensure regulatory compliance, and reduce administrative overhead in the trucking industry. Key capabilities include AI-driven schedule generation, special request management, workload tracking, and bulk data import.
 
+## Recent Changes
+
+### Compliance Heatmap Dashboard (November 2025)
+
+Implemented DOT compliance visualization system with exact sliding-window sweep algorithm for real-time driver workload monitoring.
+
+**Backend (`server/compliance-heatmap.ts`)**:
+- `generateComplianceHeatmap()` function with exact sliding-window calculation
+- Evaluates compliance at all critical time points (assignment boundaries ± 24h/48h offsets)
+- Supports Solo1 (24h window, 10h limit) and Solo2 (48h window, 20h limit) driver types
+- Returns color-coded status: safe (green), warning (yellow, 90-100% of limit), violation (red, >100%)
+- Sorts drivers by violations (descending), then warnings, then name
+
+**API Endpoint**:
+- `GET /api/compliance/heatmap/:startDate/:endDate` - Protected route with path parameters
+- Returns structured data: `{ drivers: DriverSummary[], cells: HeatmapCell[], dateRange: string[] }`
+- Validates date range (max 31 days)
+
+**Frontend (`client/src/components/ComplianceHeatmap.tsx`)**:
+- React component with color-coded driver×day grid
+- Date range navigation (Previous Week / This Week / Next Week)
+- Tooltips showing detailed compliance information per cell
+- Legend explaining status colors and thresholds
+- Integrated into Dashboard page as prominent compliance monitoring widget
+
+**Technical Implementation**:
+- Critical Points Algorithm: Evaluates windows at assignment start/end, derived offsets (±24h/48h), and day boundaries
+- Catches violations at ANY point during the day, including midnight-crossing shifts
+- O(drivers × assignments × critical_points) time complexity
+- Filters to only points where windows overlap the evaluated day
+
+### CSV Bulk Import System (November 2025)
+
+Production-ready CSV/Excel bulk import with validation preview, DOT compliance checking, and multi-assignment conflict prevention.
+
+**Features**:
+- File upload with drag-and-drop support (CSV/Excel formats)
+- Real-time validation preview with color-coded status (valid/warning/violation)
+- DOT compliance checking during import (violations blocked, warnings allowed)
+- Bulk commit with transaction safety
+- Multi-assignment history tracking to prevent duplicate imports
+
+**Implementation**:
+- `server/csv-import.ts` - Validation and import logic with Zod schemas
+- `client/src/pages/CSVImport.tsx` - React component with preview table
+- Uses `rolling6-calculator.ts` for DOT compliance validation
+- Differentiates warnings (90-100% of limit) from violations (>100%)
+
 ## User Preferences
 
 Preferred communication style: Simple, everyday language.

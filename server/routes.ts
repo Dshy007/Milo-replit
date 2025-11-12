@@ -235,16 +235,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ==================== COMPLIANCE ====================
 
-  // GET /api/compliance/heatmap - Get compliance heatmap data
-  app.get("/api/compliance/heatmap", requireAuth, async (req, res) => {
+  // GET /api/compliance/heatmap/:startDate/:endDate - Get compliance heatmap data
+  app.get("/api/compliance/heatmap/:startDate/:endDate", requireAuth, async (req, res) => {
     try {
       const tenantId = req.session.tenantId!;
-      const { startDate, endDate } = req.query;
+      const { startDate, endDate } = req.params;
 
-      // Validate query params
+      // Validate path params
       if (!startDate || !endDate) {
         return res.status(400).json({ 
-          message: "startDate and endDate query parameters are required (YYYY-MM-DD format)" 
+          message: "startDate and endDate path parameters are required (YYYY-MM-DD format)" 
         });
       }
 
@@ -252,8 +252,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { generateComplianceHeatmap } = await import("./compliance-heatmap");
       const heatmapData = await generateComplianceHeatmap(
         tenantId,
-        startDate as string,
-        endDate as string
+        startDate,
+        endDate
       );
 
       res.json(heatmapData);
