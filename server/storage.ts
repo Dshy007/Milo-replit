@@ -81,6 +81,12 @@ export interface IStorage {
   getBlockAssignmentByBlock(blockId: string): Promise<BlockAssignment | undefined>;
   getBlockAssignmentsByDriver(driverId: string): Promise<BlockAssignment[]>;
   getBlockAssignmentsByTenant(tenantId: string): Promise<BlockAssignment[]>;
+  getBlockAssignmentsWithBlocksByDriverAndDateRange(
+    driverId: string,
+    tenantId: string,
+    startDate: Date,
+    endDate: Date
+  ): Promise<Array<BlockAssignment & { block: Block }>>;
   createBlockAssignment(assignment: InsertBlockAssignment): Promise<BlockAssignment>;
   updateBlockAssignment(id: string, assignment: Partial<InsertBlockAssignment>): Promise<BlockAssignment | undefined>;
   deleteBlockAssignment(id: string): Promise<boolean>;
@@ -479,6 +485,30 @@ export class MemStorage implements IStorage {
     return Array.from(this.blockAssignments.values()).filter(
       (assignment) => assignment.tenantId === tenantId
     );
+  }
+
+  async getBlockAssignmentsWithBlocksByDriverAndDateRange(
+    driverId: string,
+    tenantId: string,
+    startDate: Date,
+    endDate: Date
+  ): Promise<Array<BlockAssignment & { block: Block }>> {
+    const assignments = Array.from(this.blockAssignments.values()).filter(
+      (assignment) => assignment.driverId === driverId && assignment.tenantId === tenantId
+    );
+
+    const result: Array<BlockAssignment & { block: Block }> = [];
+    for (const assignment of assignments) {
+      const block = this.blocks.get(assignment.blockId);
+      // CRITICAL: Check for overlap, not just start time within window
+      // A block overlaps if: blockStart < windowEnd AND blockEnd > windowStart
+      // Also ensure block belongs to the same tenant
+      if (block && block.tenantId === tenantId && block.startTimestamp <= endDate && block.endTimestamp >= startDate) {
+        result.push({ ...assignment, block });
+      }
+    }
+
+    return result;
   }
 
   async createBlockAssignment(insertAssignment: InsertBlockAssignment): Promise<BlockAssignment> {

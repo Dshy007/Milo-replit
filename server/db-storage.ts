@@ -267,6 +267,36 @@ export class DbStorage implements IStorage {
     return await db.select().from(blockAssignments).where(eq(blockAssignments.tenantId, tenantId));
   }
 
+  async getBlockAssignmentsWithBlocksByDriverAndDateRange(
+    driverId: string,
+    tenantId: string,
+    startDate: Date,
+    endDate: Date
+  ): Promise<Array<BlockAssignment & { block: Block }>> {
+    // CRITICAL: Query must capture ALL blocks that overlap the time window
+    // A block overlaps if: blockStart < windowEnd AND blockEnd > windowStart
+    // This catches blocks that started before the window but are still running
+    // SECURITY: Add explicit tenantId scoping to prevent cross-tenant leakage
+    const result = await db
+      .select()
+      .from(blockAssignments)
+      .innerJoin(blocks, eq(blockAssignments.blockId, blocks.id))
+      .where(
+        and(
+          eq(blockAssignments.driverId, driverId),
+          eq(blockAssignments.tenantId, tenantId),
+          eq(blocks.tenantId, tenantId),
+          lte(blocks.startTimestamp, endDate),   // Block must start before window ends
+          gte(blocks.endTimestamp, startDate)     // Block must end after window starts
+        )
+      );
+
+    return result.map((row) => ({
+      ...row.block_assignments,
+      block: row.blocks,
+    }));
+  }
+
   async createBlockAssignment(assignment: InsertBlockAssignment): Promise<BlockAssignment> {
     const result = await db.insert(blockAssignments).values(assignment).returning();
     return result[0];

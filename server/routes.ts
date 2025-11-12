@@ -18,6 +18,8 @@ import { fromZodError } from "zod-validation-error";
 import bcrypt from "bcryptjs";
 import { benchContracts } from "./seed-data";
 import multer from "multer";
+import { validateBlockAssignment, normalizeSoloType } from "./rolling6-calculator";
+import { subDays } from "date-fns";
 
 // Require SESSION_SECRET
 const SESSION_SECRET = process.env.SESSION_SECRET!;
@@ -1613,7 +1615,62 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid driver ID" });
       }
       
-      const assignment = await dbStorage.createBlockAssignment(assignmentData);
+      // CRITICAL: Run validation guard before assignment
+      // Calculate lookback window based on solo type (Solo1=1 day, Solo2=2 days)
+      // Use normalized soloType to handle variants like "Solo 1", "SOLO1", etc.
+      const normalizedSoloType = normalizeSoloType(block.soloType);
+      const lookbackDays = normalizedSoloType === "solo1" ? 1 : 2;
+      const lookbackStart = subDays(new Date(block.startTimestamp), lookbackDays);
+      const lookbackEnd = new Date(block.startTimestamp);
+      
+      // Fetch driver's existing assignments within lookback window (with block data for duration calculation)
+      const existingAssignments = await dbStorage.getBlockAssignmentsWithBlocksByDriverAndDateRange(
+        driver.id,
+        req.session.tenantId!,
+        lookbackStart,
+        lookbackEnd
+      );
+      
+      // Fetch protected rules for this driver
+      const protectedRules = await dbStorage.getProtectedDriverRulesByDriver(driver.id);
+      
+      // Fetch all assignments to check if block is already assigned
+      const allAssignments = await dbStorage.getBlockAssignmentsByTenant(req.session.tenantId!);
+      
+      // Run comprehensive validation
+      const validationResult = await validateBlockAssignment(
+        driver,
+        block,
+        existingAssignments,
+        protectedRules,
+        allAssignments
+      );
+      
+      // If validation failed, return detailed error
+      if (!validationResult.canAssign) {
+        return res.status(400).json({
+          message: "Assignment validation failed",
+          validationStatus: validationResult.validationResult.validationStatus,
+          errors: validationResult.validationResult.messages,
+          protectedRuleViolations: validationResult.protectedRuleViolations,
+          conflictingAssignments: validationResult.conflictingAssignments,
+        });
+      }
+      
+      // Create assignment with validation summary
+      const validationSummary = JSON.stringify({
+        status: validationResult.validationResult.validationStatus,
+        messages: validationResult.validationResult.messages,
+        metrics: validationResult.validationResult.metrics,
+        validatedAt: new Date().toISOString(),
+      });
+      
+      const assignment = await dbStorage.createBlockAssignment({
+        ...assignmentData,
+        validationStatus: validationResult.validationResult.validationStatus,
+        validationSummary,
+      });
+      
       res.json(assignment);
     } catch (error: any) {
       if (error.name === "ZodError") {
