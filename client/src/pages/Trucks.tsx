@@ -50,7 +50,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { baseInsertTruckSchema, type Truck, type InsertTruck } from "@shared/schema";
-import { Plus, Pencil, Trash2, Search, Truck as TruckIcon, Upload } from "lucide-react";
+import { Plus, Pencil, Trash2, Search, Truck as TruckIcon, Upload, ArrowUpDown } from "lucide-react";
 import { format } from "date-fns";
 import { z } from "zod";
 import { useRef } from "react";
@@ -61,6 +61,8 @@ const formSchema = baseInsertTruckSchema.extend({
 });
 
 type TruckFormData = z.infer<typeof formSchema>;
+type SortColumn = 'truckNumber' | 'type' | 'make' | 'fuel' | 'licensePlate' | 'vin' | 'status';
+type SortDirection = 'asc' | 'desc';
 
 export default function Trucks() {
   const { toast } = useToast();
@@ -72,6 +74,8 @@ export default function Trucks() {
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [selectedTruck, setSelectedTruck] = useState<Truck | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [sortColumn, setSortColumn] = useState<SortColumn | null>(null);
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: trucks = [], isLoading } = useQuery<Truck[]>({
@@ -251,16 +255,35 @@ export default function Trucks() {
     setIsDragging(false);
   };
 
-  const filteredTrucks = trucks.filter((truck) => {
-    const matchesSearch =
-      truck.truckNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      truck.make.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      truck.model.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      truck.vin.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      truck.licensePlate.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesStatus = statusFilter === "all" || truck.status === statusFilter;
-    return matchesSearch && matchesStatus;
-  });
+  const handleSort = (column: SortColumn) => {
+    if (sortColumn === column) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortColumn(column);
+      setSortDirection('asc');
+    }
+  };
+
+  const filteredTrucks = trucks
+    .filter((truck) => {
+      const matchesSearch =
+        truck.truckNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        truck.make.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        truck.model.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        truck.vin.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        truck.licensePlate.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesStatus = statusFilter === "all" || truck.status === statusFilter;
+      return matchesSearch && matchesStatus;
+    })
+    .sort((a, b) => {
+      if (!sortColumn) return 0;
+      
+      const aValue = (a[sortColumn] || '').toString().toLowerCase();
+      const bValue = (b[sortColumn] || '').toString().toLowerCase();
+      
+      const comparison = aValue.localeCompare(bValue);
+      return sortDirection === 'asc' ? comparison : -comparison;
+    });
 
   const handleEdit = (truck: Truck) => {
     setSelectedTruck(truck);
@@ -691,20 +714,98 @@ export default function Trucks() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Asset ID</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Make</TableHead>
-                  <TableHead>Fuel</TableHead>
-                  <TableHead>License</TableHead>
-                  <TableHead>VIN</TableHead>
+                  <TableHead>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 px-2 hover-elevate"
+                      onClick={() => handleSort('truckNumber')}
+                      data-testid="sort-asset-id"
+                    >
+                      Asset ID
+                      <ArrowUpDown className="ml-2 h-4 w-4" />
+                    </Button>
+                  </TableHead>
+                  <TableHead>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 px-2 hover-elevate"
+                      onClick={() => handleSort('type')}
+                      data-testid="sort-type"
+                    >
+                      Type
+                      <ArrowUpDown className="ml-2 h-4 w-4" />
+                    </Button>
+                  </TableHead>
+                  <TableHead>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 px-2 hover-elevate"
+                      onClick={() => handleSort('make')}
+                      data-testid="sort-make"
+                    >
+                      Make
+                      <ArrowUpDown className="ml-2 h-4 w-4" />
+                    </Button>
+                  </TableHead>
+                  <TableHead>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 px-2 hover-elevate"
+                      onClick={() => handleSort('fuel')}
+                      data-testid="sort-fuel"
+                    >
+                      Fuel
+                      <ArrowUpDown className="ml-2 h-4 w-4" />
+                    </Button>
+                  </TableHead>
+                  <TableHead>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 px-2 hover-elevate"
+                      onClick={() => handleSort('licensePlate')}
+                      data-testid="sort-license"
+                    >
+                      License
+                      <ArrowUpDown className="ml-2 h-4 w-4" />
+                    </Button>
+                  </TableHead>
+                  <TableHead>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 px-2 hover-elevate"
+                      onClick={() => handleSort('vin')}
+                      data-testid="sort-vin"
+                    >
+                      VIN
+                      <ArrowUpDown className="ml-2 h-4 w-4" />
+                    </Button>
+                  </TableHead>
                   <TableHead>Last known location</TableHead>
-                  <TableHead>Status</TableHead>
+                  <TableHead>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 px-2 hover-elevate"
+                      onClick={() => handleSort('status')}
+                      data-testid="sort-status"
+                    >
+                      Status
+                      <ArrowUpDown className="ml-2 h-4 w-4" />
+                    </Button>
+                  </TableHead>
+                  <TableHead className="w-[80px]">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filteredTrucks.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center py-8">
+                    <TableCell colSpan={9} className="text-center py-8">
                       <div className="text-muted-foreground" data-testid="empty-state">
                         {searchTerm || statusFilter !== "all"
                           ? "No trucks found matching your filters"
@@ -743,6 +844,16 @@ export default function Trucks() {
                         >
                           {formatStatus(truck.status)}
                         </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => handleEdit(truck)}
+                          data-testid={`button-edit-${truck.id}`}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
                       </TableCell>
                     </TableRow>
                   ))
