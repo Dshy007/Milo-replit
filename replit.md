@@ -105,21 +105,30 @@ Preferred communication style: Simple, everyday language.
   - Targets next Sunday-Saturday week automatically
   - Creates auto_build_run record in database
 - Suggestion Review Table:
-  - Displays all block assignments with driver names
+  - "AI Suggestion" column shows recommended driver
+  - **"Manual Reassign" column with driver dropdown for overrides**
   - Color-coded confidence badges (Green ≥50%, Yellow 35-50%, Red <35%)
   - Score breakdown: Pattern/Workload/Compliance percentages
   - Rationale text explaining each suggestion
-  - Protected assignment indicator
+  - Protected assignment indicator (selector disabled for protected)
+  - **"Override" badge displays when driver manually changed**
   - Individual checkbox selection
+- **Manual Adjustment Features**:
+  - Driver dropdown populated from all active drivers
+  - Override state tracked in Map<blockId, driverId>
+  - Protected assignments cannot be reassigned
+  - Override indicators clear on cancel
+  - Commit applies manual overrides before creating assignments
 - Bulk Operations:
   - Select All / Deselect All buttons
-  - Approve button commits selected assignments to database
-  - Cancel button discards preview
+  - Approve button commits selected assignments with overrides
+  - Cancel button discards preview and clears overrides
 - Warnings & Alerts:
   - Warning list for blocks with no patterns
   - Unassignable blocks alert (no eligible drivers)
   - Summary stats (total blocks, confidence distribution)
 - Added to sidebar navigation with Brain icon
+- **Complete Workflow**: Recompute patterns → Generate preview → Manual adjustments → Approve/Commit
 
 **Phase 2 Complete**: Pattern Learning + Auto-Build Next Week
 
