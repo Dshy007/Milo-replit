@@ -306,7 +306,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Bulk import drivers from CSV/Excel
   app.post("/api/drivers/bulk-import", requireAuth, upload.single('file'), async (req, res) => {
     try {
-      const Papa = await import("papaparse");
+      const { default: Papa } = await import("papaparse");
       const XLSX = await import("xlsx");
       
       if (!req.file) {
@@ -767,7 +767,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "No file uploaded" });
       }
 
-      const Papa = await import("papaparse");
+      const { default: Papa } = await import("papaparse");
       const XLSX = await import("xlsx");
       
       const filename = req.file.originalname.toLowerCase();
