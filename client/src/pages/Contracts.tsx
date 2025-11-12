@@ -4,6 +4,7 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { TimePicker } from "@/components/TimePicker";
 import {
   Table,
   TableBody,
@@ -462,15 +463,15 @@ export default function Contracts() {
                         <FormItem>
                           <FormLabel>Start Time *</FormLabel>
                           <FormControl>
-                            <Input
-                              placeholder="16:30"
-                              pattern="([01]?[0-9]|2[0-3]):[0-5][0-9]"
-                              data-testid="input-start-time"
-                              {...field}
+                            <TimePicker
+                              value={field.value}
+                              onChange={field.onChange}
+                              placeholder="Select time"
+                              testId="input-start-time"
                             />
                           </FormControl>
                           <FormDescription>
-                            Military time format (e.g., 00:30, 16:30)
+                            Select time with AM/PM or 24h format
                           </FormDescription>
                           <FormMessage />
                         </FormItem>
@@ -836,15 +837,15 @@ export default function Contracts() {
                     <FormItem>
                       <FormLabel>Start Time *</FormLabel>
                       <FormControl>
-                        <Input
-                          placeholder="16:30"
-                          pattern="([01]?[0-9]|2[0-3]):[0-5][0-9]"
-                          data-testid="input-edit-start-time"
-                          {...field}
+                        <TimePicker
+                          value={field.value}
+                          onChange={field.onChange}
+                          placeholder="Select time"
+                          testId="input-edit-start-time"
                         />
                       </FormControl>
                       <FormDescription>
-                        Military time format (e.g., 00:30, 16:30)
+                        Select time with AM/PM or 24h format
                       </FormDescription>
                       <FormMessage />
                     </FormItem>
