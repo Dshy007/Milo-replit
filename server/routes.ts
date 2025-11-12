@@ -2213,6 +2213,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ==================== AI CHAT ====================
 
+  // Helper function to extract valid driver entities from tool results
+  function collectValidDrivers(toolResults: Array<{ name: string; content: string }>) {
+    const validIds = new Set<string>();
+    const validNames = new Set<string>();
+    
+    toolResults.forEach(result => {
+      try {
+        const parsed = JSON.parse(result.content);
+        
+        // Extract from driver lists
+        if (parsed.drivers && Array.isArray(parsed.drivers)) {
+          parsed.drivers.forEach((driver: any) => {
+            if (driver.id) validIds.add(driver.id);
+            if (driver.name) validNames.add(driver.name.toLowerCase());
+          });
+        }
+        
+        // Extract from single driver responses
+        if (parsed.driver && parsed.driver.id) {
+          validIds.add(parsed.driver.id);
+          if (parsed.driver.name) validNames.add(parsed.driver.name.toLowerCase());
+        }
+      } catch (err) {
+        // Ignore parsing errors - tool result may not be JSON
+      }
+    });
+    
+    return { validIds, validNames };
+  }
+
   app.post("/api/chat", requireAuth, async (req, res) => {
     try {
       const { message, history = [] } = req.body;
@@ -2234,7 +2264,12 @@ You have access to real-time database functions to answer questions about:
 - Blocks - assigned and unassigned capacity
 - Workload distribution - days worked, load balancing across drivers
 
-When users ask data-driven questions (e.g., "how many solo2 drivers", "who's working Monday", "show me drivers starting last Sunday"), use your available functions to query the actual data.
+CRITICAL INSTRUCTIONS:
+- When answering questions about drivers, schedules, or assignments, you MUST use the provided database functions.
+- ONLY reference driver IDs, names, and details that are explicitly returned by your function calls.
+- NEVER fabricate, invent, or guess driver information - only use exact data from tool responses.
+- If you don't have information from a function call, acknowledge that instead of making assumptions.
+- When listing drivers, use ONLY the drivers returned in the most recent function call results.
 
 Current Context:
 - Company: ${tenant?.name || "Unknown"}
@@ -2282,6 +2317,9 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
       const MAX_TOOL_ITERATIONS = 5;
       let iteration = 0;
       
+      // Store all tool results for validation
+      const allToolResults: Array<{ name: string; content: string }> = [];
+      
       while (responseMessage.tool_calls && iteration < MAX_TOOL_ITERATIONS) {
         iteration++;
         console.log(`[AI Chat] Processing ${responseMessage.tool_calls.length} tool calls (iteration ${iteration})`);
@@ -2303,6 +2341,9 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
                 userId: req.session.userId!
               }
             );
+            
+            // Store for validation
+            allToolResults.push({ name: functionName, content: result });
             
             return {
               role: "tool" as const,
@@ -2330,13 +2371,13 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
         messages.push(responseMessage);
       }
 
-      // PHASE 2: Stream final answer
+      // PHASE 2: Buffer, validate, then stream final answer
       // Set up SSE headers for streaming
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
 
-      // After tool execution loop, get final streaming answer
+      // Get final answer (buffered, not streamed yet)
       const finalStream = await openai.chat.completions.create({
         model: "gpt-5",
         messages,
@@ -2344,11 +2385,56 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
         stream: true,
       });
 
+      // STEP 1: Buffer the entire response
+      let fullResponse = '';
       for await (const chunk of finalStream) {
         const content = chunk.choices[0]?.delta?.content || '';
-        if (content) {
-          res.write(`data: ${JSON.stringify({ content })}\n\n`);
+        fullResponse += content;
+      }
+
+      // STEP 2: Validate against tool results (if any tool calls were made)
+      let validatedResponse = fullResponse;
+      if (allToolResults.length > 0) {
+        const { validIds, validNames } = collectValidDrivers(allToolResults);
+        
+        // Find all UUIDs mentioned in response
+        const uuidRegex = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+        const mentionedIds = fullResponse.match(uuidRegex) || [];
+        
+        // Identify fabricated IDs (UUIDs that aren't in our valid set)
+        const fabricatedIds = mentionedIds.filter(id => !validIds.has(id));
+        
+        if (fabricatedIds.length > 0) {
+          // Log hallucination event
+          console.log('[AI Hallucination Detected]', {
+            fabricatedIds,
+            toolCallsCount: allToolResults.length,
+            validIdsCount: validIds.size,
+            message: fullResponse.substring(0, 200)
+          });
+          
+          // Replace fabricated IDs with placeholder
+          validatedResponse = fullResponse;
+          fabricatedIds.forEach(fabricatedId => {
+            validatedResponse = validatedResponse.replace(
+              new RegExp(fabricatedId, 'gi'),
+              '[unverified driver ID]'
+            );
+          });
+          
+          // Append disclaimer
+          validatedResponse += '\n\n⚠️ Note: Some driver references could not be verified against the database. Please verify important information.';
         }
+      }
+
+      // STEP 3: Stream the validated response
+      // Simulate streaming by chunking the validated text
+      const chunkSize = 50;
+      for (let i = 0; i < validatedResponse.length; i += chunkSize) {
+        const chunk = validatedResponse.substring(i, i + chunkSize);
+        res.write(`data: ${JSON.stringify({ content: chunk })}\n\n`);
+        // Small delay to simulate streaming
+        await new Promise(resolve => setTimeout(resolve, 10));
       }
 
       // Send done signal
