@@ -463,13 +463,14 @@ export default function Contracts() {
                           <FormLabel>Start Time *</FormLabel>
                           <FormControl>
                             <Input
-                              type="time"
+                              placeholder="16:30"
+                              pattern="([01]?[0-9]|2[0-3]):[0-5][0-9]"
                               data-testid="input-start-time"
                               {...field}
                             />
                           </FormControl>
                           <FormDescription>
-                            Click to select time (e.g., 00:30, 16:30)
+                            Military time format (e.g., 00:30, 16:30)
                           </FormDescription>
                           <FormMessage />
                         </FormItem>
@@ -836,11 +837,15 @@ export default function Contracts() {
                       <FormLabel>Start Time *</FormLabel>
                       <FormControl>
                         <Input
-                          type="time"
+                          placeholder="16:30"
+                          pattern="([01]?[0-9]|2[0-3]):[0-5][0-9]"
                           data-testid="input-edit-start-time"
                           {...field}
                         />
                       </FormControl>
+                      <FormDescription>
+                        Military time format (e.g., 00:30, 16:30)
+                      </FormDescription>
                       <FormMessage />
                     </FormItem>
                   )}
