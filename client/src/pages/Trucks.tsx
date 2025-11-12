@@ -288,15 +288,15 @@ export default function Trucks() {
   const handleEdit = (truck: Truck) => {
     setSelectedTruck(truck);
     editForm.reset({
-      truckNumber: truck.truckNumber,
-      type: truck.type ?? "",
-      make: truck.make,
-      model: truck.model,
-      year: truck.year,
-      fuel: truck.fuel ?? "",
-      vin: truck.vin,
-      licensePlate: truck.licensePlate,
-      status: truck.status,
+      truckNumber: truck.truckNumber || "",
+      type: truck.type || "",
+      make: truck.make || "",
+      model: truck.model || "",
+      year: truck.year || new Date().getFullYear(),
+      fuel: truck.fuel || "",
+      vin: truck.vin || "",
+      licensePlate: truck.licensePlate || "",
+      status: truck.status || "available",
       lastInspection: truck.lastInspection
         ? format(new Date(truck.lastInspection), "yyyy-MM-dd")
         : "",
