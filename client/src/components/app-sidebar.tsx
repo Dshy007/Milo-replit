@@ -36,12 +36,6 @@ const navItems = [
     testId: "nav-schedules",
   },
   {
-    title: "Routes",
-    url: "/routes",
-    icon: Route,
-    testId: "nav-routes",
-  },
-  {
     title: "Trucks",
     url: "/trucks",
     icon: Truck,

@@ -50,7 +50,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { baseInsertTruckSchema, type Truck, type InsertTruck } from "@shared/schema";
-import { Plus, Pencil, Trash2, Search, Truck as TruckIcon } from "lucide-react";
+import { Plus, Pencil, Trash2, Search, Truck as TruckIcon, Upload } from "lucide-react";
 import { format } from "date-fns";
 import { z } from "zod";
 
@@ -68,6 +68,7 @@ export default function Trucks() {
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [selectedTruck, setSelectedTruck] = useState<Truck | null>(null);
 
   const { data: trucks = [], isLoading } = useQuery<Truck[]>({
@@ -254,14 +255,23 @@ export default function Trucks() {
           </div>
         </div>
 
-        <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-add-truck">
-              <Plus className="w-4 h-4 mr-2" />
-              Add Truck
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={() => setImportDialogOpen(true)}
+            data-testid="button-import-trucks"
+          >
+            <Upload className="w-4 h-4 mr-2" />
+            Import CSV/Excel
+          </Button>
+          <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
+            <DialogTrigger asChild>
+              <Button data-testid="button-add-truck">
+                <Plus className="w-4 h-4 mr-2" />
+                Add Truck
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Add New Truck</DialogTitle>
               <DialogDescription>
@@ -479,7 +489,64 @@ export default function Trucks() {
             </Form>
           </DialogContent>
         </Dialog>
+
+        <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Import Trucks from CSV/Excel</DialogTitle>
+              <DialogDescription>
+                Upload a CSV or Excel file with your truck data. Columns: Truck Number, Make, Model, Year, VIN, License Plate, Status
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <Input
+                type="file"
+                accept=".csv,.xlsx,.xls"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+
+                  const formData = new FormData();
+                  formData.append('file', file);
+
+                  try {
+                    const response = await fetch('/api/trucks/bulk-import', {
+                      method: 'POST',
+                      body: formData,
+                      credentials: 'include',
+                    });
+
+                    const result = await response.json();
+                    
+                    if (response.ok) {
+                      queryClient.invalidateQueries({ queryKey: ["/api/trucks"] });
+                      setImportDialogOpen(false);
+                      toast({
+                        title: "Import successful",
+                        description: `Imported ${result.imported} trucks${result.errors?.length ? ` with ${result.errors.length} errors` : ''}`,
+                      });
+                    } else {
+                      toast({
+                        variant: "destructive",
+                        title: "Import failed",
+                        description: result.message || "Failed to import trucks",
+                      });
+                    }
+                  } catch (error) {
+                    toast({
+                      variant: "destructive",
+                      title: "Import error",
+                      description: "An error occurred during import",
+                    });
+                  }
+                }}
+                data-testid="input-import-file"
+              />
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
+    </div>
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0 pb-4">

@@ -534,6 +534,135 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Bulk import trucks from CSV/Excel
+  app.post("/api/trucks/bulk-import", requireAuth, upload.single('file'), async (req, res) => {
+    try {
+      const { default: Papa } = await import("papaparse");
+      const XLSX = await import("xlsx");
+      
+      if (!req.file) {
+        return res.status(400).json({ message: "No file provided" });
+      }
+
+      const fileBuffer = req.file.buffer;
+      const filename = req.file.originalname;
+
+      // Normalize headers helper
+      const normalizeHeader = (header: string): string => {
+        const normalized = header.toLowerCase().trim();
+        const headerMap: Record<string, string> = {
+          'truck number': 'truckNumber',
+          'trucknumber': 'truckNumber',
+          'truck #': 'truckNumber',
+          'number': 'truckNumber',
+          'make': 'make',
+          'model': 'model',
+          'year': 'year',
+          'vin': 'vin',
+          'license plate': 'licensePlate',
+          'licenseplate': 'licensePlate',
+          'plate': 'licensePlate',
+          'status': 'status',
+        };
+        return headerMap[normalized] || normalized;
+      };
+
+      let parsedData: any[] = [];
+
+      // Detect file type
+      const filenameLower = filename.toLowerCase();
+      const isExcel = filenameLower.endsWith('.xlsx') || filenameLower.endsWith('.xls');
+      const isCSV = filenameLower.endsWith('.csv');
+      
+      if (!isExcel && !isCSV) {
+        return res.status(400).json({ 
+          message: `Unsupported file format. Please upload a CSV (.csv) or Excel (.xlsx, .xls) file.` 
+        });
+      }
+      
+      if (isExcel) {
+        const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
+        if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+          return res.status(400).json({ message: "Excel file contains no sheets." });
+        }
+        
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const rawData = XLSX.utils.sheet_to_json(worksheet, { defval: null });
+        
+        if (!rawData || rawData.length === 0) {
+          return res.status(400).json({ message: "Excel sheet is empty." });
+        }
+        
+        parsedData = rawData.map((row: any) => {
+          const normalizedRow: any = {};
+          for (const [key, value] of Object.entries(row)) {
+            const normalizedKey = normalizeHeader(key);
+            normalizedRow[normalizedKey] = value;
+          }
+          return normalizedRow;
+        });
+      } else {
+        const csvContent = fileBuffer.toString('utf-8');
+        const parseResult = Papa.parse(csvContent, {
+          header: true,
+          skipEmptyLines: true,
+          transformHeader: normalizeHeader,
+        });
+        
+        if (!parseResult.data || parseResult.data.length === 0) {
+          return res.status(400).json({ message: "CSV file is empty." });
+        }
+        
+        parsedData = parseResult.data;
+      }
+
+      // Log headers for debugging
+      if (parsedData.length > 0) {
+        console.log('Truck CSV Headers found:', Object.keys(parsedData[0]));
+        console.log('Sample row:', JSON.stringify(parsedData[0], null, 2));
+      }
+
+      const errors: Array<{ row: number; error: string }> = [];
+      const imported: any[] = [];
+
+      for (let i = 0; i < parsedData.length; i++) {
+        const row = parsedData[i] as any;
+        
+        try {
+          const truckData = insertTruckSchema.parse({
+            truckNumber: row.truckNumber || row.truck_number || `TRUCK-${i + 1}`,
+            make: row.make || null,
+            model: row.model || null,
+            year: row.year ? parseInt(String(row.year)) : new Date().getFullYear(),
+            vin: row.vin || null,
+            licensePlate: row.licensePlate || row.license_plate || null,
+            status: row.status?.toLowerCase() === 'in_service' ? 'in_service' : 
+                   row.status?.toLowerCase() === 'maintenance' ? 'maintenance' : 
+                   'available',
+            tenantId: req.session.tenantId,
+          });
+
+          const truck = await dbStorage.createTruck(truckData);
+          imported.push(truck);
+        } catch (error: any) {
+          errors.push({
+            row: i + 2, // +2 because: +1 for 1-based indexing, +1 for header row
+            error: error.message || "Failed to import truck",
+          });
+        }
+      }
+
+      res.json({
+        imported: imported.length,
+        errors,
+      });
+    } catch (error: any) {
+      console.error('Bulk import error:', error);
+      res.status(500).json({ message: "Failed to import trucks", error: error.message });
+    }
+  });
+
   // ==================== ROUTES ====================
   
   app.get("/api/routes", requireAuth, async (req, res) => {
