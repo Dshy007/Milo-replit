@@ -609,3 +609,73 @@ export const updateSpecialRequestSchema = insertSpecialRequestSchema.omit({ tena
 export type InsertSpecialRequest = z.infer<typeof insertSpecialRequestSchema>;
 export type UpdateSpecialRequest = z.infer<typeof updateSpecialRequestSchema>;
 export type SpecialRequest = typeof specialRequests.$inferSelect;
+
+// Assignment Patterns (Cached driver-block pattern analysis for Auto-Build)
+export const assignmentPatterns = pgTable("assignment_patterns", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+  blockSignature: text("block_signature").notNull(), // Normalized key: "contractId_soloType_startTimeBucket_dayOfWeek_tractor"
+  driverId: varchar("driver_id").notNull().references(() => drivers.id),
+  weightedCount: decimal("weighted_count", { precision: 10, scale: 4 }).notNull().default("0"), // Exponentially decayed assignment count
+  rawCount: integer("raw_count").notNull().default(0), // Total number of assignments (unweighted)
+  lastAssigned: timestamp("last_assigned"), // Most recent assignment date
+  confidence: decimal("confidence", { precision: 5, scale: 4 }).notNull().default("0"), // Normalized confidence score (0-1)
+  decayFactor: decimal("decay_factor", { precision: 5, scale: 4 }).notNull().default("0.8660"), // Decay factor (default: 4-week half-life)
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  // Unique constraint: one pattern per (tenant, blockSignature, driver)
+  uniquePattern: uniqueIndex("assignment_patterns_tenant_sig_driver_idx").on(table.tenantId, table.blockSignature, table.driverId),
+  // Index for blockSignature lookups
+  blockSignatureIdx: index("assignment_patterns_block_sig_idx").on(table.blockSignature),
+  // Index for driver lookups
+  driverIdIdx: index("assignment_patterns_driver_id_idx").on(table.driverId),
+  // Index for confidence scoring
+  confidenceIdx: index("assignment_patterns_confidence_idx").on(table.confidence),
+}));
+
+export const insertAssignmentPatternSchema = createInsertSchema(assignmentPatterns, {
+  lastAssigned: z.coerce.date().optional().nullable(),
+}).omit({ id: true, createdAt: true, updatedAt: true });
+export const updateAssignmentPatternSchema = insertAssignmentPatternSchema.omit({ tenantId: true }).partial();
+export type InsertAssignmentPattern = z.infer<typeof insertAssignmentPatternSchema>;
+export type UpdateAssignmentPattern = z.infer<typeof updateAssignmentPatternSchema>;
+export type AssignmentPattern = typeof assignmentPatterns.$inferSelect;
+
+// Auto-Build Runs (Stores Auto-Build suggestion batches for review/approval workflow)
+export const autoBuildRuns = pgTable("auto_build_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+  targetWeekStart: timestamp("target_week_start").notNull(), // Sunday of target week
+  targetWeekEnd: timestamp("target_week_end").notNull(), // Saturday of target week
+  status: text("status").notNull().default("pending"), // pending, approved, rejected, partial
+  suggestions: text("suggestions").notNull(), // JSON: [{blockId, driverId, confidence, score, rationale}]
+  totalBlocks: integer("total_blocks").notNull().default(0),
+  highConfidence: integer("high_confidence").notNull().default(0), // Blocks with confidence >= 0.5
+  mediumConfidence: integer("medium_confidence").notNull().default(0), // Blocks with confidence 0.35-0.5
+  lowConfidence: integer("low_confidence").notNull().default(0), // Blocks with confidence < 0.35
+  createdBy: varchar("created_by").references(() => users.id), // User who triggered auto-build
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  reviewedBy: varchar("reviewed_by").references(() => users.id), // User who approved/rejected
+  reviewedAt: timestamp("reviewed_at"),
+  approvedBlockIds: text("approved_block_ids").array(), // Block IDs that were approved (for partial approval)
+  notes: text("notes"), // Admin notes about the run
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  // Index for target week queries
+  targetWeekIdx: index("auto_build_runs_target_week_idx").on(table.targetWeekStart, table.targetWeekEnd),
+  // Index for status filtering
+  statusIdx: index("auto_build_runs_status_idx").on(table.status),
+  // Check constraint for status enum
+  statusCheck: check("auto_build_status_check", sql`${table.status} IN ('pending', 'approved', 'rejected', 'partial')`),
+}));
+
+export const insertAutoBuildRunSchema = createInsertSchema(autoBuildRuns, {
+  targetWeekStart: z.coerce.date(),
+  targetWeekEnd: z.coerce.date(),
+  reviewedAt: z.coerce.date().optional().nullable(),
+}).omit({ id: true, createdAt: true, updatedAt: true });
+export const updateAutoBuildRunSchema = insertAutoBuildRunSchema.omit({ tenantId: true }).partial();
+export type InsertAutoBuildRun = z.infer<typeof insertAutoBuildRunSchema>;
+export type UpdateAutoBuildRun = z.infer<typeof updateAutoBuildRunSchema>;
+export type AutoBuildRun = typeof autoBuildRuns.$inferSelect;

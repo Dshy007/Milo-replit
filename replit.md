@@ -72,10 +72,31 @@ Preferred communication style: Simple, everyday language.
 
 **Phase 1 Complete**: Special Requests + Workload Tracking + Calendar Integration
 
-**Next Steps (Phase 2)**:
-- Task 8: Pattern Learning Engine (analyze historical assignments, learn driver preferences)
-- Task 9: Auto-Build Next Week feature (pattern-based + load-balanced suggestions)
-- Task 10: Auto-Build Review UI (manual tweaks before approval)
+**Phase 2: Auto-Build Next Week**
+
+**Task 8 - Pattern Learning Engine (Completed November 12, 2025)**:
+- New database tables: `assignment_patterns` (pattern cache), `auto_build_runs` (suggestion batches)
+- Pattern Learning (`server/pattern-engine.ts`):
+  - Analyzes 12 weeks of historical assignments with exponential decay (4-week half-life)
+  - Generates normalized block signatures: "contractId_soloType_startTime_dayOfWeek_tractor"
+  - Calculates confidence scores per driver-block pattern (0-1 range)
+  - Confidence thresholds: High (≥0.5), Medium (0.35-0.5), Low (<0.35)
+- Auto-Build Engine (`server/auto-build-engine.ts`):
+  - Composite scoring: pattern (50%) + workload (30%) + compliance (20%)
+  - Protected driver pre-assignment (Isaac Fridays, Firas/Tareef weekends)
+  - Workload balancing: Target 4-5 days, max 6 days hard limit
+  - DOT compliance validation via rolling-6 calculator
+  - Handles edge cases: new drivers, new blocks, insufficient history
+- API Endpoints:
+  - POST /api/patterns/recompute: Recompute patterns from historical data
+  - GET /api/patterns/stats: Get pattern statistics
+  - POST /api/auto-build/preview: Generate suggestions for target week
+  - GET /api/auto-build/runs: Get all auto-build runs
+  - POST /api/auto-build/commit: Commit approved suggestions
+
+**Next Steps**:
+- Task 9: Auto-Build Review UI (display suggestions, manual adjustments, bulk approve)
+- Task 10: Milo AI Integration (conversational interface for workload queries + suggestions)
 
 **Next Steps (Phase 3)**:
 - Task 11: Milo AI Integration (OpenAI function calling for workload queries + swap suggestions)

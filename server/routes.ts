@@ -2393,6 +2393,126 @@ Be concise, professional, and helpful. Focus on trucking operations management. 
     }
   });
 
+  // ==================== PATTERN LEARNING & AUTO-BUILD ====================
+
+  // POST /api/patterns/recompute - Recompute assignment patterns for pattern learning
+  app.post("/api/patterns/recompute", async (req: Request, res: Response) => {
+    try {
+      const tenantId = req.user?.tenantId;
+      if (!tenantId) {
+        return res.status(401).json({ message: "Unauthorized - no tenant" });
+      }
+
+      const { recomputePatterns } = await import("./pattern-engine");
+      const result = await recomputePatterns(tenantId);
+      
+      res.json({
+        success: true,
+        message: `Pattern recompute completed. Created ${result.patternsCreated} patterns for ${result.totalDrivers} drivers.`,
+        stats: result,
+      });
+    } catch (error: any) {
+      console.error("Pattern recompute error:", error);
+      res.status(500).json({ message: "Failed to recompute patterns", error: error.message });
+    }
+  });
+
+  // GET /api/patterns/stats - Get pattern statistics
+  app.get("/api/patterns/stats", async (req: Request, res: Response) => {
+    try {
+      const tenantId = req.user?.tenantId;
+      if (!tenantId) {
+        return res.status(401).json({ message: "Unauthorized - no tenant" });
+      }
+
+      const { getPatternStats } = await import("./pattern-engine");
+      const stats = await getPatternStats(tenantId);
+      
+      res.json(stats);
+    } catch (error: any) {
+      console.error("Get pattern stats error:", error);
+      res.status(500).json({ message: "Failed to get pattern stats", error: error.message });
+    }
+  });
+
+  // POST /api/auto-build/preview - Generate auto-build suggestions for next week
+  app.post("/api/auto-build/preview", async (req: Request, res: Response) => {
+    try {
+      const tenantId = req.user?.tenantId;
+      const userId = req.user?.id;
+      
+      if (!tenantId) {
+        return res.status(401).json({ message: "Unauthorized - no tenant" });
+      }
+
+      const { targetWeekStart } = req.body;
+      if (!targetWeekStart) {
+        return res.status(400).json({ message: "Missing required field: targetWeekStart" });
+      }
+
+      const { generateAutoBuildPreview, saveAutoBuildRun } = await import("./auto-build-engine");
+      const preview = await generateAutoBuildPreview(
+        tenantId,
+        new Date(targetWeekStart),
+        userId
+      );
+
+      // Save the run to database for review workflow
+      const run = await saveAutoBuildRun(tenantId, preview, userId);
+      
+      res.json({
+        success: true,
+        runId: run.id,
+        preview,
+      });
+    } catch (error: any) {
+      console.error("Auto-build preview error:", error);
+      res.status(500).json({ message: "Failed to generate auto-build preview", error: error.message });
+    }
+  });
+
+  // GET /api/auto-build/runs - Get all auto-build runs for tenant
+  app.get("/api/auto-build/runs", async (req: Request, res: Response) => {
+    try {
+      const tenantId = req.user?.tenantId;
+      if (!tenantId) {
+        return res.status(401).json({ message: "Unauthorized - no tenant" });
+      }
+
+      const { getAutoBuildRuns } = await import("./auto-build-engine");
+      const runs = await getAutoBuildRuns(tenantId);
+      
+      res.json(runs);
+    } catch (error: any) {
+      console.error("Get auto-build runs error:", error);
+      res.status(500).json({ message: "Failed to get auto-build runs", error: error.message });
+    }
+  });
+
+  // POST /api/auto-build/commit - Commit approved auto-build suggestions
+  app.post("/api/auto-build/commit", async (req: Request, res: Response) => {
+    try {
+      const userId = req.user?.id;
+      
+      const { runId, approvedBlockIds } = req.body;
+      if (!runId || !approvedBlockIds || !Array.isArray(approvedBlockIds)) {
+        return res.status(400).json({ message: "Missing required fields: runId, approvedBlockIds" });
+      }
+
+      const { commitAutoBuildRun } = await import("./auto-build-engine");
+      const result = await commitAutoBuildRun(runId, approvedBlockIds, userId);
+      
+      res.json({
+        success: true,
+        message: `Successfully created ${result.created} assignments${result.failed > 0 ? `, ${result.failed} failed` : ""}`,
+        ...result,
+      });
+    } catch (error: any) {
+      console.error("Auto-build commit error:", error);
+      res.status(500).json({ message: "Failed to commit auto-build", error: error.message });
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }
