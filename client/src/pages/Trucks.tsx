@@ -35,6 +35,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -669,8 +670,8 @@ export default function Trucks() {
     </div>
 
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0 pb-4">
-          <div className="flex items-center gap-2 flex-1">
+        <CardHeader className="space-y-4 pb-4">
+          <div className="flex items-center justify-between gap-4">
             <div className="relative flex-1 max-w-md">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <Input
@@ -681,22 +682,30 @@ export default function Trucks() {
                 data-testid="input-search"
               />
             </div>
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-[180px]" data-testid="select-filter-status">
-                <SelectValue placeholder="Filter by status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Statuses</SelectItem>
-                <SelectItem value="available">Available</SelectItem>
-                <SelectItem value="in_use">In Use</SelectItem>
-                <SelectItem value="maintenance">Maintenance</SelectItem>
-                <SelectItem value="retired">Retired</SelectItem>
-              </SelectContent>
-            </Select>
+            <div className="text-sm text-muted-foreground" data-testid="text-count">
+              {filteredTrucks.length} {filteredTrucks.length === 1 ? "truck" : "trucks"}
+            </div>
           </div>
-          <div className="text-sm text-muted-foreground" data-testid="text-count">
-            {filteredTrucks.length} {filteredTrucks.length === 1 ? "truck" : "trucks"}
-          </div>
+          
+          <Tabs value={statusFilter} onValueChange={setStatusFilter} className="w-full">
+            <TabsList className="grid w-full grid-cols-5">
+              <TabsTrigger value="all" data-testid="tab-all">
+                All
+              </TabsTrigger>
+              <TabsTrigger value="available" data-testid="tab-available">
+                Available
+              </TabsTrigger>
+              <TabsTrigger value="in_use" data-testid="tab-in-use">
+                In Use
+              </TabsTrigger>
+              <TabsTrigger value="maintenance" data-testid="tab-maintenance">
+                Maintenance
+              </TabsTrigger>
+              <TabsTrigger value="retired" data-testid="tab-retired">
+                Retired
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
         </CardHeader>
         <CardContent>
           <div className="rounded-md border">
