@@ -552,7 +552,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Parse based on file extension
       if (filename.endsWith('.csv')) {
         const csvText = fileBuffer.toString('utf-8');
-        const parsed = Papa.parse(csvText, { header: true, skipEmptyLines: true });
+        
+        // Auto-detect delimiter by trying common delimiters
+        const delimiters = [',', '\t', ';', '|'];
+        let bestDelimiter = ',';
+        let maxColumns = 0;
+        
+        for (const delimiter of delimiters) {
+          const testParse = Papa.parse(csvText, {
+            delimiter,
+            preview: 1,
+            skipEmptyLines: true,
+          });
+          
+          if (testParse.data[0] && Array.isArray(testParse.data[0])) {
+            const columnCount = testParse.data[0].length;
+            if (columnCount > maxColumns) {
+              maxColumns = columnCount;
+              bestDelimiter = delimiter;
+            }
+          }
+        }
+        
+        console.log(`CSV Auto-detected delimiter: "${bestDelimiter === '\t' ? '\\t (tab)' : bestDelimiter}", columns: ${maxColumns}`);
+        
+        const parsed = Papa.parse(csvText, { 
+          header: true, 
+          delimiter: bestDelimiter,
+          skipEmptyLines: true,
+          transformHeader: (header: string) => header.trim(),
+        });
         rows = parsed.data;
       } else if (filename.endsWith('.xlsx') || filename.endsWith('.xls')) {
         const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
