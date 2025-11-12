@@ -54,6 +54,15 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { insertContractSchema, type Contract, type InsertContract } from "@shared/schema";
 import { Plus, Pencil, Trash2, Search, FileText, Upload, Clock, Truck } from "lucide-react";
 
+// Helper function to convert military time to AM/PM
+function convertTo12Hour(time24: string): string {
+  const [hours, minutes] = time24.split(':');
+  const hour = parseInt(hours);
+  const ampm = hour >= 12 ? 'PM' : 'AM';
+  const hour12 = hour % 12 || 12;
+  return `${hour12}:${minutes} ${ampm}`;
+}
+
 export default function Contracts() {
   const { toast } = useToast();
   const [searchTerm, setSearchTerm] = useState("");
@@ -64,6 +73,7 @@ export default function Contracts() {
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [selectedContract, setSelectedContract] = useState<Contract | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [useMilitaryTime, setUseMilitaryTime] = useState(true); // Default to military time
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: contracts = [], isLoading } = useQuery<Contract[]>({
@@ -76,7 +86,9 @@ export default function Contracts() {
       name: "",
       type: "solo1",
       startTime: "",
+      status: "active",
       tractorId: "",
+      domicile: "",
       duration: 14,
       baseRoutes: 10,
       daysPerWeek: 6,
@@ -204,7 +216,9 @@ export default function Contracts() {
       name: contract.name,
       type: contract.type,
       startTime: contract.startTime,
+      status: contract.status || "active",
       tractorId: contract.tractorId,
+      domicile: contract.domicile || "",
       duration: contract.duration,
       baseRoutes: contract.baseRoutes,
       daysPerWeek: contract.daysPerWeek,
@@ -299,6 +313,15 @@ export default function Contracts() {
         </div>
 
         <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setUseMilitaryTime(!useMilitaryTime)}
+            data-testid="button-toggle-time-format"
+          >
+            <Clock className="w-4 h-4 mr-2" />
+            {useMilitaryTime ? "Military Time" : "12-Hour"}
+          </Button>
           <input
             ref={fileInputRef}
             type="file"
@@ -479,6 +502,56 @@ export default function Contracts() {
                     />
                   </div>
 
+                  <div className="grid grid-cols-2 gap-4">
+                    <FormField
+                      control={addForm.control}
+                      name="status"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Status *</FormLabel>
+                          <Select
+                            onValueChange={field.onChange}
+                            value={field.value}
+                          >
+                            <FormControl>
+                              <SelectTrigger data-testid="select-status">
+                                <SelectValue placeholder="Select status" />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              <SelectItem value="active">Active</SelectItem>
+                              <SelectItem value="inactive">Inactive</SelectItem>
+                              <SelectItem value="pending">Pending</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={addForm.control}
+                      name="domicile"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Domicile</FormLabel>
+                          <FormControl>
+                            <Input
+                              placeholder="PHX"
+                              data-testid="input-domicile"
+                              {...field}
+                              value={field.value || ""}
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            e.g., PHX, LAX, DFW
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+
                   <FormField
                     control={addForm.control}
                     name="duration"
@@ -615,18 +688,17 @@ export default function Contracts() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Start Time</TableHead>
+                  <TableHead>Status</TableHead>
                   <TableHead>Tractor</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Duration</TableHead>
-                  <TableHead>Days/Week</TableHead>
-                  <TableHead>Protected</TableHead>
+                  <TableHead>Driver Type</TableHead>
+                  <TableHead>Domicile</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filteredContracts.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center py-8">
+                    <TableCell colSpan={6} className="text-center py-8">
                       <div className="text-muted-foreground" data-testid="empty-state">
                         {searchTerm || typeFilter !== "all"
                           ? "No contracts found matching your filters"
@@ -640,8 +712,13 @@ export default function Contracts() {
                       <TableCell className="font-medium" data-testid={`text-start-time-${contract.id}`}>
                         <div className="flex items-center gap-2">
                           <Clock className="w-4 h-4 text-muted-foreground" />
-                          {contract.startTime}
+                          {useMilitaryTime ? contract.startTime : convertTo12Hour(contract.startTime)}
                         </div>
+                      </TableCell>
+                      <TableCell data-testid={`text-status-${contract.id}`}>
+                        <Badge variant={contract.status === "active" ? "default" : "outline"}>
+                          {contract.status}
+                        </Badge>
                       </TableCell>
                       <TableCell data-testid={`text-tractor-${contract.id}`}>
                         <div className="flex items-center gap-2">
@@ -657,18 +734,8 @@ export default function Contracts() {
                           {formatType(contract.type)}
                         </Badge>
                       </TableCell>
-                      <TableCell data-testid={`text-duration-${contract.id}`}>
-                        {contract.duration}h
-                      </TableCell>
-                      <TableCell data-testid={`text-days-per-week-${contract.id}`}>
-                        {contract.daysPerWeek}
-                      </TableCell>
-                      <TableCell data-testid={`text-protected-${contract.id}`}>
-                        {contract.protectedDrivers ? (
-                          <Badge variant="default">Yes</Badge>
-                        ) : (
-                          <Badge variant="outline">No</Badge>
-                        )}
+                      <TableCell data-testid={`text-domicile-${contract.id}`}>
+                        {contract.domicile || "—"}
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
@@ -796,6 +863,56 @@ export default function Contracts() {
                           />
                         </div>
                       </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <FormField
+                  control={editForm.control}
+                  name="status"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Status *</FormLabel>
+                      <Select
+                        onValueChange={field.onChange}
+                        value={field.value}
+                      >
+                        <FormControl>
+                          <SelectTrigger data-testid="select-edit-status">
+                            <SelectValue placeholder="Select status" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="active">Active</SelectItem>
+                          <SelectItem value="inactive">Inactive</SelectItem>
+                          <SelectItem value="pending">Pending</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={editForm.control}
+                  name="domicile"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Domicile</FormLabel>
+                      <FormControl>
+                        <Input
+                          placeholder="PHX"
+                          data-testid="input-edit-domicile"
+                          {...field}
+                          value={field.value || ""}
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        e.g., PHX, LAX, DFW
+                      </FormDescription>
                       <FormMessage />
                     </FormItem>
                   )}

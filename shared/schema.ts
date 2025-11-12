@@ -315,7 +315,9 @@ export const contracts = pgTable("contracts", {
   name: text("name").notNull(), // e.g., "Solo1 16:30 Tractor_1"
   type: text("type").notNull(), // solo1, solo2, team
   startTime: text("start_time").notNull(), // HH:MM format (e.g., "16:30") - facility local time
+  status: text("status").notNull().default("active"), // active, inactive, pending
   tractorId: text("tractor_id").notNull(), // e.g., "Tractor_1", "Tractor_2"
+  domicile: text("domicile").default(""), // e.g., "PHX", "LAX", "DFW"
   duration: integer("duration").notNull(), // hours: 14 for Solo1, 38 for Solo2
   baseRoutes: integer("base_routes").notNull(), // number of base routes (10 for Solo1, 7 for Solo2)
   daysPerWeek: integer("days_per_week").notNull().default(6), // rolling 6-day pattern
