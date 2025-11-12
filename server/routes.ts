@@ -1133,6 +1133,89 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // GET /api/schedules/calendar - Combined endpoint for calendar views
+  app.get("/api/schedules/calendar", requireAuth, async (req, res) => {
+    try {
+      const { startDate, endDate } = req.query;
+      
+      // Require both date params
+      if (!startDate || !endDate) {
+        return res.status(400).json({ message: "Both startDate and endDate query parameters are required" });
+      }
+      
+      const start = new Date(startDate as string);
+      const end = new Date(endDate as string);
+      
+      // Validate date format
+      if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+        return res.status(400).json({ message: "Invalid date format. Use YYYY-MM-DD" });
+      }
+      
+      // Validate date range order
+      if (start > end) {
+        return res.status(400).json({ message: "Start date must be before or equal to end date" });
+      }
+      
+      // Validate date range limit (31 days)
+      const daysDiff = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+      if (daysDiff > 31) {
+        return res.status(400).json({ message: "Date range cannot exceed 31 days" });
+      }
+      
+      // Fetch blocks in date range
+      const blocks = await dbStorage.getBlocksByDateRange(req.session.tenantId!, start, end);
+      
+      // Fetch all assignments for tenant (will filter to blocks in range)
+      const allAssignments = await dbStorage.getBlockAssignmentsByTenant(req.session.tenantId!);
+      const blockIds = new Set(blocks.map(b => b.id));
+      const relevantAssignments = allAssignments.filter(a => blockIds.has(a.blockId));
+      
+      // Build maps for efficient lookups
+      const assignmentsByBlockId = new Map(relevantAssignments.map(a => [a.blockId, a]));
+      
+      // Fetch unique contract IDs and driver IDs
+      const contractIds = [...new Set(blocks.map(b => b.contractId))];
+      const driverIds = [...new Set(relevantAssignments.map(a => a.driverId))];
+      
+      // Fetch all contracts and drivers in parallel
+      const [contracts, drivers] = await Promise.all([
+        Promise.all(contractIds.map(id => dbStorage.getContract(id))),
+        Promise.all(driverIds.map(id => dbStorage.getDriver(id))),
+      ]);
+      
+      // Build lookup maps
+      const contractsMap = new Map(contracts.filter(c => c).map(c => [c!.id, c!]));
+      const driversMap = new Map(drivers.filter(d => d).map(d => [d!.id, d!]));
+      
+      // Enrich blocks with contract, assignment, and driver data
+      const enrichedBlocks = blocks.map(block => {
+        const contract = contractsMap.get(block.contractId) || null;
+        const assignment = assignmentsByBlockId.get(block.id) || null;
+        const driver = assignment ? driversMap.get(assignment.driverId) || null : null;
+        
+        return {
+          ...block,
+          contract,
+          assignment: assignment ? {
+            ...assignment,
+            driver,
+          } : null,
+        };
+      });
+      
+      // Return calendar-ready data
+      res.json({
+        dateRange: { start: startDate, end: endDate },
+        blocks: enrichedBlocks,
+        // Include normalized maps for frontend caching if needed
+        drivers: Object.fromEntries(driversMap),
+        contracts: Object.fromEntries(contractsMap),
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: "Failed to fetch calendar data", error: error.message });
+    }
+  });
+
   // ==================== CONTRACTS ====================
   
   app.get("/api/contracts", requireAuth, async (req, res) => {
@@ -1524,6 +1607,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
   
   app.get("/api/blocks", requireAuth, async (req, res) => {
     try {
+      const { startDate, endDate } = req.query;
+      
+      // If date range provided, filter blocks
+      if (startDate && endDate) {
+        const start = new Date(startDate as string);
+        const end = new Date(endDate as string);
+        
+        // Validate date format
+        if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+          return res.status(400).json({ message: "Invalid date format. Use YYYY-MM-DD" });
+        }
+        
+        // Validate date range order
+        if (start > end) {
+          return res.status(400).json({ message: "Start date must be before or equal to end date" });
+        }
+        
+        // Validate date range limit (31 days like compliance heatmap)
+        const daysDiff = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+        if (daysDiff > 31) {
+          return res.status(400).json({ message: "Date range cannot exceed 31 days" });
+        }
+        
+        const blocks = await dbStorage.getBlocksByDateRange(req.session.tenantId!, start, end);
+        return res.json(blocks);
+      }
+      
+      // If only one param provided, require both
+      if (startDate || endDate) {
+        return res.status(400).json({ message: "Both startDate and endDate are required" });
+      }
+      
+      // Otherwise return all blocks for tenant
       const blocks = await dbStorage.getBlocksByTenant(req.session.tenantId!);
       res.json(blocks);
     } catch (error: any) {
@@ -1707,6 +1823,92 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: fromZodError(error).message });
       }
       res.status(500).json({ message: "Failed to create block assignment", error: error.message });
+    }
+  });
+
+  app.patch("/api/block-assignments/:id", requireAuth, async (req, res) => {
+    try {
+      // Verify ownership
+      const existingAssignment = await dbStorage.getBlockAssignment(req.params.id);
+      if (!existingAssignment || existingAssignment.tenantId !== req.session.tenantId) {
+        return res.status(404).json({ message: "Block assignment not found" });
+      }
+      
+      const updates = updateBlockAssignmentSchema.parse(req.body);
+      
+      // If driver or block is being updated, run validation
+      if (updates.driverId || updates.blockId) {
+        const newDriverId = updates.driverId || existingAssignment.driverId;
+        const newBlockId = updates.blockId || existingAssignment.blockId;
+        
+        // Fetch driver and block
+        const driver = await dbStorage.getDriver(newDriverId);
+        if (!driver || driver.tenantId !== req.session.tenantId) {
+          return res.status(400).json({ message: "Invalid driver ID" });
+        }
+        
+        const block = await dbStorage.getBlock(newBlockId);
+        if (!block || block.tenantId !== req.session.tenantId) {
+          return res.status(400).json({ message: "Invalid block ID" });
+        }
+        
+        // Run validation guard
+        const normalizedSoloType = normalizeSoloType(block.soloType);
+        const lookbackDays = normalizedSoloType === "solo1" ? 1 : 2;
+        const lookbackStart = subDays(new Date(block.startTimestamp), lookbackDays);
+        const lookbackEnd = new Date(block.startTimestamp);
+        
+        const existingAssignments = await dbStorage.getBlockAssignmentsWithBlocksByDriverAndDateRange(
+          driver.id,
+          req.session.tenantId!,
+          lookbackStart,
+          lookbackEnd
+        );
+        
+        // Filter out the current assignment being updated from all validation datasets
+        const filteredAssignments = existingAssignments.filter(a => a.id !== req.params.id);
+        
+        const protectedRules = await dbStorage.getProtectedDriverRulesByDriver(driver.id);
+        const allAssignments = await dbStorage.getBlockAssignmentsByTenant(req.session.tenantId!);
+        
+        // CRITICAL: Also filter current assignment from allAssignments to avoid self-conflict
+        const filteredAllAssignments = allAssignments.filter(a => a.id !== req.params.id);
+        
+        const validationResult = await validateBlockAssignment(
+          driver,
+          block,
+          filteredAssignments,
+          protectedRules,
+          filteredAllAssignments
+        );
+        
+        if (!validationResult.canAssign) {
+          return res.status(400).json({
+            message: "Assignment validation failed",
+            validationStatus: validationResult.validationResult.validationStatus,
+            errors: validationResult.validationResult.messages,
+            protectedRuleViolations: validationResult.protectedRuleViolations,
+            conflictingAssignments: validationResult.conflictingAssignments,
+          });
+        }
+        
+        // Add validation summary to updates
+        updates.validationStatus = validationResult.validationResult.validationStatus;
+        updates.validationSummary = JSON.stringify({
+          status: validationResult.validationResult.validationStatus,
+          messages: validationResult.validationResult.messages,
+          metrics: validationResult.validationResult.metrics,
+          validatedAt: new Date().toISOString(),
+        });
+      }
+      
+      const updatedAssignment = await dbStorage.updateBlockAssignment(req.params.id, updates);
+      res.json(updatedAssignment);
+    } catch (error: any) {
+      if (error.name === "ZodError") {
+        return res.status(400).json({ message: fromZodError(error).message });
+      }
+      res.status(500).json({ message: "Failed to update block assignment", error: error.message });
     }
   });
 
