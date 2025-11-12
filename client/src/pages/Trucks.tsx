@@ -350,6 +350,7 @@ export default function Trucks() {
   };
 
   const formatStatus = (status: string) => {
+    if (status === "available") return "Active";
     return status.split("_").map(word => 
       word.charAt(0).toUpperCase() + word.slice(1)
     ).join(" ");
@@ -530,7 +531,7 @@ export default function Trucks() {
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
-                            <SelectItem value="available">Available</SelectItem>
+                            <SelectItem value="available">Active</SelectItem>
                             <SelectItem value="in_use">In Use</SelectItem>
                             <SelectItem value="maintenance">Maintenance</SelectItem>
                             <SelectItem value="retired">Retired</SelectItem>
@@ -967,7 +968,7 @@ export default function Trucks() {
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
-                          <SelectItem value="available">Available</SelectItem>
+                          <SelectItem value="available">Active</SelectItem>
                           <SelectItem value="in_use">In Use</SelectItem>
                           <SelectItem value="maintenance">Maintenance</SelectItem>
                           <SelectItem value="retired">Retired</SelectItem>
