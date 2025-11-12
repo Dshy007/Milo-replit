@@ -90,9 +90,9 @@ export function AppSidebar() {
               {navItems.map((item) => (
                 <SidebarMenuItem key={item.url}>
                   <SidebarMenuButton asChild isActive={location === item.url}>
-                    <Link href={item.url} data-testid={item.testId}>
+                    <Link href={item.url} data-testid={item.testId} aria-label={item.title}>
                       <item.icon />
-                      <span>{item.title}</span>
+                      <span className="sr-only">{item.title}</span>
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>

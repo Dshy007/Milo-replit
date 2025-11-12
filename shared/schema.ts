@@ -148,9 +148,11 @@ export const trucks = pgTable("trucks", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
   truckNumber: text("truck_number").notNull(),
+  type: text("type").default(""), // tractor, trailer, van, etc.
   make: text("make").notNull(),
   model: text("model").notNull(),
   year: integer("year").notNull(),
+  fuel: text("fuel").default(""), // diesel, gas, electric, hybrid
   vin: text("vin").notNull().unique(),
   licensePlate: text("license_plate").notNull(),
   status: text("status").notNull().default("available"), // available, in_use, maintenance, retired

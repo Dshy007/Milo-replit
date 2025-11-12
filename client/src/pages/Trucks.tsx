@@ -188,9 +188,11 @@ export default function Trucks() {
     setSelectedTruck(truck);
     editForm.reset({
       truckNumber: truck.truckNumber,
+      type: truck.type ?? "",
       make: truck.make,
       model: truck.model,
       year: truck.year,
+      fuel: truck.fuel ?? "",
       vin: truck.vin,
       licensePlate: truck.licensePlate,
       status: truck.status,
@@ -324,6 +326,46 @@ export default function Trucks() {
                             <SelectItem value="retired">Retired</SelectItem>
                           </SelectContent>
                         </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <FormField
+                    control={addForm.control}
+                    name="type"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Type</FormLabel>
+                        <FormControl>
+                          <Input
+                            placeholder="Tractor"
+                            data-testid="input-type"
+                            {...field}
+                            value={field.value || ""}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={addForm.control}
+                    name="fuel"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Fuel</FormLabel>
+                        <FormControl>
+                          <Input
+                            placeholder="Diesel"
+                            data-testid="input-fuel"
+                            {...field}
+                            value={field.value || ""}
+                          />
+                        </FormControl>
                         <FormMessage />
                       </FormItem>
                     )}
@@ -583,13 +625,13 @@ export default function Trucks() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Truck Number</TableHead>
-                  <TableHead>Make/Model</TableHead>
-                  <TableHead>Year</TableHead>
+                  <TableHead>Asset ID</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Make</TableHead>
+                  <TableHead>Fuel</TableHead>
+                  <TableHead>License</TableHead>
                   <TableHead>VIN</TableHead>
-                  <TableHead>License Plate</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Next Inspection</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -607,20 +649,23 @@ export default function Trucks() {
                 ) : (
                   filteredTrucks.map((truck) => (
                     <TableRow key={truck.id} data-testid={`row-truck-${truck.id}`}>
-                      <TableCell className="font-medium" data-testid={`text-truck-number-${truck.id}`}>
+                      <TableCell className="font-medium" data-testid={`text-asset-id-${truck.id}`}>
                         {truck.truckNumber}
                       </TableCell>
-                      <TableCell data-testid={`text-make-model-${truck.id}`}>
-                        {truck.make} {truck.model}
+                      <TableCell data-testid={`text-type-${truck.id}`}>
+                        {truck.type || "—"}
                       </TableCell>
-                      <TableCell data-testid={`text-year-${truck.id}`}>
-                        {truck.year}
+                      <TableCell data-testid={`text-make-${truck.id}`}>
+                        {truck.make}
+                      </TableCell>
+                      <TableCell data-testid={`text-fuel-${truck.id}`}>
+                        {truck.fuel || "—"}
+                      </TableCell>
+                      <TableCell data-testid={`text-license-${truck.id}`}>
+                        {truck.licensePlate}
                       </TableCell>
                       <TableCell className="font-mono text-sm" data-testid={`text-vin-${truck.id}`}>
                         {truck.vin}
-                      </TableCell>
-                      <TableCell data-testid={`text-license-plate-${truck.id}`}>
-                        {truck.licensePlate}
                       </TableCell>
                       <TableCell>
                         <Badge
@@ -629,11 +674,6 @@ export default function Trucks() {
                         >
                           {formatStatus(truck.status)}
                         </Badge>
-                      </TableCell>
-                      <TableCell data-testid={`text-next-inspection-${truck.id}`}>
-                        {truck.nextInspection
-                          ? format(new Date(truck.nextInspection), "MMM dd, yyyy")
-                          : "—"}
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
@@ -720,6 +760,46 @@ export default function Trucks() {
                           <SelectItem value="retired">Retired</SelectItem>
                         </SelectContent>
                       </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <FormField
+                  control={editForm.control}
+                  name="type"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Type</FormLabel>
+                      <FormControl>
+                        <Input
+                          placeholder="Tractor"
+                          data-testid="input-edit-type"
+                          {...field}
+                          value={field.value || ""}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={editForm.control}
+                  name="fuel"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Fuel</FormLabel>
+                      <FormControl>
+                        <Input
+                          placeholder="Diesel"
+                          data-testid="input-edit-fuel"
+                          {...field}
+                          value={field.value || ""}
+                        />
+                      </FormControl>
                       <FormMessage />
                     </FormItem>
                   )}
