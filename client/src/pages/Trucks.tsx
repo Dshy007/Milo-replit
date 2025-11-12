@@ -193,10 +193,23 @@ export default function Trucks() {
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/trucks"] });
-      toast({
-        title: "Success",
-        description: `Imported ${data.count} trucks successfully`,
-      });
+      
+      if (data.errors && data.errors.length > 0) {
+        // Show errors if any rows failed
+        const errorSummary = data.errors.slice(0, 3).join("; ");
+        const moreErrors = data.errors.length > 3 ? ` ...and ${data.errors.length - 3} more errors` : "";
+        
+        toast({
+          variant: data.count > 0 ? "default" : "destructive",
+          title: data.count > 0 ? "Partial Import" : "Import Failed",
+          description: `Imported ${data.count} of ${data.total} trucks. Errors: ${errorSummary}${moreErrors}`,
+        });
+      } else {
+        toast({
+          title: "Success",
+          description: `Imported ${data.count} trucks successfully`,
+        });
+      }
     },
     onError: (error: Error) => {
       toast({
