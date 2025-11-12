@@ -59,8 +59,18 @@ Preferred communication style: Simple, everyday language.
 - Navigation (prev/next/today) advances currentDate and recalculates 6-week window
 - Critical bug fix: React Query key corrected to pass query params as object: `queryKey: [path, { start, end }]`
 
-**Next Steps (Phase 1 Remaining)**:
-- Task 7: Integrate workload badges into Schedules calendar page
+**Task 7 - Integrate Workload into Calendar (Completed November 12, 2025)**:
+- Added workload data fetching for calendar views (week/month) using /api/workload-summary/range
+- Created workloadMap lookup: `workloadMap[driverId][weekStartIso]` for O(1) access
+- Workload badges display next to driver names on block cards showing "{daysWorked}d"
+- Color-coded badges: Green (ideal 4 days), Yellow (warning 5 days), Red (critical 6+ days), Blue (underutilized <4 days)
+- Critical border highlighting: Red border-2 on block cards when driver has 6+ day workload
+- Helper functions: getWorkloadBadgeVariant, getWorkloadBadgeColor, getDriverWorkload
+- Normalization fix: weekStartIso format handling (ISO timestamp → yyyy-MM-dd) for consistent lookups
+- Graceful handling of missing workload data (no badge displayed)
+- Critical bug fix: Replaced ALL parseISO(block.startTimestamp) with new Date(block.startTimestamp) for Drizzle Date object compatibility
+
+**Phase 1 Complete**: Special Requests + Workload Tracking + Calendar Integration
 
 **Next Steps (Phase 2)**:
 - Task 8: Pattern Learning Engine (analyze historical assignments, learn driver preferences)
