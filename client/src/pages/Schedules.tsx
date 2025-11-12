@@ -111,10 +111,41 @@ export default function Schedules() {
     }
   }, [currentDate, viewMode]);
 
+  // Fetch workload data for calendar views (week/month only)
+  const { data: calendarWorkloadData = [] } = useQuery<Array<{
+    driverId: string;
+    driverName: string;
+    weekStartIso: string;
+    daysWorked: number;
+    workloadLevel: string;
+    totalHours: number;
+    blockIds: string[];
+  }>>({
+    queryKey: ["/api/workload-summary/range", {
+      start: viewMode !== "tally" ? format(dateRange.start, "yyyy-MM-dd") : "",
+      end: viewMode !== "tally" ? format(dateRange.end, "yyyy-MM-dd") : "",
+    }],
+    enabled: viewMode !== "tally",
+  });
+
+  // Build workload lookup: workloadMap[driverId][weekStartIso] => workloadData
+  const workloadMap = useMemo(() => {
+    const map: Record<string, Record<string, typeof calendarWorkloadData[0]>> = {};
+    calendarWorkloadData.forEach(w => {
+      if (!map[w.driverId]) map[w.driverId] = {};
+      // Normalize weekStartIso to yyyy-MM-dd format to match frontend lookup keys
+      const normalizedWeekKey = w.weekStartIso.includes('T') 
+        ? format(new Date(w.weekStartIso), "yyyy-MM-dd")
+        : w.weekStartIso;
+      map[w.driverId][normalizedWeekKey] = w;
+    });
+    return map;
+  }, [calendarWorkloadData]);
+
   // Filter blocks by date range and filters
   const filteredBlocks = useMemo(() => {
     return blocksWithAssignments.filter(block => {
-      const blockDate = parseISO(block.startTimestamp as any);
+      const blockDate = new Date(block.startTimestamp);
       const inRange = blockDate >= dateRange.start && blockDate <= dateRange.end;
       if (!inRange) return false;
 
@@ -149,11 +180,11 @@ export default function Schedules() {
     dateRange.days.forEach(day => {
       const dayKey = format(day, "yyyy-MM-dd");
       grouped[dayKey] = filteredBlocks.filter(block => {
-        const blockDate = parseISO(block.startTimestamp as any);
+        const blockDate = new Date(block.startTimestamp);
         return isSameDay(blockDate, day);
       }).sort((a, b) => {
-        const aTime = parseISO(a.startTimestamp as any).getTime();
-        const bTime = parseISO(b.startTimestamp as any).getTime();
+        const aTime = new Date(a.startTimestamp).getTime();
+        const bTime = new Date(b.startTimestamp).getTime();
         return aTime - bTime;
       });
     });
@@ -211,6 +242,42 @@ export default function Schedules() {
       default:
         return <AlertCircle className="w-3 h-3 text-muted-foreground" />;
     }
+  };
+
+  const getWorkloadBadgeVariant = (workloadLevel: string): "default" | "secondary" | "destructive" | "outline" => {
+    switch (workloadLevel) {
+      case "ideal":
+        return "outline"; // Green (4 days)
+      case "warning":
+        return "secondary"; // Yellow (5 days)
+      case "critical":
+        return "destructive"; // Red (6+ days)
+      case "underutilized":
+        return "outline"; // Blue (<4 days)
+      default:
+        return "outline";
+    }
+  };
+
+  const getWorkloadBadgeColor = (workloadLevel: string): string => {
+    switch (workloadLevel) {
+      case "ideal":
+        return "text-green-700 dark:text-green-400 border-green-500";
+      case "warning":
+        return "text-yellow-700 dark:text-yellow-400 border-yellow-500";
+      case "critical":
+        return "text-red-700 dark:text-red-400 border-red-500";
+      case "underutilized":
+        return "text-blue-700 dark:text-blue-400 border-blue-500";
+      default:
+        return "";
+    }
+  };
+
+  const getDriverWorkload = (driverId: string, day: Date) => {
+    const weekStart = startOfWeek(day, { weekStartsOn: 0 });
+    const weekKey = format(weekStart, "yyyy-MM-dd");
+    return workloadMap[driverId]?.[weekKey];
   };
 
   const toggleDriverFilter = (driverId: string) => {
@@ -460,30 +527,49 @@ export default function Schedules() {
                   </div>
                 </CardHeader>
                 <CardContent className="p-2 space-y-1">
-                  {dayBlocks.slice(0, 5).map((block) => (
-                    <button
-                      key={block.id}
-                      onClick={() => setSelectedBlock(block)}
-                      className={`w-full text-left p-2 rounded border text-xs hover-elevate transition-all ${getSoloTypeColor(block.soloType)}`}
-                      data-testid={`block-${block.id}`}
-                    >
-                      <div className="flex items-center justify-between gap-1 mb-1">
-                        <span className="font-medium truncate">{block.blockId}</span>
-                        {getStatusIcon(block)}
-                      </div>
-                      <div className="text-xs opacity-80">
-                        {format(parseISO(block.startTimestamp as any), "HH:mm")}
-                      </div>
-                      {block.assignment?.driver && (
-                        <div className="flex items-center gap-1 mt-1 text-xs opacity-70">
-                          <User className="w-3 h-3" />
-                          <span className="truncate">
-                            {block.assignment.driver.firstName} {block.assignment.driver.lastName}
-                          </span>
+                  {dayBlocks.slice(0, 5).map((block) => {
+                    // Get driver workload for this day
+                    const driverWorkload = block.assignment?.driver 
+                      ? getDriverWorkload(block.assignment.driverId, day)
+                      : null;
+                    const isCritical = driverWorkload && driverWorkload.daysWorked >= 6;
+
+                    return (
+                      <button
+                        key={block.id}
+                        onClick={() => setSelectedBlock(block)}
+                        className={`w-full text-left p-2 rounded text-xs hover-elevate transition-all ${getSoloTypeColor(block.soloType)} ${isCritical ? "border-2 border-red-500" : "border"}`}
+                        data-testid={`block-${block.id}`}
+                      >
+                        <div className="flex items-center justify-between gap-1 mb-1">
+                          <span className="font-medium truncate">{block.blockId}</span>
+                          {getStatusIcon(block)}
                         </div>
-                      )}
-                    </button>
-                  ))}
+                        <div className="text-xs opacity-80">
+                          {format(new Date(block.startTimestamp), "HH:mm")}
+                        </div>
+                        {block.assignment?.driver && (
+                          <div className="flex items-center justify-between gap-1 mt-1 text-xs">
+                            <div className="flex items-center gap-1 opacity-70">
+                              <User className="w-3 h-3" />
+                              <span className="truncate">
+                                {block.assignment.driver.firstName} {block.assignment.driver.lastName}
+                              </span>
+                            </div>
+                            {driverWorkload && (
+                              <Badge 
+                                variant={getWorkloadBadgeVariant(driverWorkload.workloadLevel)} 
+                                className={`text-xs flex-shrink-0 ${getWorkloadBadgeColor(driverWorkload.workloadLevel)}`}
+                                data-testid={`badge-workload-${block.id}`}
+                              >
+                                {driverWorkload.daysWorked}d
+                              </Badge>
+                            )}
+                          </div>
+                        )}
+                      </button>
+                    );
+                  })}
                   {dayBlocks.length > 5 && (
                     <div className="text-xs text-center text-muted-foreground">
                       +{dayBlocks.length - 5} more
@@ -657,13 +743,13 @@ export default function Schedules() {
                 <div>
                   <Label className="text-muted-foreground">Start Time</Label>
                   <div className="font-medium">
-                    {format(parseISO(selectedBlock.startTimestamp as any), "MMM d, yyyy HH:mm")}
+                    {format(new Date(selectedBlock.startTimestamp), "MMM d, yyyy HH:mm")}
                   </div>
                 </div>
                 <div>
                   <Label className="text-muted-foreground">End Time</Label>
                   <div className="font-medium">
-                    {format(parseISO(selectedBlock.endTimestamp as any), "MMM d, yyyy HH:mm")}
+                    {format(new Date(selectedBlock.endTimestamp), "MMM d, yyyy HH:mm")}
                   </div>
                 </div>
                 <div>
@@ -717,7 +803,7 @@ export default function Schedules() {
                     <div className="col-span-2">
                       <Label className="text-muted-foreground">Assigned At</Label>
                       <div className="font-medium">
-                        {format(parseISO(selectedBlock.assignment.assignedAt as any), "MMM d, yyyy HH:mm")}
+                        {format(new Date(selectedBlock.assignment.assignedAt), "MMM d, yyyy HH:mm")}
                       </div>
                     </div>
                   </div>

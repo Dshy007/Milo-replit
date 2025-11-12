@@ -48,8 +48,18 @@ Preferred communication style: Simple, everyday language.
 - server/db-storage.ts: Implemented special requests storage methods
 - server/routes.ts: Added 6 API routes for special requests workflow
 
+**Task 6 - Weekly Availability Tally (Completed November 12, 2025)**:
+- API: GET /api/workload-summary/range endpoint with start/end date params
+- Returns workload data for all drivers across all weeks in range: {driverId, driverName, weekStartIso, daysWorked, workloadLevel, totalHours, blockIds}
+- Tally View UI: Driver × Week grid (6 weeks: current + next 5)
+- Color-coded cells: Blue (underutilized <4 days), Green (ideal 4 days), Yellow (warning 5 days), Red (critical 6+ days)
+- PTO badges displayed for approved time-off requests
+- Legend explains color codes
+- Sticky first column for horizontal scrolling
+- Navigation (prev/next/today) advances currentDate and recalculates 6-week window
+- Critical bug fix: React Query key corrected to pass query params as object: `queryKey: [path, { start, end }]`
+
 **Next Steps (Phase 1 Remaining)**:
-- Task 6: Weekly Availability Tally UI (4-8 week rolling view, color-coded workload, approved time-off markers)
 - Task 7: Integrate workload badges into Schedules calendar page
 
 **Next Steps (Phase 2)**:
