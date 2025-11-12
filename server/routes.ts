@@ -613,6 +613,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           'plate': 'licensePlate',
           'license': 'licensePlate',
           
+          // Location mappings
+          'last known location': 'lastKnownLocation',
+          'lastknownlocation': 'lastKnownLocation',
+          'last_known_location': 'lastKnownLocation',
+          'location': 'lastKnownLocation',
+          
           // Status mappings
           'status': 'status',
           
@@ -665,6 +671,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             year: row.year ? parseInt(String(row.year), 10) : null,
             vin: row.vin || null,
             licensePlate: row.licensePlate || null,
+            lastKnownLocation: row.lastKnownLocation || null,
             status: row.status?.toLowerCase() || 'available',
             fuel: row.fuel || null,
             complianceStatus: 'pending', // Bulk imports default to pending

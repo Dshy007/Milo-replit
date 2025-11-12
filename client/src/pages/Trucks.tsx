@@ -709,6 +709,7 @@ export default function Trucks() {
                   <TableHead>Fuel</TableHead>
                   <TableHead>License</TableHead>
                   <TableHead>VIN</TableHead>
+                  <TableHead>Last known location</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -716,7 +717,7 @@ export default function Trucks() {
               <TableBody>
                 {filteredTrucks.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center py-8">
+                    <TableCell colSpan={9} className="text-center py-8">
                       <div className="text-muted-foreground" data-testid="empty-state">
                         {searchTerm || statusFilter !== "all"
                           ? "No trucks found matching your filters"
@@ -734,16 +735,19 @@ export default function Trucks() {
                         {truck.type || "—"}
                       </TableCell>
                       <TableCell data-testid={`text-make-${truck.id}`}>
-                        {truck.make}
+                        {truck.make || "—"}
                       </TableCell>
                       <TableCell data-testid={`text-fuel-${truck.id}`}>
                         {truck.fuel || "—"}
                       </TableCell>
                       <TableCell data-testid={`text-license-${truck.id}`}>
-                        {truck.licensePlate}
+                        {truck.licensePlate || "—"}
                       </TableCell>
                       <TableCell className="font-mono text-sm" data-testid={`text-vin-${truck.id}`}>
-                        {truck.vin}
+                        {truck.vin || "—"}
+                      </TableCell>
+                      <TableCell data-testid={`text-location-${truck.id}`}>
+                        {truck.lastKnownLocation || "—"}
                       </TableCell>
                       <TableCell>
                         <Badge

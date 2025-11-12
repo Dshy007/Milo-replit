@@ -155,6 +155,7 @@ export const trucks = pgTable("trucks", {
   fuel: text("fuel"), // diesel, gas, electric, hybrid
   vin: text("vin"),
   licensePlate: text("license_plate"),
+  lastKnownLocation: text("last_known_location"), // Track where truck was last seen
   status: text("status").notNull().default("available"), // available, in_use, maintenance, retired
   complianceStatus: text("compliance_status").notNull().default("pending"), // pending, complete
   lastInspection: timestamp("last_inspection"),
