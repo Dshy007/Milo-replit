@@ -426,7 +426,25 @@ export default function Drivers() {
                       </Button>
                     </TableHead>
                     <TableHead>Mobile phone number</TableHead>
-                    <TableHead>Load eligibility</TableHead>
+                    <TableHead>
+                      <Button
+                        variant="ghost"
+                        className="h-auto p-0 font-semibold hover:bg-transparent"
+                        onClick={() => toggleSort('loadEligible')}
+                        data-testid="sort-load-eligibility"
+                      >
+                        Load eligibility
+                        {sortField === 'loadEligible' ? (
+                          sortDirection === 'asc' ? (
+                            <ArrowUp className="ml-2 h-4 w-4" />
+                          ) : (
+                            <ArrowDown className="ml-2 h-4 w-4" />
+                          )
+                        ) : (
+                          <ArrowUpDown className="ml-2 h-4 w-4 opacity-50" />
+                        )}
+                      </Button>
+                    </TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
