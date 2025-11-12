@@ -44,6 +44,7 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
+  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
@@ -55,7 +56,7 @@ import { format } from "date-fns";
 import { z } from "zod";
 import { useRef } from "react";
 
-const formSchema = baseInsertTruckSchema.extend({
+const formSchema = baseInsertTruckSchema.omit({ tenantId: true }).extend({
   lastInspection: z.string().optional(),
   nextInspection: z.string().optional(),
 });
