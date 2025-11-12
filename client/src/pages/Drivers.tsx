@@ -52,7 +52,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { baseInsertDriverSchema } from "@shared/schema";
 import { z } from "zod";
-import { Plus, Search, Edit, Trash2, CheckCircle, Upload, FileSpreadsheet } from "lucide-react";
+import { Plus, Search, Edit, Trash2, CheckCircle, Upload, FileSpreadsheet, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 
@@ -64,6 +64,9 @@ const driverFormSchema = baseInsertDriverSchema.extend({
 
 type DriverFormData = z.infer<typeof driverFormSchema>;
 
+type SortField = 'firstName' | 'lastName' | 'email' | 'domicile' | 'phoneNumber' | 'loadEligible';
+type SortDirection = 'asc' | 'desc' | null;
+
 export default function Drivers() {
   const [searchQuery, setSearchQuery] = useState("");
   const [addDialogOpen, setAddDialogOpen] = useState(false);
@@ -71,6 +74,8 @@ export default function Drivers() {
   const [editingDriver, setEditingDriver] = useState<Driver | null>(null);
   const [deletingDriver, setDeletingDriver] = useState<Driver | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [sortField, setSortField] = useState<SortField | null>(null);
+  const [sortDirection, setSortDirection] = useState<SortDirection>(null);
   const { toast } = useToast();
 
   // Fetch drivers
@@ -78,17 +83,52 @@ export default function Drivers() {
     queryKey: ["/api/drivers"],
   });
 
-  // Filter drivers based on search
-  const filteredDrivers = drivers.filter((driver) => {
-    const searchLower = searchQuery.toLowerCase();
-    return (
-      driver.firstName.toLowerCase().includes(searchLower) ||
-      driver.lastName.toLowerCase().includes(searchLower) ||
-      driver.email?.toLowerCase().includes(searchLower) ||
-      driver.phoneNumber?.toLowerCase().includes(searchLower) ||
-      driver.domicile?.toLowerCase().includes(searchLower)
-    );
-  });
+  // Sort toggle function
+  const toggleSort = (field: SortField) => {
+    if (sortField === field) {
+      // Cycle through: asc -> desc -> null
+      if (sortDirection === 'asc') {
+        setSortDirection('desc');
+      } else if (sortDirection === 'desc') {
+        setSortDirection(null);
+        setSortField(null);
+      }
+    } else {
+      setSortField(field);
+      setSortDirection('asc');
+    }
+  };
+
+  // Filter and sort drivers
+  const filteredDrivers = drivers
+    .filter((driver) => {
+      const searchLower = searchQuery.toLowerCase();
+      return (
+        driver.firstName.toLowerCase().includes(searchLower) ||
+        driver.lastName.toLowerCase().includes(searchLower) ||
+        driver.email?.toLowerCase().includes(searchLower) ||
+        driver.phoneNumber?.toLowerCase().includes(searchLower) ||
+        driver.domicile?.toLowerCase().includes(searchLower)
+      );
+    })
+    .sort((a, b) => {
+      if (!sortField || !sortDirection) return 0;
+
+      let aValue: any = a[sortField];
+      let bValue: any = b[sortField];
+
+      // Handle null/undefined values
+      if (aValue === null || aValue === undefined) aValue = '';
+      if (bValue === null || bValue === undefined) bValue = '';
+
+      // Convert to string for comparison
+      aValue = String(aValue).toLowerCase();
+      bValue = String(bValue).toLowerCase();
+
+      if (aValue < bValue) return sortDirection === 'asc' ? -1 : 1;
+      if (aValue > bValue) return sortDirection === 'asc' ? 1 : -1;
+      return 0;
+    });
 
   // Add driver mutation
   const addDriverForm = useForm<DriverFormData>({
@@ -328,9 +368,63 @@ export default function Drivers() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Driver</TableHead>
-                    <TableHead>Email</TableHead>
-                    <TableHead>Domiciles</TableHead>
+                    <TableHead>
+                      <Button
+                        variant="ghost"
+                        className="h-auto p-0 font-semibold hover:bg-transparent"
+                        onClick={() => toggleSort('firstName')}
+                        data-testid="sort-driver-name"
+                      >
+                        Driver
+                        {sortField === 'firstName' ? (
+                          sortDirection === 'asc' ? (
+                            <ArrowUp className="ml-2 h-4 w-4" />
+                          ) : (
+                            <ArrowDown className="ml-2 h-4 w-4" />
+                          )
+                        ) : (
+                          <ArrowUpDown className="ml-2 h-4 w-4 opacity-50" />
+                        )}
+                      </Button>
+                    </TableHead>
+                    <TableHead>
+                      <Button
+                        variant="ghost"
+                        className="h-auto p-0 font-semibold hover:bg-transparent"
+                        onClick={() => toggleSort('email')}
+                        data-testid="sort-email"
+                      >
+                        Email
+                        {sortField === 'email' ? (
+                          sortDirection === 'asc' ? (
+                            <ArrowUp className="ml-2 h-4 w-4" />
+                          ) : (
+                            <ArrowDown className="ml-2 h-4 w-4" />
+                          )
+                        ) : (
+                          <ArrowUpDown className="ml-2 h-4 w-4 opacity-50" />
+                        )}
+                      </Button>
+                    </TableHead>
+                    <TableHead>
+                      <Button
+                        variant="ghost"
+                        className="h-auto p-0 font-semibold hover:bg-transparent"
+                        onClick={() => toggleSort('domicile')}
+                        data-testid="sort-domicile"
+                      >
+                        Domiciles
+                        {sortField === 'domicile' ? (
+                          sortDirection === 'asc' ? (
+                            <ArrowUp className="ml-2 h-4 w-4" />
+                          ) : (
+                            <ArrowDown className="ml-2 h-4 w-4" />
+                          )
+                        ) : (
+                          <ArrowUpDown className="ml-2 h-4 w-4 opacity-50" />
+                        )}
+                      </Button>
+                    </TableHead>
                     <TableHead>Mobile phone number</TableHead>
                     <TableHead>Load eligibility</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
