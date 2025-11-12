@@ -11,7 +11,8 @@ import {
   insertContractSchema, updateContractSchema,
   insertBlockSchema, updateBlockSchema,
   insertBlockAssignmentSchema,
-  insertProtectedDriverRuleSchema, updateProtectedDriverRuleSchema
+  insertProtectedDriverRuleSchema, updateProtectedDriverRuleSchema,
+  insertSpecialRequestSchema, updateSpecialRequestSchema
 } from "@shared/schema";
 import session from "express-session";
 import { fromZodError } from "zod-validation-error";
@@ -19,7 +20,8 @@ import bcrypt from "bcryptjs";
 import { benchContracts } from "./seed-data";
 import multer from "multer";
 import { validateBlockAssignment, normalizeSoloType } from "./rolling6-calculator";
-import { subDays } from "date-fns";
+import { subDays, parseISO } from "date-fns";
+import { findSwapCandidates, getAllDriverWorkloads } from "./workload-calculator";
 
 // Require SESSION_SECRET
 const SESSION_SECRET = process.env.SESSION_SECRET!;
@@ -2060,6 +2062,257 @@ Be concise, professional, and helpful. Focus on trucking operations management. 
         res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
         res.end();
       }
+    }
+  });
+
+  // ===== Special Requests Routes =====
+  
+  // GET /api/special-requests - List all special requests for tenant
+  app.get("/api/special-requests", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { status, driverId, startDate, endDate } = req.query;
+
+      let requests;
+      
+      if (status) {
+        requests = await dbStorage.getSpecialRequestsByStatus(tenantId, status as string);
+      } else if (driverId) {
+        requests = await dbStorage.getSpecialRequestsByDriver(driverId as string);
+      } else if (startDate && endDate) {
+        requests = await dbStorage.getSpecialRequestsByDateRange(
+          tenantId, 
+          parseISO(startDate as string), 
+          parseISO(endDate as string)
+        );
+      } else {
+        requests = await dbStorage.getSpecialRequestsByTenant(tenantId);
+      }
+      
+      res.json(requests);
+    } catch (error: any) {
+      console.error("Get special requests error:", error);
+      res.status(500).json({ message: "Failed to get special requests", error: error.message });
+    }
+  });
+
+  // GET /api/special-requests/:id - Get specific special request
+  app.get("/api/special-requests/:id", requireAuth, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const request = await dbStorage.getSpecialRequest(id);
+      
+      if (!request) {
+        return res.status(404).json({ message: "Special request not found" });
+      }
+      
+      // Verify tenant access
+      if (request.tenantId !== req.session.tenantId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      
+      res.json(request);
+    } catch (error: any) {
+      console.error("Get special request error:", error);
+      res.status(500).json({ message: "Failed to get special request", error: error.message });
+    }
+  });
+
+  // POST /api/special-requests - Submit new special request
+  app.post("/api/special-requests", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const userId = req.session.userId!;
+      
+      const validation = insertSpecialRequestSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({ 
+          message: "Invalid request data", 
+          errors: fromZodError(validation.error).toString() 
+        });
+      }
+      
+      const data = validation.data;
+      
+      // Verify driver belongs to tenant
+      const driver = await dbStorage.getDriver(data.driverId);
+      if (!driver || driver.tenantId !== tenantId) {
+        return res.status(403).json({ message: "Driver not found or access denied" });
+      }
+      
+      // If affectedBlockId provided, verify it exists and belongs to tenant
+      if (data.affectedBlockId) {
+        const block = await dbStorage.getBlock(data.affectedBlockId);
+        if (!block || block.tenantId !== tenantId) {
+          return res.status(403).json({ message: "Block not found or access denied" });
+        }
+      }
+      
+      // Create special request with pending status
+      const newRequest = await dbStorage.createSpecialRequest({
+        ...data,
+        tenantId,
+        status: "pending",
+      });
+      
+      res.json(newRequest);
+    } catch (error: any) {
+      console.error("Create special request error:", error);
+      res.status(500).json({ message: "Failed to create special request", error: error.message });
+    }
+  });
+
+  // PATCH /api/special-requests/:id/approve - Approve special request
+  app.patch("/api/special-requests/:id/approve", requireAuth, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const userId = req.session.userId!;
+      const tenantId = req.session.tenantId!;
+      
+      const request = await dbStorage.getSpecialRequest(id);
+      if (!request) {
+        return res.status(404).json({ message: "Special request not found" });
+      }
+      
+      if (request.tenantId !== tenantId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      
+      if (request.status !== "pending") {
+        return res.status(400).json({ message: "Only pending requests can be approved" });
+      }
+      
+      // Update request status
+      const updated = await dbStorage.updateSpecialRequest(id, {
+        status: "approved",
+        reviewedAt: new Date(),
+        reviewedBy: userId,
+        notes: req.body.notes || request.notes,
+        swapCandidateId: req.body.swapCandidateId || request.swapCandidateId,
+      });
+      
+      res.json(updated);
+    } catch (error: any) {
+      console.error("Approve special request error:", error);
+      res.status(500).json({ message: "Failed to approve special request", error: error.message });
+    }
+  });
+
+  // PATCH /api/special-requests/:id/reject - Reject special request
+  app.patch("/api/special-requests/:id/reject", requireAuth, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const userId = req.session.userId!;
+      const tenantId = req.session.tenantId!;
+      
+      const request = await dbStorage.getSpecialRequest(id);
+      if (!request) {
+        return res.status(404).json({ message: "Special request not found" });
+      }
+      
+      if (request.tenantId !== tenantId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      
+      if (request.status !== "pending") {
+        return res.status(400).json({ message: "Only pending requests can be rejected" });
+      }
+      
+      // Update request status
+      const updated = await dbStorage.updateSpecialRequest(id, {
+        status: "rejected",
+        reviewedAt: new Date(),
+        reviewedBy: userId,
+        notes: req.body.notes || request.notes,
+      });
+      
+      res.json(updated);
+    } catch (error: any) {
+      console.error("Reject special request error:", error);
+      res.status(500).json({ message: "Failed to reject special request", error: error.message });
+    }
+  });
+
+  // GET /api/swap-candidates/:blockId - Find eligible swap candidates for a block
+  app.get("/api/swap-candidates/:blockId", requireAuth, async (req, res) => {
+    try {
+      const { blockId } = req.params;
+      const tenantId = req.session.tenantId!;
+      
+      const block = await dbStorage.getBlock(blockId);
+      if (!block) {
+        return res.status(404).json({ message: "Block not found" });
+      }
+      
+      if (block.tenantId !== tenantId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      
+      // Get all drivers for tenant
+      const drivers = await dbStorage.getDriversByTenant(tenantId);
+      
+      // Get all assignments with blocks for compliance checking
+      const allAssignments = await dbStorage.getBlockAssignmentsByTenant(tenantId);
+      const assignmentsWithBlocks = await Promise.all(
+        allAssignments.map(async (assignment) => {
+          const assignmentBlock = await dbStorage.getBlock(assignment.blockId);
+          return { ...assignment, block: assignmentBlock! };
+        })
+      );
+      
+      // Get protected rules
+      const protectedRules = await dbStorage.getProtectedDriverRulesByTenant(tenantId);
+      
+      // Find swap candidates
+      const candidates = await findSwapCandidates(
+        block,
+        drivers,
+        assignmentsWithBlocks,
+        protectedRules
+      );
+      
+      res.json(candidates);
+    } catch (error: any) {
+      console.error("Find swap candidates error:", error);
+      res.status(500).json({ message: "Failed to find swap candidates", error: error.message });
+    }
+  });
+
+  // GET /api/workload-summary - Get workload summary for all drivers for a specific week
+  app.get("/api/workload-summary", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { weekDate } = req.query;
+      
+      if (!weekDate) {
+        return res.status(400).json({ message: "weekDate query parameter is required" });
+      }
+      
+      const parsedDate = parseISO(weekDate as string);
+      
+      // Get all drivers for tenant
+      const drivers = await dbStorage.getDriversByTenant(tenantId);
+      
+      // Get all assignments with blocks
+      const allAssignments = await dbStorage.getBlockAssignmentsByTenant(tenantId);
+      const assignmentsWithBlocks = await Promise.all(
+        allAssignments.map(async (assignment) => {
+          const block = await dbStorage.getBlock(assignment.blockId);
+          return { ...assignment, block: block! };
+        })
+      );
+      
+      // Get workload summaries
+      const workloadSummaries = await getAllDriverWorkloads(
+        drivers,
+        parsedDate,
+        assignmentsWithBlocks
+      );
+      
+      res.json(workloadSummaries);
+    } catch (error: any) {
+      console.error("Get workload summary error:", error);
+      res.status(500).json({ message: "Failed to get workload summary", error: error.message });
     }
   });
 
