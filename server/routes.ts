@@ -583,6 +583,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           'asset id': 'truckNumber',
           'assetid': 'truckNumber',
           'asset_id': 'truckNumber',
+          'tractor': 'truckNumber',
           
           // Type mappings
           'type': 'type',
@@ -590,6 +591,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           'trucktype': 'type',
           'truck_type': 'type',
           'vehicle type': 'type',
+          'freightliner': 'type',
           
           // Make mappings
           'make': 'make',
