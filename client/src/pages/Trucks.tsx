@@ -180,6 +180,27 @@ export default function Trucks() {
     },
   });
 
+  const deleteAllTrucksMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest("DELETE", "/api/trucks");
+      return response.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/trucks"] });
+      toast({
+        title: "Success",
+        description: data.message || "All trucks deleted successfully",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: error.message || "Failed to delete all trucks",
+      });
+    },
+  });
+
   const importTrucksMutation = useMutation({
     mutationFn: async (file: File) => {
       const formData = new FormData();
@@ -359,6 +380,37 @@ export default function Trucks() {
         </div>
 
         <div className="flex gap-2">
+          {trucks.length > 0 && (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button
+                  variant="outline"
+                  disabled={deleteAllTrucksMutation.isPending}
+                  data-testid="button-delete-all-trucks"
+                >
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  {deleteAllTrucksMutation.isPending ? "Deleting..." : "Delete All"}
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete All Trucks?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This will permanently delete all {trucks.length} trucks from your fleet. This action cannot be undone.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={() => deleteAllTrucksMutation.mutate()}
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  >
+                    Delete All
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          )}
           <input
             ref={fileInputRef}
             type="file"

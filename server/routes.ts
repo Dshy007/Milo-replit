@@ -534,6 +534,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Delete all trucks for current tenant
+  app.delete("/api/trucks", requireAuth, async (req, res) => {
+    try {
+      const trucks = await dbStorage.getTrucks(req.session.tenantId!);
+      let deleteCount = 0;
+      for (const truck of trucks) {
+        await dbStorage.deleteTruck(truck.id);
+        deleteCount++;
+      }
+      res.json({ message: `Successfully deleted ${deleteCount} trucks` });
+    } catch (error: any) {
+      res.status(500).json({ message: "Failed to delete trucks", error: error.message });
+    }
+  });
+
   // Import trucks from CSV/Excel
   app.post("/api/trucks/import", requireAuth, upload.single('file'), async (req, res) => {
     try {
