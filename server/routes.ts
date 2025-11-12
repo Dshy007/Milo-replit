@@ -45,15 +45,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         pruneSessionInterval: 60 * 15, // Prune expired sessions every 15 minutes
       }),
       secret: SESSION_SECRET,
-      resave: false,
-      saveUninitialized: false,
+      resave: true, // Save session on every request (better for mobile)
+      saveUninitialized: true, // Create session even if not modified
       rolling: true, // Refresh session on every request
+      proxy: true, // Trust the reverse proxy
       cookie: {
-        secure: false, // Allow cookies over HTTP in development
-        httpOnly: true,
-        sameSite: 'lax', // Allow cookies in same-site requests
-        maxAge: 1000 * 60 * 60 * 24 * 30, // 30 days default
-        path: '/', // Cookie available for entire site
+        secure: 'auto', // Auto-detect based on connection
+        httpOnly: false, // Allow JS access for better mobile compatibility
+        sameSite: 'lax',
+        maxAge: 1000 * 60 * 60 * 24 * 30, // 30 days
+        path: '/',
       },
     })
   );
