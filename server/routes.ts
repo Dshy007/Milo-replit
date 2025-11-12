@@ -583,7 +583,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
           'asset id': 'truckNumber',
           'assetid': 'truckNumber',
           'asset_id': 'truckNumber',
-          'tractor': 'truckNumber',
           
           // Type mappings
           'type': 'type',
@@ -591,7 +590,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
           'trucktype': 'type',
           'truck_type': 'type',
           'vehicle type': 'type',
-          'freightliner': 'type',
           
           // Make mappings
           'make': 'make',
@@ -653,21 +651,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
         try {
           // Validate required fields are present
           if (!row.truckNumber) {
-            throw new Error('Missing required field: Truck Number');
+            throw new Error('Missing required field: Asset ID');
           }
           
           // Extract truck data from row using canonical keys
+          // Set complianceStatus to 'pending' for bulk imports
           const truckData = insertTruckSchema.parse({
             tenantId: req.session.tenantId,
             truckNumber: row.truckNumber,
             type: row.type || null,
             make: row.make || null,
             model: row.model || null,
-            year: row.year ? parseInt(String(row.year), 10) : new Date().getFullYear(),
+            year: row.year ? parseInt(String(row.year), 10) : null,
             vin: row.vin || null,
             licensePlate: row.licensePlate || null,
             status: row.status?.toLowerCase() || 'available',
             fuel: row.fuel || null,
+            complianceStatus: 'pending', // Bulk imports default to pending
+            usdotNumber: null,
+            gvwr: null,
+            registrationExpiry: null,
+            insuranceExpiry: null,
+            lastInspection: null,
+            nextInspection: null,
           });
 
           await dbStorage.createTruck(truckData);

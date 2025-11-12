@@ -148,21 +148,22 @@ export const trucks = pgTable("trucks", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
   truckNumber: text("truck_number").notNull(),
-  type: text("type").default(""), // tractor, trailer, van, etc.
-  make: text("make").notNull(),
-  model: text("model").notNull(),
-  year: integer("year").notNull(),
-  fuel: text("fuel").default(""), // diesel, gas, electric, hybrid
-  vin: text("vin").notNull().unique(),
-  licensePlate: text("license_plate").notNull(),
+  type: text("type"), // tractor, trailer, van, etc.
+  make: text("make"),
+  model: text("model"),
+  year: integer("year"),
+  fuel: text("fuel"), // diesel, gas, electric, hybrid
+  vin: text("vin"),
+  licensePlate: text("license_plate"),
   status: text("status").notNull().default("available"), // available, in_use, maintenance, retired
+  complianceStatus: text("compliance_status").notNull().default("pending"), // pending, complete
   lastInspection: timestamp("last_inspection"),
   nextInspection: timestamp("next_inspection"),
-  // DOT Compliance Fields
-  usdotNumber: text("usdot_number").notNull(), // Required for interstate commerce
-  gvwr: integer("gvwr").notNull(), // Gross Vehicle Weight Rating in lbs (triggers DOT if >= 10,001)
-  registrationExpiry: timestamp("registration_expiry").notNull(),
-  insuranceExpiry: timestamp("insurance_expiry").notNull(),
+  // DOT Compliance Fields - nullable to support bulk imports
+  usdotNumber: text("usdot_number"), // Required for interstate commerce when complete
+  gvwr: integer("gvwr"), // Gross Vehicle Weight Rating in lbs (triggers DOT if >= 10,001)
+  registrationExpiry: timestamp("registration_expiry"),
+  insuranceExpiry: timestamp("insurance_expiry"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -171,54 +172,81 @@ export const trucks = pgTable("trucks", {
 export const baseInsertTruckSchema = createInsertSchema(trucks, {
   lastInspection: z.coerce.date().optional().nullable(),
   nextInspection: z.coerce.date().optional().nullable(),
-  registrationExpiry: z.coerce.date(),
-  insuranceExpiry: z.coerce.date(),
+  registrationExpiry: z.coerce.date().optional().nullable(),
+  insuranceExpiry: z.coerce.date().optional().nullable(),
 }).omit({ id: true, createdAt: true, updatedAt: true });
 
-// Full validated schema with refinements - for backend validation
+// Full validated schema with conditional validation based on complianceStatus
 export const insertTruckSchema = baseInsertTruckSchema
+.refine((data) => {
+  // If complianceStatus is 'complete', require core fields
+  if (data.complianceStatus === 'complete') {
+    return !!(data.make && data.model && data.year && data.vin && data.licensePlate);
+  }
+  return true;
+}, {
+  message: "Complete compliance requires: make, model, year, VIN, and license plate",
+  path: ["complianceStatus"],
+})
+.refine((data) => {
+  // If complianceStatus is 'complete', require DOT fields
+  if (data.complianceStatus === 'complete') {
+    return !!(data.usdotNumber && data.gvwr && data.registrationExpiry && data.insuranceExpiry);
+  }
+  return true;
+}, {
+  message: "Complete compliance requires: USDOT number, GVWR, registration expiry, and insurance expiry",
+  path: ["complianceStatus"],
+})
 .refine((data) => {
   // Validate both inspection dates are provided or neither
   const hasLast = data.lastInspection !== undefined && data.lastInspection !== null;
   const hasNext = data.nextInspection !== undefined && data.nextInspection !== null;
   
   if (hasLast !== hasNext) {
-    return false; // Both must be provided or both omitted
+    return false;
   }
   
   // If both provided, validate chronological order and 12-month requirement
   if (hasLast && hasNext) {
-    // Next must be after last
     if (data.nextInspection! <= data.lastInspection!) {
       return false;
     }
-    // Next must be within 12 calendar months of last (handles leap years)
     const limit = addYears(data.lastInspection!, 1);
     return !isAfter(data.nextInspection!, limit);
   }
   
   return true;
 }, {
-  message: "Inspection dates must both be provided, in chronological order, and next inspection within 12 months of last (DOT requirement)",
+  message: "Inspection dates must both be provided, in chronological order, and next inspection within 12 months of last",
   path: ["nextInspection"],
 })
 .refine((data) => {
-  // Validate registration is not expired
-  return data.registrationExpiry > new Date();
+  // Validate registration is not expired (only if provided)
+  if (data.registrationExpiry) {
+    return data.registrationExpiry > new Date();
+  }
+  return true;
 }, {
   message: "Vehicle registration must not be expired",
   path: ["registrationExpiry"],
 })
 .refine((data) => {
-  // Validate insurance is not expired
-  return data.insuranceExpiry > new Date();
+  // Validate insurance is not expired (only if provided)
+  if (data.insuranceExpiry) {
+    return data.insuranceExpiry > new Date();
+  }
+  return true;
 }, {
   message: "Vehicle insurance must not be expired",
   path: ["insuranceExpiry"],
 })
 .refine((data) => {
-  // Validate GVWR is within DOT threshold (10,001+ lbs requires DOT compliance)
-  return data.gvwr >= 10001;
+  // Validate GVWR is within DOT threshold (only if provided)
+  if (data.gvwr !== null && data.gvwr !== undefined) {
+    return data.gvwr >= 10001;
+  }
+  return true;
 }, {
   message: "GVWR must be at least 10,001 lbs for DOT compliance tracking",
   path: ["gvwr"],
