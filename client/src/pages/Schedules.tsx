@@ -15,7 +15,7 @@ type BlockWithAssignment = Block & {
   assignment?: BlockAssignment & { driver?: Driver };
 };
 
-type ViewMode = "week" | "month";
+type ViewMode = "week" | "month" | "tally";
 type SoloTypeFilter = "all" | "solo1" | "solo2" | "team";
 type StatusFilter = "all" | "valid" | "warning" | "violation" | "unassigned";
 
@@ -42,6 +42,37 @@ export default function Schedules() {
   // Fetch drivers for filters
   const { data: drivers = [] } = useQuery<Driver[]>({
     queryKey: ["/api/drivers"],
+  });
+
+  // Calculate tally date range (6 weeks from current week)
+  const tallyDateRange = useMemo(() => {
+    const start = startOfWeek(currentDate, { weekStartsOn: 0 });
+    const end = addWeeks(start, 5); // Current week + 5 more = 6 weeks total
+    return { start, end };
+  }, [currentDate]);
+
+  // Fetch workload summaries for tally view (only when in tally mode)
+  const { data: workloadData = [] } = useQuery<Array<{
+    driverId: string;
+    driverName: string;
+    weekStartIso: string;
+    daysWorked: number;
+    workloadLevel: string;
+    totalHours: number;
+    blockIds: string[];
+  }>>({
+    queryKey: ["/api/workload-summary/range", { 
+      start: format(tallyDateRange.start, "yyyy-MM-dd"), 
+      end: format(tallyDateRange.end, "yyyy-MM-dd") 
+    }],
+    enabled: viewMode === "tally",
+  });
+
+  // Fetch approved special requests for tally view (only when in tally mode)
+  const { data: approvedRequests = [] } = useQuery<Array<any>>({
+    queryKey: ["/api/special-requests", "approved"],
+    enabled: viewMode === "tally",
+    select: (data: any[]) => data.filter((r: any) => r.status === "approved"),
   });
 
   // Combine blocks with their assignments
@@ -228,7 +259,7 @@ export default function Schedules() {
               variant={viewMode === "week" ? "secondary" : "ghost"}
               size="sm"
               onClick={() => setViewMode("week")}
-              className="rounded-r-none"
+              className="rounded-none rounded-l-md"
               data-testid="button-week-view"
             >
               Week
@@ -237,10 +268,19 @@ export default function Schedules() {
               variant={viewMode === "month" ? "secondary" : "ghost"}
               size="sm"
               onClick={() => setViewMode("month")}
-              className="rounded-l-none"
+              className="rounded-none border-x-0"
               data-testid="button-month-view"
             >
               Month
+            </Button>
+            <Button
+              variant={viewMode === "tally" ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => setViewMode("tally")}
+              className="rounded-none rounded-r-md"
+              data-testid="button-tally-view"
+            >
+              Tally
             </Button>
           </div>
 
@@ -377,9 +417,10 @@ export default function Schedules() {
         </div>
       </div>
 
-      {/* Calendar Grid */}
-      <div className="flex-1 overflow-auto">
-        <div className={`grid ${viewMode === "week" ? "grid-cols-7" : "grid-cols-7"} gap-2`}>
+      {/* Calendar Grid (Week / Month views) */}
+      {(viewMode === "week" || viewMode === "month") && (
+        <div className="flex-1 overflow-auto">
+          <div className={`grid ${viewMode === "week" ? "grid-cols-7" : "grid-cols-7"} gap-2`}>
           {/* Day Headers - Fixed weekday order */}
           {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day, idx) => (
             <div
@@ -452,8 +493,140 @@ export default function Schedules() {
               </Card>
             );
           })}
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* Tally View (Workload Tally) */}
+      {viewMode === "tally" && (() => {
+        // Calculate weeks array (6 weeks)
+        const weeks: Date[] = [];
+        for (let i = 0; i < 6; i++) {
+          weeks.push(addWeeks(tallyDateRange.start, i));
+        }
+        
+        // Create workload lookup map: [driverId][weekStartIso] => workloadData
+        const workloadMap: Record<string, Record<string, typeof workloadData[0]>> = {};
+        workloadData.forEach(w => {
+          if (!workloadMap[w.driverId]) workloadMap[w.driverId] = {};
+          workloadMap[w.driverId][w.weekStartIso] = w;
+        });
+        
+        // Create PTO lookup map: [driverId][weekStartIso] => approved requests
+        const ptoMap: Record<string, Record<string, number>> = {};
+        approvedRequests.forEach((req: any) => {
+          const weekStart = startOfWeek(new Date(req.affectedDate), { weekStartsOn: 0 });
+          const weekKey = format(weekStart, "yyyy-MM-dd");
+          if (!ptoMap[req.driverId]) ptoMap[req.driverId] = {};
+          ptoMap[req.driverId][weekKey] = (ptoMap[req.driverId][weekKey] || 0) + 1;
+        });
+        
+        // Helper to get workload color classes
+        const getWorkloadColorClasses = (level: string) => {
+          switch (level) {
+            case "ideal": return "bg-green-500/10 border-green-500 text-green-700 dark:text-green-400";
+            case "warning": return "bg-yellow-500/10 border-yellow-500 text-yellow-700 dark:text-yellow-400";
+            case "critical": return "bg-red-500/10 border-red-500 text-red-700 dark:text-red-400";
+            case "underutilized": return "bg-blue-500/10 border-blue-500 text-blue-700 dark:text-blue-400";
+            default: return "bg-muted border-border text-muted-foreground";
+          }
+        };
+        
+        return (
+          <div className="flex-1 overflow-auto">
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse">
+                <thead>
+                  <tr>
+                    <th className="sticky left-0 z-10 bg-background border-b border-r p-3 text-left font-semibold text-sm min-w-48">
+                      Driver
+                    </th>
+                    {weeks.map((week, idx) => (
+                      <th key={idx} className="border-b p-3 text-center font-semibold text-sm min-w-32">
+                        <div>{format(week, "MMM d")}</div>
+                        <div className="text-xs text-muted-foreground font-normal">
+                          {format(week, "yyyy")}
+                        </div>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {drivers
+                    .filter(d => d.status === "active")
+                    .map(driver => (
+                    <tr key={driver.id}>
+                      <td className="sticky left-0 z-10 bg-background border-b border-r p-3 font-medium text-sm">
+                        {driver.firstName} {driver.lastName}
+                      </td>
+                      {weeks.map((week, weekIdx) => {
+                        const weekKey = format(week, "yyyy-MM-dd");
+                        const workload = workloadMap[driver.id]?.[weekKey];
+                        const ptoCount = ptoMap[driver.id]?.[weekKey] || 0;
+                        
+                        return (
+                          <td
+                            key={weekIdx}
+                            className="border-b p-2"
+                            data-testid={`cell-driver-${driver.id}-week-${weekKey}`}
+                          >
+                            {workload ? (
+                              <div className={`p-3 rounded-md border text-center ${getWorkloadColorClasses(workload.workloadLevel)}`}>
+                                <div className="text-lg font-bold">{workload.daysWorked}</div>
+                                <div className="text-xs opacity-80">
+                                  {workload.daysWorked === 1 ? "day" : "days"}
+                                </div>
+                                <div className="text-xs mt-1 opacity-70">
+                                  {workload.totalHours}h
+                                </div>
+                                {ptoCount > 0 && (
+                                  <Badge variant="outline" className="mt-1 text-xs">
+                                    {ptoCount} PTO
+                                  </Badge>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="p-3 rounded-md border bg-muted/30 text-center text-muted-foreground">
+                                <div className="text-lg font-bold">0</div>
+                                <div className="text-xs">days</div>
+                                {ptoCount > 0 && (
+                                  <Badge variant="outline" className="mt-1 text-xs">
+                                    {ptoCount} PTO
+                                  </Badge>
+                                )}
+                              </div>
+                            )}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            
+            {/* Legend */}
+            <div className="mt-4 flex items-center gap-6 text-sm p-4 border-t">
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 rounded border bg-blue-500/10 border-blue-500"></div>
+                <span className="text-muted-foreground">Underutilized (&lt;4 days)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 rounded border bg-green-500/10 border-green-500"></div>
+                <span className="text-muted-foreground">Ideal (4 days)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 rounded border bg-yellow-500/10 border-yellow-500"></div>
+                <span className="text-muted-foreground">Warning (5 days)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 rounded border bg-red-500/10 border-red-500"></div>
+                <span className="text-muted-foreground">Critical (6+ days)</span>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Block Detail Modal */}
       <Dialog open={!!selectedBlock} onOpenChange={(open) => !open && setSelectedBlock(null)}>

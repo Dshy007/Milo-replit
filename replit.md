@@ -10,6 +10,58 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes
 
+### Phase 1: Special Requests System (November 12, 2025)
+
+**Completed**: Full Special Requests workflow with workload tracking, swap candidate finding, and manual approval system.
+
+**Key Features Implemented (Tasks 1-5)**:
+- Database Schema: `special_requests` table with requestType ('time_off' | 'swap'), driver, affectedDate, affectedBlockId, reason, status (pending/approved/rejected), swap candidate tracking, review audit trail
+- Workload Calculator: Tracks days worked per week (Sunday-Saturday), calculates total hours, determines workload levels (ideal=4 days, warning=5, critical=6+, underutilized<4)
+- Swap Candidate Finder: Validates rolling-6 compliance, checks protected driver rules, ranks candidates by compliance status → workload level → days worked
+- API Routes: POST /api/special-requests (submit), GET /api/special-requests (list with filters), PATCH approve/reject, GET /api/swap-candidates/:blockId, GET /api/workload-summary
+- Special Requests UI: Tabbed view (Pending/Approved/Rejected), submission form (time_off/swap types), manual approve/reject buttons, swap candidates dialog with compliance + workload badges
+
+**Critical Bug Fixes**:
+- Fixed parseISO bug: Drizzle returns Date objects, not strings. Replaced `parseISO(block.startTimestamp)` with `new Date(block.startTimestamp)` throughout workload-calculator.ts
+- Fixed tenantId validation: Backend now adds tenantId from session before validation (not passed from client)
+
+**Architecture Decisions**:
+- Workload tracking uses Sunday-Saturday week boundaries (DOT compliance standard)
+- Protected driver rules: Never reassign blocks for Isaac Kiragu (Fridays), Firas IMAD Tahseen (Sat/Sun/Mon Solo1 @ 16:30), Tareef THAMER Mahdi (Sat/Sun Solo1 @ 17:30)
+- Load balancing color system: 4 days/week = ideal (green), 5 days = overtime warning (yellow), 6 days = critical overload (red)
+- Swap candidate ranking: Compliance status first (compliant > warning), then workload level (underutilized > ideal > warning > critical), then days worked (fewer is better)
+- Manual approval required: Cannot auto-approve special requests due to compliance complexity
+
+**Testing Coverage**:
+- End-to-end test verified: Submit request → Pending tab → Approve/Reject workflow → Status updates → Correct tab navigation
+- Test data: Created time-off requests, verified approval moves to Approved tab, rejection moves to Rejected tab
+- Verified UI badges: Time Off/Swap type badges, Pending/Approved/Rejected status badges
+- Server logs confirmed: POST 200, PATCH 200 for approve/reject operations
+
+**Files Created**:
+- server/workload-calculator.ts: Days worked calculator, hours worked calculator, workload summary, swap candidate finder
+- client/src/pages/SpecialRequests.tsx: Full UI with tabs, submission form, approve/reject workflow
+
+**Files Modified**:
+- shared/schema.ts: Added special_requests table with check constraints for requestType and status
+- server/storage.ts: Added IStorage methods for special requests CRUD
+- server/db-storage.ts: Implemented special requests storage methods
+- server/routes.ts: Added 6 API routes for special requests workflow
+
+**Next Steps (Phase 1 Remaining)**:
+- Task 6: Weekly Availability Tally UI (4-8 week rolling view, color-coded workload, approved time-off markers)
+- Task 7: Integrate workload badges into Schedules calendar page
+
+**Next Steps (Phase 2)**:
+- Task 8: Pattern Learning Engine (analyze historical assignments, learn driver preferences)
+- Task 9: Auto-Build Next Week feature (pattern-based + load-balanced suggestions)
+- Task 10: Auto-Build Review UI (manual tweaks before approval)
+
+**Next Steps (Phase 3)**:
+- Task 11: Milo AI Integration (OpenAI function calling for workload queries + swap suggestions)
+- Task 12: Overtime Warnings (fairness scoring, utilization report)
+- Task 13: Comprehensive end-to-end testing across all phases
+
 ### Phase 2 Task 4 - Dashboard Sidebar Integration (November 11, 2025)
 
 **Completed**: Integrated Shadcn sidebar navigation system for authenticated routes.

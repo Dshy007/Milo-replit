@@ -20,7 +20,7 @@ import bcrypt from "bcryptjs";
 import { benchContracts } from "./seed-data";
 import multer from "multer";
 import { validateBlockAssignment, normalizeSoloType } from "./rolling6-calculator";
-import { subDays, parseISO } from "date-fns";
+import { subDays, parseISO, format, startOfWeek, addWeeks } from "date-fns";
 import { findSwapCandidates, getAllDriverWorkloads } from "./workload-calculator";
 
 // Require SESSION_SECRET
@@ -2124,7 +2124,11 @@ Be concise, professional, and helpful. Focus on trucking operations management. 
       const tenantId = req.session.tenantId!;
       const userId = req.session.userId!;
       
-      const validation = insertSpecialRequestSchema.safeParse(req.body);
+      // Add tenantId from session to request body before validation
+      const validation = insertSpecialRequestSchema.safeParse({
+        ...req.body,
+        tenantId,
+      });
       if (!validation.success) {
         return res.status(400).json({ 
           message: "Invalid request data", 
@@ -2313,6 +2317,79 @@ Be concise, professional, and helpful. Focus on trucking operations management. 
     } catch (error: any) {
       console.error("Get workload summary error:", error);
       res.status(500).json({ message: "Failed to get workload summary", error: error.message });
+    }
+  });
+
+  // GET /api/workload-summary/range - Get workload summary for date range (returns array of driver+week combinations)
+  app.get("/api/workload-summary/range", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { start, end } = req.query;
+      
+      if (!start || !end) {
+        return res.status(400).json({ message: "start and end query parameters are required (ISO date strings)" });
+      }
+      
+      const startDate = parseISO(start as string);
+      const endDate = parseISO(end as string);
+      
+      // Get all drivers for tenant
+      const drivers = await dbStorage.getDriversByTenant(tenantId);
+      
+      // Get all assignments with blocks
+      const allAssignments = await dbStorage.getBlockAssignmentsByTenant(tenantId);
+      const assignmentsWithBlocks = await Promise.all(
+        allAssignments.map(async (assignment) => {
+          const block = await dbStorage.getBlock(assignment.blockId);
+          return { ...assignment, block: block! };
+        })
+      );
+      
+      // Calculate weeks in range (start of each week from startDate to endDate)
+      const weeks: Date[] = [];
+      let currentWeek = startOfWeek(startDate, { weekStartsOn: 0 });
+      const rangeEnd = startOfWeek(endDate, { weekStartsOn: 0 });
+      
+      while (currentWeek <= rangeEnd) {
+        weeks.push(currentWeek);
+        currentWeek = addWeeks(currentWeek, 1);
+      }
+      
+      // Get workload summaries for all drivers for all weeks
+      const results: Array<{
+        driverId: string;
+        driverName: string;
+        weekStartIso: string;
+        daysWorked: number;
+        workloadLevel: string;
+        totalHours: number;
+        blockIds: string[];
+      }> = [];
+      
+      for (const weekDate of weeks) {
+        const weekSummaries = await getAllDriverWorkloads(
+          drivers,
+          weekDate,
+          assignmentsWithBlocks
+        );
+        
+        for (const summary of weekSummaries) {
+          results.push({
+            driverId: summary.driverId,
+            driverName: summary.driverName,
+            weekStartIso: format(weekDate, "yyyy-MM-dd"),
+            daysWorked: summary.daysWorked,
+            workloadLevel: summary.workloadLevel,
+            totalHours: summary.totalHours,
+            blockIds: summary.blockIds,
+          });
+        }
+      }
+      
+      res.json(results);
+    } catch (error: any) {
+      console.error("Get workload summary range error:", error);
+      res.status(500).json({ message: "Failed to get workload summary range", error: error.message });
     }
   });
 
