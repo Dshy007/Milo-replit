@@ -691,18 +691,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
           
           // Extract truck data from row using canonical keys
           // Set complianceStatus to 'pending' for bulk imports
+          // Convert all values to strings to handle numeric data
           const truckData = insertTruckSchema.parse({
             tenantId: req.session.tenantId,
-            truckNumber: row.truckNumber,
-            type: row.type || null,
-            make: row.make || null,
-            model: row.model || null,
+            truckNumber: String(row.truckNumber || ''),
+            type: row.type ? String(row.type) : null,
+            make: row.make ? String(row.make) : null,
+            model: row.model ? String(row.model) : null,
             year: row.year ? parseInt(String(row.year), 10) : null,
-            vin: row.vin || null,
-            licensePlate: row.licensePlate || null,
-            lastKnownLocation: row.lastKnownLocation || null,
-            status: row.status?.toLowerCase() || 'available',
-            fuel: row.fuel || null,
+            vin: row.vin ? String(row.vin) : null,
+            licensePlate: row.licensePlate ? String(row.licensePlate) : null,
+            lastKnownLocation: row.lastKnownLocation ? String(row.lastKnownLocation) : null,
+            status: row.status ? String(row.status).toLowerCase() : 'available',
+            fuel: row.fuel ? String(row.fuel) : null,
             complianceStatus: 'pending', // Bulk imports default to pending
             usdotNumber: null,
             gvwr: null,
