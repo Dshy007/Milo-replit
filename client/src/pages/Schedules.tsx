@@ -1,14 +1,17 @@
 import { useState, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, eachDayOfInterval, addWeeks, addMonths, subWeeks, subMonths, isSameDay, isToday, parseISO, isSameMonth } from "date-fns";
-import { Calendar, ChevronLeft, ChevronRight, Filter, User, AlertTriangle, CheckCircle2, AlertCircle } from "lucide-react";
+import { Calendar, ChevronLeft, ChevronRight, Filter, User, AlertTriangle, CheckCircle2, AlertCircle, GripVertical, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Block, BlockAssignment, Driver, Contract } from "@shared/schema";
 
 type BlockWithAssignment = Block & {
@@ -61,6 +64,11 @@ export default function Schedules() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [selectedDrivers, setSelectedDrivers] = useState<Set<string>>(new Set());
   const [showFilters, setShowFilters] = useState(false);
+  const [draggedBlock, setDraggedBlock] = useState<BlockWithAssignment | null>(null);
+  const [dragOverDriver, setDragOverDriver] = useState<string | null>(null);
+  const [validationFeedback, setValidationFeedback] = useState<{ status: string; messages: string[] } | null>(null);
+  const [reassignDriverId, setReassignDriverId] = useState<string>("");
+  const { toast } = useToast();
 
   // Calculate date range based on view mode (needed early for data fetching)
   const dateRange = useMemo(() => {
@@ -108,6 +116,104 @@ export default function Schedules() {
   // Always fetch drivers for filters dropdown
   const { data: drivers = [] } = useQuery<Driver[]>({
     queryKey: ["/api/drivers"],
+  });
+
+  // Fetch compliance heatmap data for calendar views
+  const { data: heatmapData } = useQuery<{
+    drivers: Array<{
+      id: string;
+      name: string;
+      compliance: Array<{
+        timestamp: string;
+        status: "compliant" | "warning" | "violation";
+        hoursRemaining: number;
+      }>;
+    }>;
+  }>({
+    queryKey: ["/api/compliance/heatmap", format(dateRange.start, "yyyy-MM-dd"), format(dateRange.end, "yyyy-MM-dd")],
+    queryFn: async () => {
+      const startStr = format(dateRange.start, "yyyy-MM-dd");
+      const endStr = format(dateRange.end, "yyyy-MM-dd");
+      const res = await fetch(`/api/compliance/heatmap/${startStr}/${endStr}`, {
+        credentials: "include"
+      });
+      if (!res.ok) throw new Error("Failed to fetch compliance heatmap");
+      return await res.json();
+    },
+    enabled: viewMode !== "tally",
+  });
+
+  // Update assignment mutation with cache invalidation
+  const updateAssignmentMutation = useMutation({
+    mutationFn: async ({ assignmentId, driverId }: { assignmentId: string; driverId?: string | null }) => {
+      const res = await apiRequest("PATCH", `/api/block-assignments/${assignmentId}`, {
+        driverId: driverId === null ? undefined : driverId,
+      });
+      return await res.json();
+    },
+    onSuccess: () => {
+      // Invalidate all relevant caches
+      const startDateStr = format(dateRange.start, "yyyy-MM-dd");
+      const endDateStr = format(dateRange.end, "yyyy-MM-dd");
+      
+      queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar", startDateStr, endDateStr] });
+      queryClient.invalidateQueries({ queryKey: ["/api/blocks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/block-assignments"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/workload-summary/range"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/compliance/heatmap"] });
+      
+      toast({
+        title: "Assignment updated",
+        description: "Block assignment has been updated successfully.",
+      });
+      
+      setDraggedBlock(null);
+      setDragOverDriver(null);
+      setValidationFeedback(null);
+    },
+    onError: (error: any) => {
+      const errorData = typeof error === "string" ? { message: error } : error;
+      toast({
+        title: "Assignment failed",
+        description: errorData.message || "Failed to update assignment. Please check DOT compliance rules.",
+        variant: "destructive",
+      });
+      
+      setDraggedBlock(null);
+      setDragOverDriver(null);
+      setValidationFeedback(null);
+    },
+  });
+
+  // Delete assignment mutation (for unassign)
+  const deleteAssignmentMutation = useMutation({
+    mutationFn: async (assignmentId: string) => {
+      await apiRequest("DELETE", `/api/block-assignments/${assignmentId}`, undefined);
+    },
+    onSuccess: () => {
+      const startDateStr = format(dateRange.start, "yyyy-MM-dd");
+      const endDateStr = format(dateRange.end, "yyyy-MM-dd");
+      
+      queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar", startDateStr, endDateStr] });
+      queryClient.invalidateQueries({ queryKey: ["/api/blocks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/block-assignments"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/workload-summary/range"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/compliance/heatmap"] });
+      
+      toast({
+        title: "Assignment removed",
+        description: "Block has been unassigned successfully.",
+      });
+      
+      setSelectedBlock(null);
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to unassign",
+        description: error.message || "Failed to remove assignment.",
+        variant: "destructive",
+      });
+    },
   });
 
   // Calculate tally date range (6 weeks from current week)
@@ -346,6 +452,115 @@ export default function Schedules() {
       }
       return newSet;
     });
+  };
+
+  // Drag-and-drop handlers
+  const handleDragStart = (e: React.DragEvent, block: BlockWithAssignment) => {
+    setDraggedBlock(block);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", block.id);
+  };
+
+  const handleDragOver = (e: React.DragEvent, driverId?: string) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setDragOverDriver(driverId || null);
+  };
+
+  const handleDragEnd = () => {
+    setDraggedBlock(null);
+    setDragOverDriver(null);
+  };
+
+  const handleDrop = (e: React.DragEvent, targetDriverId?: string) => {
+    e.preventDefault();
+    
+    if (!draggedBlock?.assignment) {
+      toast({
+        title: "Cannot reassign",
+        description: "Block must have an existing assignment to move it.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // If dropping on same driver, do nothing
+    if (targetDriverId === draggedBlock.assignment.driverId) {
+      setDraggedBlock(null);
+      setDragOverDriver(null);
+      return;
+    }
+
+    // Update assignment
+    updateAssignmentMutation.mutate({
+      assignmentId: draggedBlock.assignment.id,
+      driverId: targetDriverId || null,
+    });
+  };
+
+  const handleUnassign = () => {
+    if (!selectedBlock?.assignment) return;
+    
+    deleteAssignmentMutation.mutate(selectedBlock.assignment.id);
+  };
+
+  const handleReassign = (newDriverId: string) => {
+    if (!selectedBlock?.assignment) return;
+    
+    updateAssignmentMutation.mutate({
+      assignmentId: selectedBlock.assignment.id,
+      driverId: newDriverId,
+    });
+  };
+
+  // Memoized compliance lookup map - nested structure to avoid UUID delimiter issues
+  const complianceMap = useMemo(() => {
+    if (!heatmapData) return new Map<string, Map<string, { status: string; hoursRemaining: number }>>();
+    
+    const map = new Map<string, Map<string, { status: string; hoursRemaining: number }>>();
+    
+    heatmapData.drivers.forEach(driver => {
+      const driverMap = new Map<string, { status: string; hoursRemaining: number }>();
+      driver.compliance.forEach(c => {
+        const timestamp = new Date(c.timestamp).toISOString();
+        driverMap.set(timestamp, { status: c.status, hoursRemaining: c.hoursRemaining });
+      });
+      map.set(driver.id, driverMap);
+    });
+    
+    return map;
+  }, [heatmapData]);
+
+  // Get compliance status for a block (memoized lookup)
+  const getBlockCompliance = (block: BlockWithAssignment) => {
+    if (!block.assignment?.driver) return null;
+    
+    const blockTime = new Date(block.startTimestamp);
+    const driverId = block.assignment.driverId;
+    
+    const driverCompliance = complianceMap.get(driverId);
+    if (!driverCompliance) return null;
+    
+    // Try to find exact match first
+    const exactMatch = driverCompliance.get(blockTime.toISOString());
+    if (exactMatch) {
+      return exactMatch;
+    }
+    
+    // Find closest compliance timestamp within 1 hour
+    let closest: { timestamp: string; diff: number; value: { status: string; hoursRemaining: number } } | null = null;
+    driverCompliance.forEach((value, timestamp) => {
+      const complianceTime = new Date(timestamp);
+      const diff = Math.abs(complianceTime.getTime() - blockTime.getTime());
+      
+      if (diff < 1000 * 60 * 60) { // Within 1 hour
+        if (!closest || diff < closest.diff) {
+          closest = { timestamp, diff, value };
+        }
+      }
+    });
+    
+    return closest ? closest.value : null;
   };
 
   return (
@@ -589,12 +804,30 @@ export default function Schedules() {
                       ? getDriverWorkload(block.assignment.driverId, day)
                       : null;
                     const isCritical = driverWorkload && driverWorkload.daysWorked >= 6;
+                    
+                    // Get compliance status
+                    const compliance = getBlockCompliance(block);
+                    const hasComplianceWarning = compliance && compliance.status !== "compliant";
+                    const isDragging = draggedBlock?.id === block.id;
+                    
+                    // Determine border styling based on criticality and compliance
+                    let borderClass = "border";
+                    if (isCritical) {
+                      borderClass = "border-2 border-red-500";
+                    } else if (hasComplianceWarning && compliance?.status === "violation") {
+                      borderClass = "border-2 border-red-500";
+                    } else if (hasComplianceWarning && compliance?.status === "warning") {
+                      borderClass = "border-2 border-yellow-500";
+                    }
 
                     return (
-                      <button
+                      <div
                         key={block.id}
+                        draggable={!!block.assignment}
+                        onDragStart={(e) => block.assignment && handleDragStart(e, block)}
+                        onDragEnd={handleDragEnd}
                         onClick={() => setSelectedBlock(block)}
-                        className={`w-full text-left p-2 rounded text-xs hover-elevate transition-all ${getSoloTypeColor(block.soloType)} ${isCritical ? "border-2 border-red-500" : "border"}`}
+                        className={`w-full text-left p-2 rounded text-xs hover-elevate transition-all cursor-pointer ${getSoloTypeColor(block.soloType)} ${borderClass} ${isDragging ? "opacity-50" : ""} ${!block.assignment ? "cursor-default" : "cursor-grab active:cursor-grabbing"}`}
                         data-testid={`block-${block.id}`}
                       >
                         <div className="flex items-center justify-between gap-1 mb-1">
@@ -623,7 +856,7 @@ export default function Schedules() {
                             )}
                           </div>
                         )}
-                      </button>
+                      </div>
                     );
                   })}
                   {dayBlocks.length > 5 && (
@@ -826,6 +1059,31 @@ export default function Schedules() {
                 </div>
               </div>
 
+              {/* Contract Details */}
+              {selectedBlock.contract && (
+                <div className="border-t pt-4">
+                  <h3 className="font-semibold mb-3">Contract Details</h3>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <Label className="text-muted-foreground">Bench Type</Label>
+                      <div className="font-medium capitalize">{selectedBlock.contract.type}</div>
+                    </div>
+                    <div>
+                      <Label className="text-muted-foreground">Standard Start</Label>
+                      <div className="font-medium">{selectedBlock.contract.startTime}</div>
+                    </div>
+                    {selectedBlock.contract.protectedDrivers && (
+                      <div className="col-span-2">
+                        <Badge variant="outline" className="text-yellow-700 dark:text-yellow-400 border-yellow-500">
+                          <AlertTriangle className="w-3 h-3 mr-1" />
+                          Protected Driver Rules Active
+                        </Badge>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* Assignment Info */}
               {selectedBlock.assignment ? (
                 <div className="border-t pt-4 space-y-4">
@@ -864,17 +1122,67 @@ export default function Schedules() {
                     </div>
                   </div>
 
-                  {/* Validation Summary */}
-                  {selectedBlock.assignment.validationSummary && (
-                    <div>
-                      <Label className="text-muted-foreground">Compliance Summary</Label>
-                      <div className="mt-2 p-3 bg-muted/50 rounded-md text-sm">
-                        <pre className="whitespace-pre-wrap font-mono text-xs">
-                          {JSON.stringify(JSON.parse(selectedBlock.assignment.validationSummary), null, 2)}
-                        </pre>
+                  {/* Validation Summary - User Friendly */}
+                  {selectedBlock.assignment.validationSummary && (() => {
+                    const summary = JSON.parse(selectedBlock.assignment.validationSummary);
+                    const compliance = getBlockCompliance(selectedBlock);
+                    
+                    return (
+                      <div>
+                        <Label className="text-muted-foreground">DOT Compliance Summary</Label>
+                        <div className="mt-2 p-4 bg-muted/50 rounded-md space-y-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-medium">Status</span>
+                            <Badge
+                              variant={
+                                summary.status === "valid"
+                                  ? "default"
+                                  : summary.status === "warning"
+                                  ? "secondary"
+                                  : "destructive"
+                              }
+                            >
+                              {summary.status}
+                            </Badge>
+                          </div>
+                          
+                          {compliance && (
+                            <div className="flex items-center justify-between text-sm">
+                              <span>Hours Remaining</span>
+                              <span className="font-medium">
+                                {compliance.hoursRemaining.toFixed(1)}h
+                              </span>
+                            </div>
+                          )}
+                          
+                          {summary.metrics && (
+                            <div className="space-y-2">
+                              <div className="text-sm font-medium">Utilization Metrics</div>
+                              <div className="text-xs space-y-1 text-muted-foreground">
+                                {Object.entries(summary.metrics).map(([key, value]: [string, any]) => (
+                                  <div key={key} className="flex justify-between">
+                                    <span className="capitalize">{key.replace(/([A-Z])/g, ' $1').trim()}</span>
+                                    <span className="font-mono">{typeof value === 'number' ? value.toFixed(1) : value}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          
+                          {summary.messages && summary.messages.length > 0 && (
+                            <div className="space-y-2">
+                              <div className="text-sm font-medium">Compliance Notes</div>
+                              <ul className="text-xs space-y-1 list-disc list-inside text-muted-foreground">
+                                {summary.messages.map((msg: string, idx: number) => (
+                                  <li key={idx}>{msg}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    );
+                  })()}
 
                   {selectedBlock.assignment.notes && (
                     <div>
@@ -882,6 +1190,35 @@ export default function Schedules() {
                       <div className="mt-1 text-sm">{selectedBlock.assignment.notes}</div>
                     </div>
                   )}
+
+                  {/* Driver Reassignment */}
+                  <div className="border-t pt-4">
+                    <Label className="text-muted-foreground mb-2 block">Reassign Driver</Label>
+                    <div className="flex gap-2">
+                      <Select 
+                        value={reassignDriverId || (selectedBlock.assignment?.driverId || "")} 
+                        onValueChange={setReassignDriverId}
+                      >
+                        <SelectTrigger data-testid="select-reassign-driver">
+                          <SelectValue placeholder="Select driver" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {drivers.map(driver => (
+                            <SelectItem key={driver.id} value={driver.id}>
+                              {driver.firstName} {driver.lastName}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Button
+                        onClick={() => handleReassign(reassignDriverId || (selectedBlock.assignment?.driverId || ""))}
+                        disabled={!reassignDriverId || reassignDriverId === (selectedBlock.assignment?.driverId || "") || updateAssignmentMutation.isPending}
+                        data-testid="button-reassign-driver"
+                      >
+                        {updateAssignmentMutation.isPending ? "Reassigning..." : "Reassign"}
+                      </Button>
+                    </div>
+                  </div>
                 </div>
               ) : (
                 <div className="border-t pt-4">
@@ -889,6 +1226,43 @@ export default function Schedules() {
                 </div>
               )}
             </div>
+          )}
+
+          {/* Modal Footer with Unassign Button */}
+          {selectedBlock?.assignment && (
+            <DialogFooter>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="destructive" data-testid="button-unassign">
+                    <X className="w-4 h-4 mr-2" />
+                    Unassign Driver
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Confirm Unassignment</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Are you sure you want to unassign{" "}
+                      <span className="font-medium">
+                        {selectedBlock.assignment.driver
+                          ? `${selectedBlock.assignment.driver.firstName} ${selectedBlock.assignment.driver.lastName}`
+                          : "this driver"}
+                      </span>{" "}
+                      from block {selectedBlock.blockId}? This action cannot be undone.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={handleUnassign}
+                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                    >
+                      Unassign
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </DialogFooter>
           )}
         </DialogContent>
       </Dialog>
