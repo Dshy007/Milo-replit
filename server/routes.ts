@@ -409,6 +409,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         parsedData = parseResult.data;
       }
 
+      // Log the headers we found for debugging
+      if (parsedData.length > 0) {
+        const sampleRow = parsedData[0];
+        console.log('CSV Headers found:', Object.keys(sampleRow));
+        console.log('Sample row data:', JSON.stringify(sampleRow, null, 2));
+      }
+
       const errors: Array<{ row: number; error: string }> = [];
       const imported: any[] = [];
 
