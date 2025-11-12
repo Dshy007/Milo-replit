@@ -233,6 +233,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ==================== COMPLIANCE ====================
+
+  // GET /api/compliance/heatmap - Get compliance heatmap data
+  app.get("/api/compliance/heatmap", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { startDate, endDate } = req.query;
+
+      // Validate query params
+      if (!startDate || !endDate) {
+        return res.status(400).json({ 
+          message: "startDate and endDate query parameters are required (YYYY-MM-DD format)" 
+        });
+      }
+
+      // Import and call the heatmap generator
+      const { generateComplianceHeatmap } = await import("./compliance-heatmap");
+      const heatmapData = await generateComplianceHeatmap(
+        tenantId,
+        startDate as string,
+        endDate as string
+      );
+
+      res.json(heatmapData);
+    } catch (error: any) {
+      console.error("Compliance heatmap error:", error);
+      res.status(500).json({ 
+        message: "Failed to generate compliance heatmap", 
+        error: error.message 
+      });
+    }
+  });
+
   // ==================== DRIVERS ====================
   
   app.get("/api/drivers", requireAuth, async (req, res) => {
