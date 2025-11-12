@@ -327,10 +327,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           'lastname': 'lastName',
           'phone': 'phoneNumber',
           'phone number': 'phoneNumber',
+          'phonenumber': 'phoneNumber', // Fix: no space
           'mobile': 'phoneNumber',
           'mobile phone': 'phoneNumber',
           'mobile phone number': 'phoneNumber',
           'email': 'email',
+          'email address': 'email', // Fix: with space
+          'emailaddress': 'email',
           'domicile': 'domicile',
           'domiciles': 'domicile',
           'license': 'licenseNumber',

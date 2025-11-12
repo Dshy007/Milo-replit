@@ -329,6 +329,7 @@ export default function Drivers() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Driver</TableHead>
+                    <TableHead>Email</TableHead>
                     <TableHead>Domiciles</TableHead>
                     <TableHead>Mobile phone number</TableHead>
                     <TableHead>Load eligibility</TableHead>
@@ -343,9 +344,6 @@ export default function Drivers() {
                           <div className="font-medium">
                             {driver.firstName} {driver.lastName}
                           </div>
-                          {driver.email && (
-                            <div className="text-sm text-muted-foreground">{driver.email}</div>
-                          )}
                           {driver.profileVerified && (
                             <div className="flex items-center gap-1 text-sm text-green-600">
                               <CheckCircle className="h-3 w-3" />
@@ -353,6 +351,9 @@ export default function Drivers() {
                             </div>
                           )}
                         </div>
+                      </TableCell>
+                      <TableCell>
+                        {driver.email || <span className="text-muted-foreground">—</span>}
                       </TableCell>
                       <TableCell>
                         {driver.domicile ? (
