@@ -55,7 +55,7 @@ export interface IStorage {
   // Schedules
   getSchedule(id: string): Promise<Schedule | undefined>;
   getSchedulesByTenant(tenantId: string): Promise<Schedule[]>;
-  getSchedulesByDriver(driverId: string): Promise<Schedule[]>;
+  getSchedulesByDriver(driverId: string, tenantId: string): Promise<Schedule[]>;
   createSchedule(schedule: InsertSchedule): Promise<Schedule>;
   updateSchedule(id: string, schedule: Partial<InsertSchedule>): Promise<Schedule | undefined>;
   deleteSchedule(id: string): Promise<boolean>;
@@ -73,6 +73,7 @@ export interface IStorage {
   getBlocksByTenant(tenantId: string): Promise<Block[]>;
   getBlocksByContract(contractId: string): Promise<Block[]>;
   getBlocksByDateRange(tenantId: string, startDate: Date, endDate: Date): Promise<Block[]>;
+  getBlocksByDateRangeOverlapping(tenantId: string, startDate: Date, endDate: Date): Promise<Block[]>;
   createBlock(block: InsertBlock): Promise<Block>;
   updateBlock(id: string, block: Partial<InsertBlock>): Promise<Block | undefined>;
   deleteBlock(id: string): Promise<boolean>;
@@ -341,9 +342,9 @@ export class MemStorage implements IStorage {
     );
   }
 
-  async getSchedulesByDriver(driverId: string): Promise<Schedule[]> {
+  async getSchedulesByDriver(driverId: string, tenantId: string): Promise<Schedule[]> {
     return Array.from(this.schedules.values()).filter(
-      (schedule) => schedule.driverId === driverId
+      (schedule) => schedule.driverId === driverId && schedule.tenantId === tenantId
     );
   }
 
@@ -446,8 +447,18 @@ export class MemStorage implements IStorage {
     return Array.from(this.blocks.values()).filter(
       (block) => 
         block.tenantId === tenantId &&
-        block.startDate >= startDate &&
-        block.startDate <= endDate
+        block.startTimestamp >= startDate &&
+        block.startTimestamp <= endDate
+    );
+  }
+
+  async getBlocksByDateRangeOverlapping(tenantId: string, startDate: Date, endDate: Date): Promise<Block[]> {
+    // A block overlaps if: blockStart <= rangeEnd AND blockEnd >= rangeStart
+    return Array.from(this.blocks.values()).filter(
+      (block) =>
+        block.tenantId === tenantId &&
+        block.startTimestamp <= endDate &&
+        block.endTimestamp >= startDate
     );
   }
 

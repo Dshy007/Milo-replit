@@ -156,8 +156,9 @@ export class DbStorage implements IStorage {
     return await db.select().from(schedules).where(eq(schedules.tenantId, tenantId));
   }
 
-  async getSchedulesByDriver(driverId: string): Promise<Schedule[]> {
-    return await db.select().from(schedules).where(eq(schedules.driverId, driverId));
+  async getSchedulesByDriver(driverId: string, tenantId: string): Promise<Schedule[]> {
+    return await db.select().from(schedules)
+      .where(and(eq(schedules.driverId, driverId), eq(schedules.tenantId, tenantId)));
   }
 
   async createSchedule(insertSchedule: InsertSchedule): Promise<Schedule> {
@@ -228,6 +229,18 @@ export class DbStorage implements IStorage {
           eq(blocks.tenantId, tenantId),
           gte(blocks.startTimestamp, startDate),
           lte(blocks.startTimestamp, endDate)
+        )
+      );
+  }
+
+  async getBlocksByDateRangeOverlapping(tenantId: string, startDate: Date, endDate: Date): Promise<Block[]> {
+    // A block overlaps if: blockStart <= rangeEnd AND blockEnd >= rangeStart
+    return await db.select().from(blocks)
+      .where(
+        and(
+          eq(blocks.tenantId, tenantId),
+          lte(blocks.startTimestamp, endDate),
+          gte(blocks.endTimestamp, startDate)
         )
       );
   }

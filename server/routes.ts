@@ -2225,24 +2225,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const user = await dbStorage.getUser(req.session.userId!);
       const tenant = user?.tenantId ? await dbStorage.getTenant(user.tenantId) : null;
 
-      // Construct system prompt with context about Milo and available data
+      // Construct system prompt with enhanced context
       const systemPrompt = `You are Milo, an AI assistant for a trucking operations management platform called Milo. You help ${tenant?.name || "the company"} manage their fleet operations.
 
-Your capabilities include:
-- Answering questions about drivers, trucks, routes, schedules, loads, and contracts
-- Providing insights about fleet operations and logistics
-- Helping with scheduling and route planning concepts
-- Explaining DOT compliance requirements
-- Offering operational recommendations
+You have access to real-time database functions to answer questions about:
+- Drivers (solo1, solo2, team types) - their schedules, workloads, and availability
+- Schedules and assignments - who's working when, upcoming assignments
+- Blocks - assigned and unassigned capacity
+- Workload distribution - days worked, load balancing across drivers
+
+When users ask data-driven questions (e.g., "how many solo2 drivers", "who's working Monday", "show me drivers starting last Sunday"), use your available functions to query the actual data.
 
 Current Context:
 - Company: ${tenant?.name || "Unknown"}
 - User: ${user?.username || "Unknown"}
 
-Be concise, professional, and helpful. Focus on trucking operations management. If asked about data you don't have direct access to, explain what information would be helpful and suggest where they can find it in the application.`;
+Be concise, professional, and helpful. Use functions to provide accurate, real-time data whenever possible.`;
 
-      // Import OpenAI client
+      // Import OpenAI client and AI functions
       const { default: OpenAI } = await import("openai");
+      const { AI_TOOLS, executeTool } = await import("./ai-functions");
       
       const openai = new OpenAI({
         baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
@@ -2250,30 +2252,99 @@ Be concise, professional, and helpful. Focus on trucking operations management. 
       });
 
       // Build messages array with history
-      const messages = [
-        { role: "system" as const, content: systemPrompt },
+      const messages: any[] = [
+        { role: "system", content: systemPrompt },
         ...history.map((msg: any) => ({
-          role: msg.role as "user" | "assistant",
-          content: msg.content
+          role: msg.role,
+          content: msg.content,
+          // Preserve tool_calls and tool info if present in history
+          ...(msg.tool_calls && { tool_calls: msg.tool_calls }),
+          ...(msg.tool_call_id && { tool_call_id: msg.tool_call_id, name: msg.name })
         })),
-        { role: "user" as const, content: message }
+        { role: "user", content: message }
       ];
 
+      // PHASE 1: Tool-call exchange (non-streaming)
+      // Make initial call with function calling enabled
+      let response = await openai.chat.completions.create({
+        model: "gpt-5",
+        messages,
+        max_completion_tokens: 2048,
+        tools: AI_TOOLS,
+        tool_choice: "auto", // Let model decide when to use tools
+        stream: false, // Complete tool exchange before streaming
+      });
+
+      let responseMessage = response.choices[0].message;
+      messages.push(responseMessage);
+
+      // Handle function calls iteratively (support multiple rounds if needed)
+      const MAX_TOOL_ITERATIONS = 5;
+      let iteration = 0;
+      
+      while (responseMessage.tool_calls && iteration < MAX_TOOL_ITERATIONS) {
+        iteration++;
+        console.log(`[AI Chat] Processing ${responseMessage.tool_calls.length} tool calls (iteration ${iteration})`);
+        
+        // Execute all tool calls in parallel
+        const toolResults = await Promise.all(
+          responseMessage.tool_calls.map(async (toolCall) => {
+            const functionName = toolCall.function.name;
+            const functionArgs = JSON.parse(toolCall.function.arguments);
+            
+            console.log(`[AI Chat] Executing ${functionName} with args:`, functionArgs);
+            
+            // Execute tool with tenant context
+            const result = await executeTool(
+              functionName,
+              functionArgs,
+              {
+                tenantId: req.session.tenantId!,
+                userId: req.session.userId!
+              }
+            );
+            
+            return {
+              role: "tool" as const,
+              tool_call_id: toolCall.id,
+              name: functionName,
+              content: result
+            };
+          })
+        );
+        
+        // Append tool results to messages
+        messages.push(...toolResults);
+        
+        // Make another call to get model's response to tool results
+        response = await openai.chat.completions.create({
+          model: "gpt-5",
+          messages,
+          max_completion_tokens: 2048,
+          tools: AI_TOOLS,
+          tool_choice: "auto",
+          stream: false,
+        });
+        
+        responseMessage = response.choices[0].message;
+        messages.push(responseMessage);
+      }
+
+      // PHASE 2: Stream final answer
       // Set up SSE headers for streaming
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
 
-      // Call OpenAI with streaming enabled
-      const stream = await openai.chat.completions.create({
-        model: "gpt-5", // the newest OpenAI model is "gpt-5" which was released August 7, 2025. do not change this unless explicitly requested by the user
+      // After tool execution loop, get final streaming answer
+      const finalStream = await openai.chat.completions.create({
+        model: "gpt-5",
         messages,
         max_completion_tokens: 2048,
         stream: true,
       });
 
-      // Stream the response
-      for await (const chunk of stream) {
+      for await (const chunk of finalStream) {
         const content = chunk.choices[0]?.delta?.content || '';
         if (content) {
           res.write(`data: ${JSON.stringify({ content })}\n\n`);
