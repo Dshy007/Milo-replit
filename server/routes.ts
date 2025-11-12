@@ -676,6 +676,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.log('Truck Import - Sample row:', JSON.stringify(normalizedRows[0], null, 2));
       }
 
+      // Helper function to clean data (remove hyperlinks, formulas, etc)
+      const cleanValue = (value: any): string | null => {
+        if (value === null || value === undefined || value === '') return null;
+        
+        // Convert to string first
+        let cleaned = String(value).trim();
+        
+        // Remove hyperlink formulas like =HYPERLINK("url", "text") or =HYPERLINK("url","text")
+        const hyperlinkMatch = cleaned.match(/^=HYPERLINK\s*\(\s*".*?"\s*,\s*"(.+?)"\s*\)/i);
+        if (hyperlinkMatch) {
+          cleaned = hyperlinkMatch[1].trim();
+        }
+        
+        // Remove any remaining formula markers
+        if (cleaned.startsWith('=')) {
+          cleaned = cleaned.substring(1).trim();
+        }
+        
+        // Remove quotes if wrapped
+        if ((cleaned.startsWith('"') && cleaned.endsWith('"')) || 
+            (cleaned.startsWith("'") && cleaned.endsWith("'"))) {
+          cleaned = cleaned.slice(1, -1).trim();
+        }
+        
+        return cleaned || null;
+      };
+
       let successCount = 0;
       const errors: string[] = [];
 
@@ -684,8 +711,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const rowNum = i + 2; // Account for header row
 
         try {
+          // Clean all values to remove hyperlinks and formulas
+          const cleanedRow: any = {};
+          for (const key in row) {
+            cleanedRow[key] = cleanValue(row[key]);
+          }
+          
           // Validate required fields are present
-          if (!row.truckNumber) {
+          if (!cleanedRow.truckNumber) {
             throw new Error('Missing required field: Asset ID');
           }
           
@@ -694,16 +727,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // Convert all values to strings to handle numeric data
           const truckData = insertTruckSchema.parse({
             tenantId: req.session.tenantId,
-            truckNumber: String(row.truckNumber || ''),
-            type: row.type ? String(row.type) : null,
-            make: row.make ? String(row.make) : null,
-            model: row.model ? String(row.model) : null,
-            year: row.year ? parseInt(String(row.year), 10) : null,
-            vin: row.vin ? String(row.vin) : null,
-            licensePlate: row.licensePlate ? String(row.licensePlate) : null,
-            lastKnownLocation: row.lastKnownLocation ? String(row.lastKnownLocation) : null,
-            status: row.status ? String(row.status).toLowerCase() : 'available',
-            fuel: row.fuel ? String(row.fuel) : null,
+            truckNumber: String(cleanedRow.truckNumber || ''),
+            type: cleanedRow.type ? String(cleanedRow.type) : null,
+            make: cleanedRow.make ? String(cleanedRow.make) : null,
+            model: cleanedRow.model ? String(cleanedRow.model) : null,
+            year: cleanedRow.year ? parseInt(String(cleanedRow.year), 10) : null,
+            vin: cleanedRow.vin ? String(cleanedRow.vin) : null,
+            licensePlate: cleanedRow.licensePlate ? String(cleanedRow.licensePlate) : null,
+            lastKnownLocation: cleanedRow.lastKnownLocation ? String(cleanedRow.lastKnownLocation) : null,
+            status: cleanedRow.status ? String(cleanedRow.status).toLowerCase() : 'available',
+            fuel: cleanedRow.fuel ? String(cleanedRow.fuel) : null,
             complianceStatus: 'pending', // Bulk imports default to pending
             usdotNumber: null,
             gvwr: null,
