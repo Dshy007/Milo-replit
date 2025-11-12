@@ -6,7 +6,10 @@ import {
   type Route, type InsertRoute,
   type Contract, type InsertContract,
   type Schedule, type InsertSchedule,
-  type Load, type InsertLoad
+  type Load, type InsertLoad,
+  type Block, type InsertBlock,
+  type BlockAssignment, type InsertBlockAssignment,
+  type ProtectedDriverRule, type InsertProtectedDriverRule
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 
@@ -62,6 +65,33 @@ export interface IStorage {
   createLoad(load: InsertLoad): Promise<Load>;
   updateLoad(id: string, load: Partial<InsertLoad>): Promise<Load | undefined>;
   deleteLoad(id: string): Promise<boolean>;
+  
+  // Blocks
+  getBlock(id: string): Promise<Block | undefined>;
+  getBlockByBlockId(blockId: string, tenantId: string): Promise<Block | undefined>;
+  getBlocksByTenant(tenantId: string): Promise<Block[]>;
+  getBlocksByContract(contractId: string): Promise<Block[]>;
+  getBlocksByDateRange(tenantId: string, startDate: Date, endDate: Date): Promise<Block[]>;
+  createBlock(block: InsertBlock): Promise<Block>;
+  updateBlock(id: string, block: Partial<InsertBlock>): Promise<Block | undefined>;
+  deleteBlock(id: string): Promise<boolean>;
+  
+  // Block Assignments
+  getBlockAssignment(id: string): Promise<BlockAssignment | undefined>;
+  getBlockAssignmentByBlock(blockId: string): Promise<BlockAssignment | undefined>;
+  getBlockAssignmentsByDriver(driverId: string): Promise<BlockAssignment[]>;
+  getBlockAssignmentsByTenant(tenantId: string): Promise<BlockAssignment[]>;
+  createBlockAssignment(assignment: InsertBlockAssignment): Promise<BlockAssignment>;
+  updateBlockAssignment(id: string, assignment: Partial<InsertBlockAssignment>): Promise<BlockAssignment | undefined>;
+  deleteBlockAssignment(id: string): Promise<boolean>;
+  
+  // Protected Driver Rules
+  getProtectedDriverRule(id: string): Promise<ProtectedDriverRule | undefined>;
+  getProtectedDriverRulesByDriver(driverId: string): Promise<ProtectedDriverRule[]>;
+  getProtectedDriverRulesByTenant(tenantId: string): Promise<ProtectedDriverRule[]>;
+  createProtectedDriverRule(rule: InsertProtectedDriverRule): Promise<ProtectedDriverRule>;
+  updateProtectedDriverRule(id: string, rule: Partial<InsertProtectedDriverRule>): Promise<ProtectedDriverRule | undefined>;
+  deleteProtectedDriverRule(id: string): Promise<boolean>;
 }
 
 export class MemStorage implements IStorage {
@@ -73,6 +103,9 @@ export class MemStorage implements IStorage {
   private contracts: Map<string, Contract>;
   private schedules: Map<string, Schedule>;
   private loads: Map<string, Load>;
+  private blocks: Map<string, Block>;
+  private blockAssignments: Map<string, BlockAssignment>;
+  private protectedDriverRules: Map<string, ProtectedDriverRule>;
 
   constructor() {
     this.users = new Map();
@@ -83,6 +116,9 @@ export class MemStorage implements IStorage {
     this.contracts = new Map();
     this.schedules = new Map();
     this.loads = new Map();
+    this.blocks = new Map();
+    this.blockAssignments = new Map();
+    this.protectedDriverRules = new Map();
   }
 
   // Users
@@ -362,6 +398,154 @@ export class MemStorage implements IStorage {
 
   async deleteLoad(id: string): Promise<boolean> {
     return this.loads.delete(id);
+  }
+
+  // Blocks
+  async getBlock(id: string): Promise<Block | undefined> {
+    return this.blocks.get(id);
+  }
+
+  async getBlockByBlockId(blockId: string, tenantId: string): Promise<Block | undefined> {
+    return Array.from(this.blocks.values()).find(
+      (block) => block.blockId === blockId && block.tenantId === tenantId
+    );
+  }
+
+  async getBlocksByTenant(tenantId: string): Promise<Block[]> {
+    return Array.from(this.blocks.values()).filter(
+      (block) => block.tenantId === tenantId
+    );
+  }
+
+  async getBlocksByContract(contractId: string): Promise<Block[]> {
+    return Array.from(this.blocks.values()).filter(
+      (block) => block.contractId === contractId
+    );
+  }
+
+  async getBlocksByDateRange(tenantId: string, startDate: Date, endDate: Date): Promise<Block[]> {
+    return Array.from(this.blocks.values()).filter(
+      (block) => 
+        block.tenantId === tenantId &&
+        block.startDate >= startDate &&
+        block.startDate <= endDate
+    );
+  }
+
+  async createBlock(insertBlock: InsertBlock): Promise<Block> {
+    const id = randomUUID();
+    const block: Block = {
+      ...insertBlock,
+      id,
+      validationMetadata: insertBlock.validationMetadata || null,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    this.blocks.set(id, block);
+    return block;
+  }
+
+  async updateBlock(id: string, updates: Partial<InsertBlock>): Promise<Block | undefined> {
+    const block = this.blocks.get(id);
+    if (!block) return undefined;
+    
+    const updatedBlock = { ...block, ...updates, updatedAt: new Date() };
+    this.blocks.set(id, updatedBlock);
+    return updatedBlock;
+  }
+
+  async deleteBlock(id: string): Promise<boolean> {
+    return this.blocks.delete(id);
+  }
+
+  // Block Assignments
+  async getBlockAssignment(id: string): Promise<BlockAssignment | undefined> {
+    return this.blockAssignments.get(id);
+  }
+
+  async getBlockAssignmentByBlock(blockId: string): Promise<BlockAssignment | undefined> {
+    return Array.from(this.blockAssignments.values()).find(
+      (assignment) => assignment.blockId === blockId
+    );
+  }
+
+  async getBlockAssignmentsByDriver(driverId: string): Promise<BlockAssignment[]> {
+    return Array.from(this.blockAssignments.values()).filter(
+      (assignment) => assignment.driverId === driverId
+    );
+  }
+
+  async getBlockAssignmentsByTenant(tenantId: string): Promise<BlockAssignment[]> {
+    return Array.from(this.blockAssignments.values()).filter(
+      (assignment) => assignment.tenantId === tenantId
+    );
+  }
+
+  async createBlockAssignment(insertAssignment: InsertBlockAssignment): Promise<BlockAssignment> {
+    const id = randomUUID();
+    const assignment: BlockAssignment = {
+      ...insertAssignment,
+      id,
+      validationMetadata: insertAssignment.validationMetadata || null,
+      assignedAt: new Date()
+    };
+    this.blockAssignments.set(id, assignment);
+    return assignment;
+  }
+
+  async updateBlockAssignment(id: string, updates: Partial<InsertBlockAssignment>): Promise<BlockAssignment | undefined> {
+    const assignment = this.blockAssignments.get(id);
+    if (!assignment) return undefined;
+    
+    const updatedAssignment = { ...assignment, ...updates };
+    this.blockAssignments.set(id, updatedAssignment);
+    return updatedAssignment;
+  }
+
+  async deleteBlockAssignment(id: string): Promise<boolean> {
+    return this.blockAssignments.delete(id);
+  }
+
+  // Protected Driver Rules
+  async getProtectedDriverRule(id: string): Promise<ProtectedDriverRule | undefined> {
+    return this.protectedDriverRules.get(id);
+  }
+
+  async getProtectedDriverRulesByDriver(driverId: string): Promise<ProtectedDriverRule[]> {
+    return Array.from(this.protectedDriverRules.values()).filter(
+      (rule) => rule.driverId === driverId
+    );
+  }
+
+  async getProtectedDriverRulesByTenant(tenantId: string): Promise<ProtectedDriverRule[]> {
+    return Array.from(this.protectedDriverRules.values()).filter(
+      (rule) => rule.tenantId === tenantId
+    );
+  }
+
+  async createProtectedDriverRule(insertRule: InsertProtectedDriverRule): Promise<ProtectedDriverRule> {
+    const id = randomUUID();
+    const rule: ProtectedDriverRule = {
+      ...insertRule,
+      id,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    this.protectedDriverRules.set(id, rule);
+    return rule;
+  }
+
+  async updateProtectedDriverRule(id: string, updates: Partial<InsertProtectedDriverRule>): Promise<ProtectedDriverRule | undefined> {
+    const rule = this.protectedDriverRules.get(id);
+    if (!rule) return undefined;
+    
+    const updatedRule = { ...rule, ...updates, updatedAt: new Date() };
+    this.protectedDriverRules.set(id, updatedRule);
+    return updatedRule;
+  }
+
+  async deleteProtectedDriverRule(id: string): Promise<boolean> {
+    return this.protectedDriverRules.delete(id);
   }
 }
 

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, timestamp, integer, boolean, decimal } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, timestamp, integer, boolean, decimal, uniqueIndex, index, check } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { addYears, isAfter } from "date-fns";
@@ -475,3 +475,98 @@ export const updateLoadSchema = baseInsertLoadSchema.omit({ tenantId: true }).pa
 export type InsertLoad = z.infer<typeof insertLoadSchema>;
 export type UpdateLoad = z.infer<typeof updateLoadSchema>;
 export type Load = typeof loads.$inferSelect;
+
+// Blocks (Scheduled instances of contracts - immutable time windows)
+export const blocks = pgTable("blocks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+  blockId: text("block_id").notNull(), // e.g., "B-00000001"
+  contractId: varchar("contract_id").notNull().references(() => contracts.id),
+  startTimestamp: timestamp("start_timestamp").notNull(), // Full start date+time in CT
+  endTimestamp: timestamp("end_timestamp").notNull(), // Calculated: startTimestamp + duration
+  tractorId: text("tractor_id").notNull(), // e.g., "Tractor_1"
+  soloType: text("solo_type").notNull(), // solo1, solo2, team
+  duration: integer("duration").notNull(), // hours: 14 for Solo1, 38 for Solo2
+  status: text("status").notNull().default("unassigned"), // unassigned, assigned, completed, cancelled
+  isCarryover: boolean("is_carryover").notNull().default(false), // True for Fri/Sat from previous week
+  onBenchStatus: text("on_bench_status").notNull().default("on_bench"), // on_bench, off_bench
+  offBenchReason: text("off_bench_reason"), // non_contract_time, wrong_tractor_for_contract
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  // Unique constraint: one block per (tenant, blockId)
+  uniqueBlockId: uniqueIndex("blocks_tenant_block_idx").on(table.tenantId, table.blockId),
+  // Index for time range queries
+  timeRangeIdx: index("blocks_time_range_idx").on(table.startTimestamp, table.endTimestamp),
+}));
+
+export const insertBlockSchema = createInsertSchema(blocks, {
+  startTimestamp: z.coerce.date(),
+  endTimestamp: z.coerce.date(),
+}).omit({ id: true, createdAt: true, updatedAt: true });
+export const updateBlockSchema = insertBlockSchema.omit({ tenantId: true }).partial();
+export type InsertBlock = z.infer<typeof insertBlockSchema>;
+export type UpdateBlock = z.infer<typeof updateBlockSchema>;
+export type Block = typeof blocks.$inferSelect;
+
+// Block Assignments (Link blocks to drivers with validation)
+export const blockAssignments = pgTable("block_assignments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+  blockId: varchar("block_id").notNull().references(() => blocks.id),
+  driverId: varchar("driver_id").notNull().references(() => drivers.id),
+  assignedAt: timestamp("assigned_at").defaultNow().notNull(),
+  assignedBy: varchar("assigned_by").references(() => users.id), // User who made the assignment
+  notes: text("notes"),
+  validationStatus: text("validation_status").notNull().default("valid"), // valid, warning, violation
+  validationSummary: text("validation_summary"), // JSONB string with rolling-6 metrics, warnings, reasons
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  // Unique constraint: one driver per block
+  uniqueBlockAssignment: uniqueIndex("block_assignments_tenant_block_idx").on(table.tenantId, table.blockId),
+  // Index for driver lookups
+  driverIdIdx: index("block_assignments_driver_id_idx").on(table.driverId),
+  // Index for tenant+driver+time queries
+  driverTimeIdx: index("block_assignments_driver_time_idx").on(table.tenantId, table.driverId, table.assignedAt),
+}));
+
+export const insertBlockAssignmentSchema = createInsertSchema(blockAssignments, {
+  assignedAt: z.coerce.date().optional(),
+}).omit({ id: true, createdAt: true });
+export const updateBlockAssignmentSchema = insertBlockAssignmentSchema.omit({ tenantId: true }).partial();
+export type InsertBlockAssignment = z.infer<typeof insertBlockAssignmentSchema>;
+export type UpdateBlockAssignment = z.infer<typeof updateBlockAssignmentSchema>;
+export type BlockAssignment = typeof blockAssignments.$inferSelect;
+
+// Protected Driver Rules (Special scheduling constraints for specific drivers)
+export const protectedDriverRules = pgTable("protected_driver_rules", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+  driverId: varchar("driver_id").notNull().references(() => drivers.id),
+  ruleName: text("rule_name").notNull(), // e.g., "No Fridays", "Weekend Solo1 Only"
+  ruleType: text("rule_type").notNull(), // day_restriction, time_restriction, solo_restriction
+  blockedDays: text("blocked_days").array(), // e.g., ["Friday"], ["Saturday", "Sunday"]
+  allowedDays: text("allowed_days").array(), // e.g., ["Saturday", "Sunday", "Monday"]
+  allowedSoloTypes: text("allowed_solo_types").array(), // e.g., ["solo1"]
+  allowedStartTimes: text("allowed_start_times").array(), // e.g., ["16:30"]
+  maxStartTime: text("max_start_time"), // Latest allowed start time (e.g., "17:30")
+  isWeekdayOnly: boolean("is_weekday_only").notNull().default(false), // Rule applies only on weekdays
+  effectiveFrom: timestamp("effective_from"), // Rule starts applying from this date
+  effectiveTo: timestamp("effective_to"), // Rule expires after this date
+  isProtected: boolean("is_protected").notNull().default(true), // Cannot reassign their blocks
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  // Unique constraint: one rule per (tenant, driver, rule_name)
+  uniqueDriverRule: uniqueIndex("protected_driver_rules_tenant_driver_name_idx").on(table.tenantId, table.driverId, table.ruleName),
+  // Index for driver lookups
+  driverIdIdx: index("protected_driver_rules_driver_id_idx").on(table.driverId),
+  // Check constraint for rule_type enum
+  ruleTypeCheck: check("rule_type_check", sql`${table.ruleType} IN ('day_restriction', 'time_restriction', 'solo_restriction')`),
+}));
+
+export const insertProtectedDriverRuleSchema = createInsertSchema(protectedDriverRules).omit({ id: true, createdAt: true, updatedAt: true });
+export const updateProtectedDriverRuleSchema = insertProtectedDriverRuleSchema.omit({ tenantId: true }).partial();
+export type InsertProtectedDriverRule = z.infer<typeof insertProtectedDriverRuleSchema>;
+export type UpdateProtectedDriverRule = z.infer<typeof updateProtectedDriverRuleSchema>;
+export type ProtectedDriverRule = typeof protectedDriverRules.$inferSelect;

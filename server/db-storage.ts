@@ -1,6 +1,7 @@
 import { db } from "./db";
 import { 
   users, tenants, drivers, trucks, routes, contracts, schedules, loads,
+  blocks, blockAssignments, protectedDriverRules,
   type User, type InsertUser,
   type Tenant, type InsertTenant,
   type Driver, type InsertDriver,
@@ -8,9 +9,12 @@ import {
   type Route, type InsertRoute,
   type Contract, type InsertContract,
   type Schedule, type InsertSchedule,
-  type Load, type InsertLoad
+  type Load, type InsertLoad,
+  type Block, type InsertBlock,
+  type BlockAssignment, type InsertBlockAssignment,
+  type ProtectedDriverRule, type InsertProtectedDriverRule
 } from "@shared/schema";
-import { eq } from "drizzle-orm";
+import { eq, and, gte, lte } from "drizzle-orm";
 import type { IStorage } from "./storage";
 
 export class DbStorage implements IStorage {
@@ -192,6 +196,118 @@ export class DbStorage implements IStorage {
 
   async deleteLoad(id: string): Promise<boolean> {
     const result = await db.delete(loads).where(eq(loads.id, id)).returning();
+    return result.length > 0;
+  }
+
+  // Blocks
+  async getBlock(id: string): Promise<Block | undefined> {
+    const result = await db.select().from(blocks).where(eq(blocks.id, id)).limit(1);
+    return result[0];
+  }
+
+  async getBlockByBlockId(blockId: string, tenantId: string): Promise<Block | undefined> {
+    const result = await db.select().from(blocks)
+      .where(and(eq(blocks.blockId, blockId), eq(blocks.tenantId, tenantId)))
+      .limit(1);
+    return result[0];
+  }
+
+  async getBlocksByTenant(tenantId: string): Promise<Block[]> {
+    return await db.select().from(blocks).where(eq(blocks.tenantId, tenantId));
+  }
+
+  async getBlocksByContract(contractId: string): Promise<Block[]> {
+    return await db.select().from(blocks).where(eq(blocks.contractId, contractId));
+  }
+
+  async getBlocksByDateRange(tenantId: string, startDate: Date, endDate: Date): Promise<Block[]> {
+    return await db.select().from(blocks)
+      .where(
+        and(
+          eq(blocks.tenantId, tenantId),
+          gte(blocks.startDate, startDate),
+          lte(blocks.startDate, endDate)
+        )
+      );
+  }
+
+  async createBlock(insertBlock: InsertBlock): Promise<Block> {
+    const result = await db.insert(blocks).values(insertBlock).returning();
+    return result[0];
+  }
+
+  async updateBlock(id: string, updates: Partial<InsertBlock>): Promise<Block | undefined> {
+    const result = await db.update(blocks).set(updates).where(eq(blocks.id, id)).returning();
+    return result[0];
+  }
+
+  async deleteBlock(id: string): Promise<boolean> {
+    const result = await db.delete(blocks).where(eq(blocks.id, id)).returning();
+    return result.length > 0;
+  }
+
+  // Block Assignments
+  async getBlockAssignment(id: string): Promise<BlockAssignment | undefined> {
+    const result = await db.select().from(blockAssignments).where(eq(blockAssignments.id, id)).limit(1);
+    return result[0];
+  }
+
+  async getBlockAssignmentByBlock(blockId: string): Promise<BlockAssignment | undefined> {
+    const result = await db.select().from(blockAssignments)
+      .where(eq(blockAssignments.blockId, blockId))
+      .limit(1);
+    return result[0];
+  }
+
+  async getBlockAssignmentsByDriver(driverId: string): Promise<BlockAssignment[]> {
+    return await db.select().from(blockAssignments).where(eq(blockAssignments.driverId, driverId));
+  }
+
+  async getBlockAssignmentsByTenant(tenantId: string): Promise<BlockAssignment[]> {
+    return await db.select().from(blockAssignments).where(eq(blockAssignments.tenantId, tenantId));
+  }
+
+  async createBlockAssignment(assignment: InsertBlockAssignment): Promise<BlockAssignment> {
+    const result = await db.insert(blockAssignments).values(assignment).returning();
+    return result[0];
+  }
+
+  async updateBlockAssignment(id: string, updates: Partial<InsertBlockAssignment>): Promise<BlockAssignment | undefined> {
+    const result = await db.update(blockAssignments).set(updates).where(eq(blockAssignments.id, id)).returning();
+    return result[0];
+  }
+
+  async deleteBlockAssignment(id: string): Promise<boolean> {
+    const result = await db.delete(blockAssignments).where(eq(blockAssignments.id, id)).returning();
+    return result.length > 0;
+  }
+
+  // Protected Driver Rules
+  async getProtectedDriverRule(id: string): Promise<ProtectedDriverRule | undefined> {
+    const result = await db.select().from(protectedDriverRules).where(eq(protectedDriverRules.id, id)).limit(1);
+    return result[0];
+  }
+
+  async getProtectedDriverRulesByDriver(driverId: string): Promise<ProtectedDriverRule[]> {
+    return await db.select().from(protectedDriverRules).where(eq(protectedDriverRules.driverId, driverId));
+  }
+
+  async getProtectedDriverRulesByTenant(tenantId: string): Promise<ProtectedDriverRule[]> {
+    return await db.select().from(protectedDriverRules).where(eq(protectedDriverRules.tenantId, tenantId));
+  }
+
+  async createProtectedDriverRule(rule: InsertProtectedDriverRule): Promise<ProtectedDriverRule> {
+    const result = await db.insert(protectedDriverRules).values(rule).returning();
+    return result[0];
+  }
+
+  async updateProtectedDriverRule(id: string, updates: Partial<InsertProtectedDriverRule>): Promise<ProtectedDriverRule | undefined> {
+    const result = await db.update(protectedDriverRules).set(updates).where(eq(protectedDriverRules.id, id)).returning();
+    return result[0];
+  }
+
+  async deleteProtectedDriverRule(id: string): Promise<boolean> {
+    const result = await db.delete(protectedDriverRules).where(eq(protectedDriverRules.id, id)).returning();
     return result.length > 0;
   }
 }

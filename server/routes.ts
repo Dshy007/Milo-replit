@@ -8,7 +8,10 @@ import {
   insertRouteSchema, updateRouteSchema,
   insertScheduleSchema, updateScheduleSchema,
   insertLoadSchema, updateLoadSchema,
-  insertContractSchema, updateContractSchema
+  insertContractSchema, updateContractSchema,
+  insertBlockSchema, updateBlockSchema,
+  insertBlockAssignmentSchema,
+  insertProtectedDriverRuleSchema, updateProtectedDriverRuleSchema
 } from "@shared/schema";
 import session from "express-session";
 import { fromZodError } from "zod-validation-error";
@@ -1482,6 +1485,237 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ message: "Load deleted successfully" });
     } catch (error: any) {
       res.status(500).json({ message: "Failed to delete load", error: error.message });
+    }
+  });
+
+  // ==================== BLOCKS ====================
+  
+  app.get("/api/blocks", requireAuth, async (req, res) => {
+    try {
+      const blocks = await dbStorage.getBlocksByTenant(req.session.tenantId!);
+      res.json(blocks);
+    } catch (error: any) {
+      res.status(500).json({ message: "Failed to fetch blocks", error: error.message });
+    }
+  });
+
+  app.get("/api/blocks/:id", requireAuth, async (req, res) => {
+    try {
+      const block = await dbStorage.getBlock(req.params.id);
+      if (!block || block.tenantId !== req.session.tenantId) {
+        return res.status(404).json({ message: "Block not found" });
+      }
+      res.json(block);
+    } catch (error: any) {
+      res.status(500).json({ message: "Failed to fetch block", error: error.message });
+    }
+  });
+
+  app.post("/api/blocks", requireAuth, async (req, res) => {
+    try {
+      const blockData = insertBlockSchema.parse({
+        ...req.body,
+        tenantId: req.session.tenantId,
+      });
+      
+      // Validate tenant ownership of contract
+      const contract = await dbStorage.getContract(blockData.contractId);
+      if (!contract || contract.tenantId !== req.session.tenantId) {
+        return res.status(400).json({ message: "Invalid contract ID" });
+      }
+      
+      const block = await dbStorage.createBlock(blockData);
+      res.json(block);
+    } catch (error: any) {
+      if (error.name === "ZodError") {
+        return res.status(400).json({ message: fromZodError(error).message });
+      }
+      res.status(500).json({ message: "Failed to create block", error: error.message });
+    }
+  });
+
+  app.patch("/api/blocks/:id", requireAuth, async (req, res) => {
+    try {
+      if (!await validateTenantOwnership(dbStorage.getBlock.bind(dbStorage), req.params.id, req.session.tenantId!)) {
+        return res.status(404).json({ message: "Block not found" });
+      }
+      
+      const updates = updateBlockSchema.parse(req.body);
+      
+      // Validate tenant ownership of contract if being updated
+      if (updates.contractId) {
+        const contract = await dbStorage.getContract(updates.contractId);
+        if (!contract || contract.tenantId !== req.session.tenantId) {
+          return res.status(400).json({ message: "Invalid contract ID" });
+        }
+      }
+      
+      const updatedBlock = await dbStorage.updateBlock(req.params.id, updates);
+      res.json(updatedBlock);
+    } catch (error: any) {
+      if (error.name === "ZodError") {
+        return res.status(400).json({ message: fromZodError(error).message });
+      }
+      res.status(500).json({ message: "Failed to update block", error: error.message });
+    }
+  });
+
+  app.delete("/api/blocks/:id", requireAuth, async (req, res) => {
+    try {
+      if (!await validateTenantOwnership(dbStorage.getBlock.bind(dbStorage), req.params.id, req.session.tenantId!)) {
+        return res.status(404).json({ message: "Block not found" });
+      }
+      await dbStorage.deleteBlock(req.params.id);
+      res.json({ message: "Block deleted successfully" });
+    } catch (error: any) {
+      res.status(500).json({ message: "Failed to delete block", error: error.message });
+    }
+  });
+
+  // ==================== BLOCK ASSIGNMENTS ====================
+  
+  app.get("/api/block-assignments", requireAuth, async (req, res) => {
+    try {
+      const assignments = await dbStorage.getBlockAssignmentsByTenant(req.session.tenantId!);
+      res.json(assignments);
+    } catch (error: any) {
+      res.status(500).json({ message: "Failed to fetch block assignments", error: error.message });
+    }
+  });
+
+  app.get("/api/block-assignments/:id", requireAuth, async (req, res) => {
+    try {
+      const assignment = await dbStorage.getBlockAssignment(req.params.id);
+      if (!assignment || assignment.tenantId !== req.session.tenantId) {
+        return res.status(404).json({ message: "Block assignment not found" });
+      }
+      res.json(assignment);
+    } catch (error: any) {
+      res.status(500).json({ message: "Failed to fetch block assignment", error: error.message });
+    }
+  });
+
+  app.post("/api/block-assignments", requireAuth, async (req, res) => {
+    try {
+      const assignmentData = insertBlockAssignmentSchema.parse({
+        ...req.body,
+        tenantId: req.session.tenantId,
+      });
+      
+      // Validate tenant ownership of referenced entities
+      const block = await dbStorage.getBlock(assignmentData.blockId);
+      if (!block || block.tenantId !== req.session.tenantId) {
+        return res.status(400).json({ message: "Invalid block ID" });
+      }
+      
+      const driver = await dbStorage.getDriver(assignmentData.driverId);
+      if (!driver || driver.tenantId !== req.session.tenantId) {
+        return res.status(400).json({ message: "Invalid driver ID" });
+      }
+      
+      const assignment = await dbStorage.createBlockAssignment(assignmentData);
+      res.json(assignment);
+    } catch (error: any) {
+      if (error.name === "ZodError") {
+        return res.status(400).json({ message: fromZodError(error).message });
+      }
+      res.status(500).json({ message: "Failed to create block assignment", error: error.message });
+    }
+  });
+
+  app.delete("/api/block-assignments/:id", requireAuth, async (req, res) => {
+    try {
+      if (!await validateTenantOwnership(dbStorage.getBlockAssignment.bind(dbStorage), req.params.id, req.session.tenantId!)) {
+        return res.status(404).json({ message: "Block assignment not found" });
+      }
+      await dbStorage.deleteBlockAssignment(req.params.id);
+      res.json({ message: "Block assignment deleted successfully" });
+    } catch (error: any) {
+      res.status(500).json({ message: "Failed to delete block assignment", error: error.message });
+    }
+  });
+
+  // ==================== PROTECTED DRIVER RULES ====================
+  
+  app.get("/api/protected-driver-rules", requireAuth, async (req, res) => {
+    try {
+      const rules = await dbStorage.getProtectedDriverRulesByTenant(req.session.tenantId!);
+      res.json(rules);
+    } catch (error: any) {
+      res.status(500).json({ message: "Failed to fetch protected driver rules", error: error.message });
+    }
+  });
+
+  app.get("/api/protected-driver-rules/:id", requireAuth, async (req, res) => {
+    try {
+      const rule = await dbStorage.getProtectedDriverRule(req.params.id);
+      if (!rule || rule.tenantId !== req.session.tenantId) {
+        return res.status(404).json({ message: "Protected driver rule not found" });
+      }
+      res.json(rule);
+    } catch (error: any) {
+      res.status(500).json({ message: "Failed to fetch protected driver rule", error: error.message });
+    }
+  });
+
+  app.post("/api/protected-driver-rules", requireAuth, async (req, res) => {
+    try {
+      const ruleData = insertProtectedDriverRuleSchema.parse({
+        ...req.body,
+        tenantId: req.session.tenantId,
+      });
+      
+      // Validate tenant ownership of driver
+      const driver = await dbStorage.getDriver(ruleData.driverId);
+      if (!driver || driver.tenantId !== req.session.tenantId) {
+        return res.status(400).json({ message: "Invalid driver ID" });
+      }
+      
+      const rule = await dbStorage.createProtectedDriverRule(ruleData);
+      res.json(rule);
+    } catch (error: any) {
+      if (error.name === "ZodError") {
+        return res.status(400).json({ message: fromZodError(error).message });
+      }
+      res.status(500).json({ message: "Failed to create protected driver rule", error: error.message });
+    }
+  });
+
+  app.patch("/api/protected-driver-rules/:id", requireAuth, async (req, res) => {
+    try {
+      if (!await validateTenantOwnership(dbStorage.getProtectedDriverRule.bind(dbStorage), req.params.id, req.session.tenantId!)) {
+        return res.status(404).json({ message: "Protected driver rule not found" });
+      }
+      
+      const updates = updateProtectedDriverRuleSchema.parse(req.body);
+      
+      // Validate tenant ownership of driver if being updated
+      if (updates.driverId) {
+        const driver = await dbStorage.getDriver(updates.driverId);
+        if (!driver || driver.tenantId !== req.session.tenantId) {
+          return res.status(400).json({ message: "Invalid driver ID" });
+        }
+      }
+      
+      const updatedRule = await dbStorage.updateProtectedDriverRule(req.params.id, updates);
+      res.json(updatedRule);
+    } catch (error: any) {
+      if (error.name === "ZodError") {
+        return res.status(400).json({ message: fromZodError(error).message });
+      }
+      res.status(500).json({ message: "Failed to update protected driver rule", error: error.message });
+    }
+  });
+
+  app.delete("/api/protected-driver-rules/:id", requireAuth, async (req, res) => {
+    try {
+      if (!await validateTenantOwnership(dbStorage.getProtectedDriverRule.bind(dbStorage), req.params.id, req.session.tenantId!)) {
+        return res.status(404).json({ message: "Protected driver rule not found" });
+      }
+      await dbStorage.deleteProtectedDriverRule(req.params.id);
+      res.json({ message: "Protected driver rule deleted successfully" });
+    } catch (error: any) {
+      res.status(500).json({ message: "Failed to delete protected driver rule", error: error.message });
     }
   });
 
