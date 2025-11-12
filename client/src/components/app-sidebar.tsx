@@ -1,4 +1,4 @@
-import { Home, Users, Calendar, Route, Truck, FileText, Upload, Sparkles, Settings, LogOut } from "lucide-react";
+import { Home, Users, Calendar, Route, Truck, FileText, Upload, Sparkles, Settings, LogOut, MessageSquare } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import {
@@ -59,6 +59,12 @@ const navItems = [
     icon: Sparkles,
     testId: "nav-chat",
   },
+  {
+    title: "Special Requests",
+    url: "/special-requests",
+    icon: MessageSquare,
+    testId: "nav-special-requests",
+  },
 ];
 
 export function AppSidebar() {
@@ -90,9 +96,9 @@ export function AppSidebar() {
               {navItems.map((item) => (
                 <SidebarMenuItem key={item.url}>
                   <SidebarMenuButton asChild isActive={location === item.url}>
-                    <Link href={item.url} data-testid={item.testId} aria-label={item.title}>
+                    <Link href={item.url} data-testid={item.testId}>
                       <item.icon />
-                      <span className="sr-only">{item.title}</span>
+                      <span>{item.title}</span>
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>

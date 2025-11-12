@@ -19,6 +19,7 @@ import Contracts from "@/pages/Contracts";
 import Loads from "@/pages/Loads";
 import Import from "@/pages/Import";
 import Chat from "@/pages/Chat";
+import SpecialRequests from "@/pages/SpecialRequests";
 import NotFound from "@/pages/not-found";
 
 function ProtectedLayout({ children }: { children: ReactNode }) {
@@ -118,6 +119,13 @@ function Router() {
         <ProtectedRoute>
           <ProtectedLayout>
             <Chat />
+          </ProtectedLayout>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/special-requests">
+        <ProtectedRoute>
+          <ProtectedLayout>
+            <SpecialRequests />
           </ProtectedLayout>
         </ProtectedRoute>
       </Route>
