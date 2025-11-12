@@ -936,12 +936,81 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "File contains no data" });
       }
 
-      // Normalize headers (case-insensitive)
+      // Normalize headers to canonical keys
+      const normalizeHeader = (header: string): string => {
+        const normalized = header.toLowerCase().trim();
+        const headerMap: Record<string, string> = {
+          // Driver Type mappings
+          'driver type': 'type',
+          'drivertype': 'type',
+          'contract type': 'type',
+          'contracttype': 'type',
+          'type': 'type',
+          'solo type': 'type',
+          'solotype': 'type',
+          
+          // Tractor/Operator ID mappings
+          'tractor': 'tractorId',
+          'tractor id': 'tractorId',
+          'tractorid': 'tractorId',
+          'tractor_id': 'tractorId',
+          'operator id': 'tractorId',
+          'operatorid': 'tractorId',
+          'operator_id': 'tractorId',
+          'truck': 'tractorId',
+          'truck id': 'tractorId',
+          
+          // Start Time mappings
+          'start time': 'startTime',
+          'starttime': 'startTime',
+          'start_time': 'startTime',
+          'time': 'startTime',
+          'start': 'startTime',
+          
+          // Name mappings
+          'name': 'name',
+          'contract name': 'name',
+          'contractname': 'name',
+          'contract_name': 'name',
+          
+          // Status mappings
+          'status': 'status',
+          
+          // Domicile mappings
+          'domicile': 'domicile',
+          'location': 'domicile',
+          'base': 'domicile',
+          
+          // Duration mappings
+          'duration': 'duration',
+          'hours': 'duration',
+          
+          // Routes mappings
+          'base routes': 'baseRoutes',
+          'baseroutes': 'baseRoutes',
+          'base_routes': 'baseRoutes',
+          'routes': 'baseRoutes',
+          
+          // Days per week mappings
+          'days per week': 'daysPerWeek',
+          'daysperweek': 'daysPerWeek',
+          'days_per_week': 'daysPerWeek',
+          'days': 'daysPerWeek',
+          
+          // Protected drivers mappings
+          'protected drivers': 'protectedDrivers',
+          'protecteddrivers': 'protectedDrivers',
+          'protected_drivers': 'protectedDrivers',
+          'protected': 'protectedDrivers',
+        };
+        return headerMap[normalized] || normalized;
+      };
+
       const normalizedRows = rows.map(row => {
         const normalized: any = {};
         for (const key in row) {
-          const normalizedKey = key.trim().toLowerCase().replace(/\s+/g, '_');
-          normalized[normalizedKey] = row[key];
+          const canonicalKey = normalizeHeader(key);
+          normalized[canonicalKey] = row[key];
         }
         return normalized;
       });
@@ -954,17 +1023,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const rowNum = i + 2; // Account for header row
 
         try {
-          // Extract contract data from row
+          // Validate required fields are present
+          if (!row.type) {
+            throw new Error('Missing required field: Driver Type (solo1/solo2/team)');
+          }
+          if (!row.tractorId) {
+            throw new Error('Missing required field: Tractor/Operator ID');
+          }
+          if (!row.startTime) {
+            throw new Error('Missing required field: Start Time');
+          }
+          
+          // Extract contract data from row using canonical keys
           const contractData = insertContractSchema.parse({
             tenantId: req.session.tenantId,
-            name: row.name || row.contract_name || `Contract ${rowNum}`,
-            type: (row.type || row.contract_type || 'solo1').toLowerCase(),
-            startTime: row.start_time || row.starttime || row.time || '',
-            tractorId: row.tractor_id || row.tractor || row.tractorid || '',
-            duration: parseInt(row.duration || row.hours || '14', 10),
-            baseRoutes: parseInt(row.base_routes || row.baseroutes || row.routes || '10', 10),
-            daysPerWeek: parseInt(row.days_per_week || row.daysperweek || row.days || '6', 10),
-            protectedDrivers: row.protected_drivers === 'true' || row.protected_drivers === '1' || row.protected === 'true' || false,
+            name: row.name || `${row.type} ${row.startTime} ${row.tractorId}`,
+            type: row.type.toLowerCase(),
+            startTime: row.startTime,
+            status: row.status || 'active',
+            tractorId: row.tractorId,
+            domicile: row.domicile || '',
+            duration: parseInt(row.duration || (row.type?.toLowerCase() === 'solo2' ? '38' : '14'), 10),
+            baseRoutes: parseInt(row.baseRoutes || (row.type?.toLowerCase() === 'solo2' ? '7' : '10'), 10),
+            daysPerWeek: parseInt(row.daysPerWeek || '6', 10),
+            protectedDrivers: row.protectedDrivers === 'true' || row.protectedDrivers === '1' || row.protectedDrivers === true || false,
           });
 
           await dbStorage.createContract(contractData);
