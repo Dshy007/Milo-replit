@@ -722,6 +722,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
             throw new Error('Missing required field: Asset ID');
           }
           
+          // Map common status values to database-expected values
+          const mapStatus = (status: string): string => {
+            const statusLower = status.toLowerCase().trim();
+            const statusMap: Record<string, string> = {
+              'active': 'available',
+              'available': 'available',
+              'in use': 'in_use',
+              'in-use': 'in_use',
+              'in_use': 'in_use',
+              'maintenance': 'maintenance',
+              'repair': 'maintenance',
+              'retired': 'retired',
+              'inactive': 'retired',
+            };
+            return statusMap[statusLower] || 'available';
+          };
+          
           // Extract truck data from row using canonical keys
           // Set complianceStatus to 'pending' for bulk imports
           // Convert all values to strings to handle numeric data
@@ -735,7 +752,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             vin: cleanedRow.vin ? String(cleanedRow.vin) : null,
             licensePlate: cleanedRow.licensePlate ? String(cleanedRow.licensePlate) : null,
             lastKnownLocation: cleanedRow.lastKnownLocation ? String(cleanedRow.lastKnownLocation) : null,
-            status: cleanedRow.status ? String(cleanedRow.status).toLowerCase() : 'available',
+            status: cleanedRow.status ? mapStatus(String(cleanedRow.status)) : 'available',
             fuel: cleanedRow.fuel ? String(cleanedRow.fuel) : null,
             complianceStatus: 'pending', // Bulk imports default to pending
             usdotNumber: null,
