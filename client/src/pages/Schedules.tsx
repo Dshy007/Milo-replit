@@ -9,15 +9,49 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
-import type { Block, BlockAssignment, Driver } from "@shared/schema";
+import type { Block, BlockAssignment, Driver, Contract } from "@shared/schema";
 
 type BlockWithAssignment = Block & {
   assignment?: BlockAssignment & { driver?: Driver };
+  contract?: Contract;
 };
 
 type ViewMode = "week" | "month" | "tally";
 type SoloTypeFilter = "all" | "solo1" | "solo2" | "team";
 type StatusFilter = "all" | "valid" | "warning" | "violation" | "unassigned";
+
+// Calendar API response type
+type CalendarResponse = {
+  dateRange: { start: string; end: string };
+  blocks: Array<Block & {
+    contract: Contract | null;
+    assignment: (BlockAssignment & { driver: Driver | null }) | null;
+  }>;
+  drivers: Record<string, Driver>;
+  contracts: Record<string, Contract>;
+};
+
+// Hook for fetching calendar data from new combined endpoint
+function useCalendarData(startDate: Date, endDate: Date, enabled: boolean = true) {
+  const startDateStr = format(startDate, "yyyy-MM-dd");
+  const endDateStr = format(endDate, "yyyy-MM-dd");
+  
+  return useQuery<CalendarResponse>({
+    queryKey: ["/api/schedules/calendar", startDateStr, endDateStr],
+    queryFn: async () => {
+      const url = `/api/schedules/calendar?startDate=${startDateStr}&endDate=${endDateStr}`;
+      const res = await fetch(url, { credentials: "include" });
+      
+      if (!res.ok) {
+        const text = (await res.text()) || res.statusText;
+        throw new Error(`${res.status}: ${text}`);
+      }
+      
+      return await res.json();
+    },
+    enabled,
+  });
+}
 
 export default function Schedules() {
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -28,18 +62,50 @@ export default function Schedules() {
   const [selectedDrivers, setSelectedDrivers] = useState<Set<string>>(new Set());
   const [showFilters, setShowFilters] = useState(false);
 
-  // Fetch blocks
+  // Calculate date range based on view mode (needed early for data fetching)
+  const dateRange = useMemo(() => {
+    if (viewMode === "week") {
+      const start = startOfWeek(currentDate, { weekStartsOn: 0 });
+      const end = endOfWeek(currentDate, { weekStartsOn: 0 });
+      return { start, end, days: eachDayOfInterval({ start, end }) };
+    } else {
+      // For month view, pad to full weeks with minimum 5 weeks (35 days) for consistent UI height
+      const monthStart = startOfMonth(currentDate);
+      const monthEnd = endOfMonth(currentDate);
+      let start = startOfWeek(monthStart, { weekStartsOn: 0 });
+      let end = endOfWeek(monthEnd, { weekStartsOn: 0 });
+      
+      // Ensure at least 5 weeks (35 days) are displayed for consistent grid height
+      const days = eachDayOfInterval({ start, end });
+      if (days.length < 35) {
+        // Extend to 35 days by adding a week at the end
+        end = addWeeks(end, 1);
+      }
+      
+      return { start, end, days: eachDayOfInterval({ start, end }) };
+    }
+  }, [currentDate, viewMode]);
+
+  // For week view, use the new combined calendar endpoint
+  const { data: calendarData } = useCalendarData(
+    dateRange.start, 
+    dateRange.end, 
+    viewMode === "week"
+  );
+
+  // For month/tally views, use legacy separate queries
   const { data: blocks = [] } = useQuery<Block[]>({
     queryKey: ["/api/blocks"],
+    enabled: viewMode !== "week",
   });
 
-  // Fetch block assignments with driver details
   const { data: assignments = [] } = useQuery<(BlockAssignment & { driver?: Driver })[]>({
     queryKey: ["/api/block-assignments"],
     select: (data: any) => data,
+    enabled: viewMode !== "week",
   });
 
-  // Fetch drivers for filters
+  // Always fetch drivers for filters dropdown
   const { data: drivers = [] } = useQuery<Driver[]>({
     queryKey: ["/api/drivers"],
   });
@@ -76,7 +142,21 @@ export default function Schedules() {
   });
 
   // Combine blocks with their assignments
+  // For week view, use calendar data; for month/tally, use legacy queries
   const blocksWithAssignments: BlockWithAssignment[] = useMemo(() => {
+    if (viewMode === "week" && calendarData) {
+      // Transform calendar API response to BlockWithAssignment format
+      return calendarData.blocks.map(block => ({
+        ...block,
+        assignment: block.assignment ? {
+          ...block.assignment,
+          driver: block.assignment.driver || undefined,
+        } : undefined,
+        contract: block.contract || undefined,
+      }));
+    }
+    
+    // Legacy path for month/tally views
     return blocks.map(block => {
       const assignment = assignments.find(a => a.blockId === block.id);
       if (assignment) {
@@ -85,31 +165,7 @@ export default function Schedules() {
       }
       return block;
     });
-  }, [blocks, assignments, drivers]);
-
-  // Calculate date range based on view mode
-  const dateRange = useMemo(() => {
-    if (viewMode === "week") {
-      const start = startOfWeek(currentDate, { weekStartsOn: 0 });
-      const end = endOfWeek(currentDate, { weekStartsOn: 0 });
-      return { start, end, days: eachDayOfInterval({ start, end }) };
-    } else {
-      // For month view, pad to full weeks with minimum 5 weeks (35 days) for consistent UI height
-      const monthStart = startOfMonth(currentDate);
-      const monthEnd = endOfMonth(currentDate);
-      let start = startOfWeek(monthStart, { weekStartsOn: 0 });
-      let end = endOfWeek(monthEnd, { weekStartsOn: 0 });
-      
-      // Ensure at least 5 weeks (35 days) are displayed for consistent grid height
-      const days = eachDayOfInterval({ start, end });
-      if (days.length < 35) {
-        // Extend to 35 days by adding a week at the end
-        end = addWeeks(end, 1);
-      }
-      
-      return { start, end, days: eachDayOfInterval({ start, end }) };
-    }
-  }, [currentDate, viewMode]);
+  }, [viewMode, calendarData, blocks, assignments, drivers]);
 
   // Fetch workload data for calendar views (week/month only)
   const { data: calendarWorkloadData = [] } = useQuery<Array<{

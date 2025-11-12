@@ -1041,6 +1041,89 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // GET /api/schedules/calendar - Combined endpoint for calendar views (must be before :id route)
+  app.get("/api/schedules/calendar", requireAuth, async (req, res) => {
+    try {
+      const { startDate, endDate } = req.query;
+      
+      // Require both date params
+      if (!startDate || !endDate) {
+        return res.status(400).json({ message: "Both startDate and endDate query parameters are required" });
+      }
+      
+      const start = new Date(startDate as string);
+      const end = new Date(endDate as string);
+      
+      // Validate date format
+      if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+        return res.status(400).json({ message: "Invalid date format. Use YYYY-MM-DD" });
+      }
+      
+      // Validate date range order
+      if (start > end) {
+        return res.status(400).json({ message: "Start date must be before or equal to end date" });
+      }
+      
+      // Validate date range limit (31 days)
+      const daysDiff = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+      if (daysDiff > 31) {
+        return res.status(400).json({ message: "Date range cannot exceed 31 days" });
+      }
+      
+      // Fetch blocks in date range
+      const blocks = await dbStorage.getBlocksByDateRange(req.session.tenantId!, start, end);
+      
+      // Fetch all assignments for tenant (will filter to blocks in range)
+      const allAssignments = await dbStorage.getBlockAssignmentsByTenant(req.session.tenantId!);
+      const blockIds = new Set(blocks.map(b => b.id));
+      const relevantAssignments = allAssignments.filter(a => blockIds.has(a.blockId));
+      
+      // Build maps for efficient lookups
+      const assignmentsByBlockId = new Map(relevantAssignments.map(a => [a.blockId, a]));
+      
+      // Fetch unique contract IDs and driver IDs
+      const contractIds = [...new Set(blocks.map(b => b.contractId))];
+      const driverIds = [...new Set(relevantAssignments.map(a => a.driverId))];
+      
+      // Fetch all contracts and drivers in parallel
+      const [contracts, drivers] = await Promise.all([
+        Promise.all(contractIds.map(id => dbStorage.getContract(id))),
+        Promise.all(driverIds.map(id => dbStorage.getDriver(id))),
+      ]);
+      
+      // Build lookup maps
+      const contractsMap = new Map(contracts.filter(c => c).map(c => [c!.id, c!]));
+      const driversMap = new Map(drivers.filter(d => d).map(d => [d!.id, d!]));
+      
+      // Enrich blocks with contract, assignment, and driver data
+      const enrichedBlocks = blocks.map(block => {
+        const contract = contractsMap.get(block.contractId) || null;
+        const assignment = assignmentsByBlockId.get(block.id) || null;
+        const driver = assignment ? driversMap.get(assignment.driverId) || null : null;
+        
+        return {
+          ...block,
+          contract,
+          assignment: assignment ? {
+            ...assignment,
+            driver,
+          } : null,
+        };
+      });
+      
+      // Return calendar-ready data
+      res.json({
+        dateRange: { start: startDate, end: endDate },
+        blocks: enrichedBlocks,
+        // Include normalized maps for frontend caching if needed
+        drivers: Object.fromEntries(driversMap),
+        contracts: Object.fromEntries(contractsMap),
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: "Failed to fetch calendar data", error: error.message });
+    }
+  });
+
   app.get("/api/schedules/:id", requireAuth, async (req, res) => {
     try {
       const schedule = await dbStorage.getSchedule(req.params.id);
@@ -1130,89 +1213,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ message: "Schedule deleted successfully" });
     } catch (error: any) {
       res.status(500).json({ message: "Failed to delete schedule", error: error.message });
-    }
-  });
-
-  // GET /api/schedules/calendar - Combined endpoint for calendar views
-  app.get("/api/schedules/calendar", requireAuth, async (req, res) => {
-    try {
-      const { startDate, endDate } = req.query;
-      
-      // Require both date params
-      if (!startDate || !endDate) {
-        return res.status(400).json({ message: "Both startDate and endDate query parameters are required" });
-      }
-      
-      const start = new Date(startDate as string);
-      const end = new Date(endDate as string);
-      
-      // Validate date format
-      if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-        return res.status(400).json({ message: "Invalid date format. Use YYYY-MM-DD" });
-      }
-      
-      // Validate date range order
-      if (start > end) {
-        return res.status(400).json({ message: "Start date must be before or equal to end date" });
-      }
-      
-      // Validate date range limit (31 days)
-      const daysDiff = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-      if (daysDiff > 31) {
-        return res.status(400).json({ message: "Date range cannot exceed 31 days" });
-      }
-      
-      // Fetch blocks in date range
-      const blocks = await dbStorage.getBlocksByDateRange(req.session.tenantId!, start, end);
-      
-      // Fetch all assignments for tenant (will filter to blocks in range)
-      const allAssignments = await dbStorage.getBlockAssignmentsByTenant(req.session.tenantId!);
-      const blockIds = new Set(blocks.map(b => b.id));
-      const relevantAssignments = allAssignments.filter(a => blockIds.has(a.blockId));
-      
-      // Build maps for efficient lookups
-      const assignmentsByBlockId = new Map(relevantAssignments.map(a => [a.blockId, a]));
-      
-      // Fetch unique contract IDs and driver IDs
-      const contractIds = [...new Set(blocks.map(b => b.contractId))];
-      const driverIds = [...new Set(relevantAssignments.map(a => a.driverId))];
-      
-      // Fetch all contracts and drivers in parallel
-      const [contracts, drivers] = await Promise.all([
-        Promise.all(contractIds.map(id => dbStorage.getContract(id))),
-        Promise.all(driverIds.map(id => dbStorage.getDriver(id))),
-      ]);
-      
-      // Build lookup maps
-      const contractsMap = new Map(contracts.filter(c => c).map(c => [c!.id, c!]));
-      const driversMap = new Map(drivers.filter(d => d).map(d => [d!.id, d!]));
-      
-      // Enrich blocks with contract, assignment, and driver data
-      const enrichedBlocks = blocks.map(block => {
-        const contract = contractsMap.get(block.contractId) || null;
-        const assignment = assignmentsByBlockId.get(block.id) || null;
-        const driver = assignment ? driversMap.get(assignment.driverId) || null : null;
-        
-        return {
-          ...block,
-          contract,
-          assignment: assignment ? {
-            ...assignment,
-            driver,
-          } : null,
-        };
-      });
-      
-      // Return calendar-ready data
-      res.json({
-        dateRange: { start: startDate, end: endDate },
-        blocks: enrichedBlocks,
-        // Include normalized maps for frontend caching if needed
-        drivers: Object.fromEntries(driversMap),
-        contracts: Object.fromEntries(contractsMap),
-      });
-    } catch (error: any) {
-      res.status(500).json({ message: "Failed to fetch calendar data", error: error.message });
     }
   });
 
