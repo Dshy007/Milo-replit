@@ -207,29 +207,88 @@ export async function generateComplianceHeatmap(
       // Calculate total hours for this day
       const totalHours = calculateDutyHoursInWindow(dayAssignments, dayStart, dayEnd);
 
-      // Calculate rolling windows (use the most recent assignment's solo type)
+      // Get the solo type from the most recent assignment
       const soloType = dayAssignments[dayAssignments.length - 1].soloType;
       
-      // For rolling compliance, check from the end of the day
-      const window24Start = new Date(dayEnd.getTime() - 24 * 60 * 60 * 1000);
-      const window48Start = new Date(dayEnd.getTime() - 48 * 60 * 60 * 1000);
+      // Calculate worst-case compliance across ALL sliding windows that overlap this day
+      // We need to check every assignment boundary plus derived critical points
+      let worstStatus: "safe" | "warning" | "violation" = "safe";
+      let worstMessages: string[] = [];
 
-      const hoursIn24h = calculateDutyHoursInWindow(driverAssignments, window24Start, dayEnd);
-      const hoursIn48h = calculateDutyHoursInWindow(driverAssignments, window48Start, dayEnd);
+      // Collect ALL relevant time points where windows should be evaluated
+      const criticalPoints = new Set<number>();
+      
+      // For each assignment that could affect this day (within 48h buffer)
+      const dayEndPlusBuffer = new Date(dayEnd.getTime() + 48 * 60 * 60 * 1000);
+      const dayStartMinusBuffer = new Date(dayStart.getTime() - 48 * 60 * 60 * 1000);
+      
+      const relevantAssignments = driverAssignments.filter(a =>
+        a.startTime < dayEndPlusBuffer && a.endTime > dayStartMinusBuffer
+      );
 
-      const { status, messages } = getComplianceStatus(soloType, hoursIn24h, hoursIn48h);
+      for (const assignment of relevantAssignments) {
+        // Add assignment start and end as critical points
+        criticalPoints.add(assignment.startTime.getTime());
+        criticalPoints.add(assignment.endTime.getTime());
+        
+        // Add points 24h and 48h before/after each boundary (for window calculations)
+        criticalPoints.add(assignment.startTime.getTime() + 24 * 60 * 60 * 1000);
+        criticalPoints.add(assignment.startTime.getTime() + 48 * 60 * 60 * 1000);
+        criticalPoints.add(assignment.endTime.getTime() + 24 * 60 * 60 * 1000);
+        criticalPoints.add(assignment.endTime.getTime() + 48 * 60 * 60 * 1000);
+        criticalPoints.add(assignment.startTime.getTime() - 24 * 60 * 60 * 1000);
+        criticalPoints.add(assignment.startTime.getTime() - 48 * 60 * 60 * 1000);
+        criticalPoints.add(assignment.endTime.getTime() - 24 * 60 * 60 * 1000);
+        criticalPoints.add(assignment.endTime.getTime() - 48 * 60 * 60 * 1000);
+      }
+      
+      // Add day boundaries
+      criticalPoints.add(dayStart.getTime());
+      criticalPoints.add(dayEnd.getTime());
 
-      if (status === "violation") totalViolations++;
-      if (status === "warning") totalWarnings++;
+      // Filter points to those that overlap the current day
+      // A window ending at point P affects this day if:
+      // - P >= dayStart (window ends during or after this day starts)
+      // - P - 48h <= dayEnd (window starts before or during this day)
+      const relevantPoints = Array.from(criticalPoints)
+        .map(t => new Date(t))
+        .filter(point => {
+          const window48Start = new Date(point.getTime() - 48 * 60 * 60 * 1000);
+          return point >= dayStart && window48Start <= dayEnd;
+        })
+        .sort((a, b) => a.getTime() - b.getTime());
+
+      // Evaluate compliance at each critical point
+      for (const point of relevantPoints) {
+        const window24Start = new Date(point.getTime() - 24 * 60 * 60 * 1000);
+        const window48Start = new Date(point.getTime() - 48 * 60 * 60 * 1000);
+
+        const hoursIn24h = calculateDutyHoursInWindow(driverAssignments, window24Start, point);
+        const hoursIn48h = calculateDutyHoursInWindow(driverAssignments, window48Start, point);
+
+        const { status, messages } = getComplianceStatus(soloType, hoursIn24h, hoursIn48h);
+
+        // Track worst status (violation > warning > safe)
+        if (status === "violation" && worstStatus !== "violation") {
+          worstStatus = "violation";
+          worstMessages = messages;
+        } else if (status === "warning" && worstStatus === "safe") {
+          worstStatus = "warning";
+          worstMessages = messages;
+        }
+      }
+
+      if (worstStatus === "violation") totalViolations++;
+      if (worstStatus === "warning") totalWarnings++;
 
       cells.push({
         driverId: driver.id,
         driverName: `${driver.firstName} ${driver.lastName}`,
         date: dateStr,
-        status,
+        status: worstStatus,
         totalHours: Math.round(totalHours * 10) / 10, // Round to 1 decimal
         assignmentCount: dayAssignments.length,
-        details: messages,
+        details: worstMessages,
       });
     }
 

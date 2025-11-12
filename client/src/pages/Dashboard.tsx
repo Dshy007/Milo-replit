@@ -2,6 +2,7 @@ import { useAuth } from "@/lib/auth";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Truck, Calendar, Users, Sparkles } from "lucide-react";
+import { ComplianceHeatmap } from "@/components/ComplianceHeatmap";
 
 export default function Dashboard() {
   const { user } = useAuth();
@@ -57,6 +58,11 @@ export default function Dashboard() {
               <p className="text-xs text-muted-foreground">AI chat interface</p>
             </CardContent>
           </Card>
+        </div>
+
+        {/* Compliance Heatmap */}
+        <div className="mb-6">
+          <ComplianceHeatmap />
         </div>
 
         <div className="grid gap-6 md:grid-cols-2">
