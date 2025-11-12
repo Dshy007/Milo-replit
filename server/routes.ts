@@ -634,6 +634,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return normalized;
       });
 
+      // Debug: Log headers to help troubleshoot
+      if (normalizedRows.length > 0) {
+        console.log('Truck Import - Original headers:', Object.keys(rows[0]));
+        console.log('Truck Import - Normalized headers:', Object.keys(normalizedRows[0]));
+        console.log('Truck Import - Sample row:', JSON.stringify(normalizedRows[0], null, 2));
+      }
+
       let successCount = 0;
       const errors: string[] = [];
 
