@@ -1,7 +1,7 @@
 import { db } from "./db";
 import { 
   users, tenants, drivers, trucks, routes, contracts, schedules, loads,
-  blocks, blockAssignments, protectedDriverRules,
+  blocks, blockAssignments, protectedDriverRules, specialRequests,
   type User, type InsertUser,
   type Tenant, type InsertTenant,
   type Driver, type InsertDriver,
@@ -12,7 +12,8 @@ import {
   type Load, type InsertLoad,
   type Block, type InsertBlock,
   type BlockAssignment, type InsertBlockAssignment,
-  type ProtectedDriverRule, type InsertProtectedDriverRule
+  type ProtectedDriverRule, type InsertProtectedDriverRule,
+  type SpecialRequest, type InsertSpecialRequest
 } from "@shared/schema";
 import { eq, and, gte, lte } from "drizzle-orm";
 import type { IStorage } from "./storage";
@@ -225,8 +226,8 @@ export class DbStorage implements IStorage {
       .where(
         and(
           eq(blocks.tenantId, tenantId),
-          gte(blocks.startDate, startDate),
-          lte(blocks.startDate, endDate)
+          gte(blocks.startTimestamp, startDate),
+          lte(blocks.startTimestamp, endDate)
         )
       );
   }
@@ -338,6 +339,51 @@ export class DbStorage implements IStorage {
 
   async deleteProtectedDriverRule(id: string): Promise<boolean> {
     const result = await db.delete(protectedDriverRules).where(eq(protectedDriverRules.id, id)).returning();
+    return result.length > 0;
+  }
+
+  // Special Requests
+  async getSpecialRequest(id: string): Promise<SpecialRequest | undefined> {
+    const result = await db.select().from(specialRequests).where(eq(specialRequests.id, id)).limit(1);
+    return result[0];
+  }
+
+  async getSpecialRequestsByTenant(tenantId: string): Promise<SpecialRequest[]> {
+    return await db.select().from(specialRequests).where(eq(specialRequests.tenantId, tenantId));
+  }
+
+  async getSpecialRequestsByDriver(driverId: string): Promise<SpecialRequest[]> {
+    return await db.select().from(specialRequests).where(eq(specialRequests.driverId, driverId));
+  }
+
+  async getSpecialRequestsByStatus(tenantId: string, status: string): Promise<SpecialRequest[]> {
+    return await db.select().from(specialRequests)
+      .where(and(eq(specialRequests.tenantId, tenantId), eq(specialRequests.status, status)));
+  }
+
+  async getSpecialRequestsByDateRange(tenantId: string, startDate: Date, endDate: Date): Promise<SpecialRequest[]> {
+    return await db.select().from(specialRequests)
+      .where(
+        and(
+          eq(specialRequests.tenantId, tenantId),
+          gte(specialRequests.affectedDate, startDate),
+          lte(specialRequests.affectedDate, endDate)
+        )
+      );
+  }
+
+  async createSpecialRequest(request: InsertSpecialRequest): Promise<SpecialRequest> {
+    const result = await db.insert(specialRequests).values(request).returning();
+    return result[0];
+  }
+
+  async updateSpecialRequest(id: string, updates: Partial<InsertSpecialRequest>): Promise<SpecialRequest | undefined> {
+    const result = await db.update(specialRequests).set(updates).where(eq(specialRequests.id, id)).returning();
+    return result[0];
+  }
+
+  async deleteSpecialRequest(id: string): Promise<boolean> {
+    const result = await db.delete(specialRequests).where(eq(specialRequests.id, id)).returning();
     return result.length > 0;
   }
 }

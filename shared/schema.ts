@@ -570,3 +570,42 @@ export const updateProtectedDriverRuleSchema = insertProtectedDriverRuleSchema.o
 export type InsertProtectedDriverRule = z.infer<typeof insertProtectedDriverRuleSchema>;
 export type UpdateProtectedDriverRule = z.infer<typeof updateProtectedDriverRuleSchema>;
 export type ProtectedDriverRule = typeof protectedDriverRules.$inferSelect;
+
+// Special Requests (Time-off, shift swaps, and scheduling requests)
+export const specialRequests = pgTable("special_requests", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+  driverId: varchar("driver_id").notNull().references(() => drivers.id),
+  requestType: text("request_type").notNull(), // time_off, swap
+  affectedDate: timestamp("affected_date").notNull(), // The date they need off
+  affectedBlockId: varchar("affected_block_id").references(() => blocks.id), // Optional - specific block to swap
+  reason: text("reason"), // Why they need time off
+  status: text("status").notNull().default("pending"), // pending, approved, rejected
+  swapCandidateId: varchar("swap_candidate_id").references(() => drivers.id), // Driver assigned to cover (if approved)
+  requestedAt: timestamp("requested_at").defaultNow().notNull(),
+  reviewedAt: timestamp("reviewed_at"),
+  reviewedBy: varchar("reviewed_by").references(() => users.id), // User who approved/rejected
+  notes: text("notes"), // Admin notes about the request
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  // Index for driver lookups
+  driverIdIdx: index("special_requests_driver_id_idx").on(table.driverId),
+  // Index for date range queries
+  affectedDateIdx: index("special_requests_affected_date_idx").on(table.affectedDate),
+  // Index for status filtering
+  statusIdx: index("special_requests_status_idx").on(table.status),
+  // Check constraint for request_type enum
+  requestTypeCheck: check("request_type_check", sql`${table.requestType} IN ('time_off', 'swap')`),
+  // Check constraint for status enum
+  statusCheck: check("status_check", sql`${table.status} IN ('pending', 'approved', 'rejected')`),
+}));
+
+export const insertSpecialRequestSchema = createInsertSchema(specialRequests, {
+  affectedDate: z.coerce.date(),
+  reviewedAt: z.coerce.date().optional().nullable(),
+}).omit({ id: true, createdAt: true, updatedAt: true });
+export const updateSpecialRequestSchema = insertSpecialRequestSchema.omit({ tenantId: true }).partial();
+export type InsertSpecialRequest = z.infer<typeof insertSpecialRequestSchema>;
+export type UpdateSpecialRequest = z.infer<typeof updateSpecialRequestSchema>;
+export type SpecialRequest = typeof specialRequests.$inferSelect;

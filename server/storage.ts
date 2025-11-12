@@ -9,7 +9,8 @@ import {
   type Load, type InsertLoad,
   type Block, type InsertBlock,
   type BlockAssignment, type InsertBlockAssignment,
-  type ProtectedDriverRule, type InsertProtectedDriverRule
+  type ProtectedDriverRule, type InsertProtectedDriverRule,
+  type SpecialRequest, type InsertSpecialRequest
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 
@@ -98,11 +99,22 @@ export interface IStorage {
   createProtectedDriverRule(rule: InsertProtectedDriverRule): Promise<ProtectedDriverRule>;
   updateProtectedDriverRule(id: string, rule: Partial<InsertProtectedDriverRule>): Promise<ProtectedDriverRule | undefined>;
   deleteProtectedDriverRule(id: string): Promise<boolean>;
+
+  // Special Requests
+  getSpecialRequest(id: string): Promise<SpecialRequest | undefined>;
+  getSpecialRequestsByTenant(tenantId: string): Promise<SpecialRequest[]>;
+  getSpecialRequestsByDriver(driverId: string): Promise<SpecialRequest[]>;
+  getSpecialRequestsByStatus(tenantId: string, status: string): Promise<SpecialRequest[]>;
+  getSpecialRequestsByDateRange(tenantId: string, startDate: Date, endDate: Date): Promise<SpecialRequest[]>;
+  createSpecialRequest(request: InsertSpecialRequest): Promise<SpecialRequest>;
+  updateSpecialRequest(id: string, request: Partial<InsertSpecialRequest>): Promise<SpecialRequest | undefined>;
+  deleteSpecialRequest(id: string): Promise<boolean>;
 }
 
 export class MemStorage implements IStorage {
   private users: Map<string, User>;
   private tenants: Map<string, Tenant>;
+  private specialRequests: Map<string, SpecialRequest>;
   private drivers: Map<string, Driver>;
   private trucks: Map<string, Truck>;
   private routes: Map<string, Route>;
@@ -125,6 +137,7 @@ export class MemStorage implements IStorage {
     this.blocks = new Map();
     this.blockAssignments = new Map();
     this.protectedDriverRules = new Map();
+    this.specialRequests = new Map();
   }
 
   // Users
@@ -576,6 +589,74 @@ export class MemStorage implements IStorage {
 
   async deleteProtectedDriverRule(id: string): Promise<boolean> {
     return this.protectedDriverRules.delete(id);
+  }
+
+  // Special Requests
+  async getSpecialRequest(id: string): Promise<SpecialRequest | undefined> {
+    return this.specialRequests.get(id);
+  }
+
+  async getSpecialRequestsByTenant(tenantId: string): Promise<SpecialRequest[]> {
+    return Array.from(this.specialRequests.values()).filter(
+      (req) => req.tenantId === tenantId
+    );
+  }
+
+  async getSpecialRequestsByDriver(driverId: string): Promise<SpecialRequest[]> {
+    return Array.from(this.specialRequests.values()).filter(
+      (req) => req.driverId === driverId
+    );
+  }
+
+  async getSpecialRequestsByStatus(tenantId: string, status: string): Promise<SpecialRequest[]> {
+    return Array.from(this.specialRequests.values()).filter(
+      (req) => req.tenantId === tenantId && req.status === status
+    );
+  }
+
+  async getSpecialRequestsByDateRange(tenantId: string, startDate: Date, endDate: Date): Promise<SpecialRequest[]> {
+    return Array.from(this.specialRequests.values()).filter(
+      (req) => 
+        req.tenantId === tenantId &&
+        req.affectedDate >= startDate &&
+        req.affectedDate <= endDate
+    );
+  }
+
+  async createSpecialRequest(request: InsertSpecialRequest): Promise<SpecialRequest> {
+    const id = randomUUID();
+    const now = new Date();
+    const newRequest: SpecialRequest = {
+      ...request,
+      id,
+      requestedAt: now,
+      reviewedAt: null,
+      reviewedBy: null,
+      notes: request.notes || null,
+      affectedBlockId: request.affectedBlockId || null,
+      swapCandidateId: request.swapCandidateId || null,
+      reason: request.reason || null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.specialRequests.set(id, newRequest);
+    return newRequest;
+  }
+
+  async updateSpecialRequest(id: string, updates: Partial<InsertSpecialRequest>): Promise<SpecialRequest | undefined> {
+    const existing = this.specialRequests.get(id);
+    if (!existing) return undefined;
+    const updated = {
+      ...existing,
+      ...updates,
+      updatedAt: new Date(),
+    };
+    this.specialRequests.set(id, updated);
+    return updated;
+  }
+
+  async deleteSpecialRequest(id: string): Promise<boolean> {
+    return this.specialRequests.delete(id);
   }
 }
 
