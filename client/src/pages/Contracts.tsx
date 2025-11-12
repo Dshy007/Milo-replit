@@ -53,7 +53,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { insertContractSchema, type Contract, type InsertContract } from "@shared/schema";
-import { Plus, Pencil, Trash2, Search, FileText, Upload, Clock, Truck } from "lucide-react";
+import { Plus, Pencil, Trash2, Search, FileText, Upload, Clock, Truck, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
 
 // Helper function to convert military time to AM/PM
 function convertTo12Hour(time24: string): string {
@@ -63,6 +63,9 @@ function convertTo12Hour(time24: string): string {
   const hour12 = hour % 12 || 12;
   return `${hour12}:${minutes} ${ampm}`;
 }
+
+type SortField = 'startTime' | 'status' | 'tractorId' | 'type' | 'domicile';
+type SortDirection = 'asc' | 'desc' | null;
 
 export default function Contracts() {
   const { toast } = useToast();
@@ -75,6 +78,8 @@ export default function Contracts() {
   const [selectedContract, setSelectedContract] = useState<Contract | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [useMilitaryTime, setUseMilitaryTime] = useState(true); // Default to military time
+  const [sortField, setSortField] = useState<SortField | null>(null);
+  const [sortDirection, setSortDirection] = useState<SortDirection>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: contracts = [], isLoading } = useQuery<Contract[]>({
@@ -201,7 +206,35 @@ export default function Contracts() {
     },
   });
 
-  const filteredContracts = contracts.filter((contract) => {
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      // Cycle through: asc -> desc -> null
+      if (sortDirection === 'asc') {
+        setSortDirection('desc');
+      } else if (sortDirection === 'desc') {
+        setSortDirection(null);
+        setSortField(null);
+      }
+    } else {
+      setSortField(field);
+      setSortDirection('asc');
+    }
+  };
+
+  const getSortIcon = (field: SortField) => {
+    if (sortField !== field) {
+      return <ArrowUpDown className="w-4 h-4 ml-2" />;
+    }
+    if (sortDirection === 'asc') {
+      return <ArrowUp className="w-4 h-4 ml-2" />;
+    }
+    if (sortDirection === 'desc') {
+      return <ArrowDown className="w-4 h-4 ml-2" />;
+    }
+    return <ArrowUpDown className="w-4 h-4 ml-2" />;
+  };
+
+  let filteredContracts = contracts.filter((contract) => {
     const matchesSearch =
       contract.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       contract.type.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -210,6 +243,43 @@ export default function Contracts() {
     const matchesType = typeFilter === "all" || contract.type === typeFilter;
     return matchesSearch && matchesType;
   });
+
+  // Apply sorting
+  if (sortField && sortDirection) {
+    filteredContracts = [...filteredContracts].sort((a, b) => {
+      let aValue: string | number = '';
+      let bValue: string | number = '';
+
+      switch (sortField) {
+        case 'startTime':
+          aValue = a.startTime;
+          bValue = b.startTime;
+          break;
+        case 'status':
+          aValue = a.status || '';
+          bValue = b.status || '';
+          break;
+        case 'tractorId':
+          aValue = a.tractorId;
+          bValue = b.tractorId;
+          break;
+        case 'type':
+          aValue = a.type;
+          bValue = b.type;
+          break;
+        case 'domicile':
+          aValue = a.domicile || '';
+          bValue = b.domicile || '';
+          break;
+      }
+
+      if (sortDirection === 'asc') {
+        return aValue < bValue ? -1 : aValue > bValue ? 1 : 0;
+      } else {
+        return aValue > bValue ? -1 : aValue < bValue ? 1 : 0;
+      }
+    });
+  }
 
   const handleEdit = (contract: Contract) => {
     setSelectedContract(contract);
@@ -689,11 +759,66 @@ export default function Contracts() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Start Time</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Tractor</TableHead>
-                  <TableHead>Driver Type</TableHead>
-                  <TableHead>Domicile</TableHead>
+                  <TableHead>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleSort('startTime')}
+                      className="hover-elevate -ml-3 h-8"
+                      data-testid="button-sort-start-time"
+                    >
+                      Start Time
+                      {getSortIcon('startTime')}
+                    </Button>
+                  </TableHead>
+                  <TableHead>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleSort('status')}
+                      className="hover-elevate -ml-3 h-8"
+                      data-testid="button-sort-status"
+                    >
+                      Status
+                      {getSortIcon('status')}
+                    </Button>
+                  </TableHead>
+                  <TableHead>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleSort('tractorId')}
+                      className="hover-elevate -ml-3 h-8"
+                      data-testid="button-sort-tractor"
+                    >
+                      Tractor
+                      {getSortIcon('tractorId')}
+                    </Button>
+                  </TableHead>
+                  <TableHead>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleSort('type')}
+                      className="hover-elevate -ml-3 h-8"
+                      data-testid="button-sort-type"
+                    >
+                      Driver Type
+                      {getSortIcon('type')}
+                    </Button>
+                  </TableHead>
+                  <TableHead>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleSort('domicile')}
+                      className="hover-elevate -ml-3 h-8"
+                      data-testid="button-sort-domicile"
+                    >
+                      Domicile
+                      {getSortIcon('domicile')}
+                    </Button>
+                  </TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
