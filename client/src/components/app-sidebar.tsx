@@ -1,4 +1,4 @@
-import { Home, Users, Calendar, Route, Truck, FileText, Upload, Sparkles, Settings, LogOut, MessageSquare, Brain } from "lucide-react";
+import { Home, Users, Calendar, Route, Truck, FileText, Upload, Sparkles, Settings, LogOut, MessageSquare, Brain, FileSpreadsheet } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import {
@@ -52,6 +52,12 @@ const navItems = [
     url: "/import",
     icon: Upload,
     testId: "nav-import",
+  },
+  {
+    title: "CSV Import",
+    url: "/csv-import",
+    icon: FileSpreadsheet,
+    testId: "nav-csv-import",
   },
   {
     title: "AI Assistant",

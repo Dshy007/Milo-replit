@@ -2396,13 +2396,9 @@ Be concise, professional, and helpful. Focus on trucking operations management. 
   // ==================== PATTERN LEARNING & AUTO-BUILD ====================
 
   // POST /api/patterns/recompute - Recompute assignment patterns for pattern learning
-  app.post("/api/patterns/recompute", async (req: Request, res: Response) => {
+  app.post("/api/patterns/recompute", requireAuth, async (req: Request, res: Response) => {
     try {
-      const tenantId = req.user?.tenantId;
-      if (!tenantId) {
-        return res.status(401).json({ message: "Unauthorized - no tenant" });
-      }
-
+      const tenantId = req.session.tenantId!;
       const { recomputePatterns } = await import("./pattern-engine");
       const result = await recomputePatterns(tenantId);
       
@@ -2418,13 +2414,9 @@ Be concise, professional, and helpful. Focus on trucking operations management. 
   });
 
   // GET /api/patterns/stats - Get pattern statistics
-  app.get("/api/patterns/stats", async (req: Request, res: Response) => {
+  app.get("/api/patterns/stats", requireAuth, async (req: Request, res: Response) => {
     try {
-      const tenantId = req.user?.tenantId;
-      if (!tenantId) {
-        return res.status(401).json({ message: "Unauthorized - no tenant" });
-      }
-
+      const tenantId = req.session.tenantId!;
       const { getPatternStats } = await import("./pattern-engine");
       const stats = await getPatternStats(tenantId);
       
@@ -2436,15 +2428,11 @@ Be concise, professional, and helpful. Focus on trucking operations management. 
   });
 
   // POST /api/auto-build/preview - Generate auto-build suggestions for next week
-  app.post("/api/auto-build/preview", async (req: Request, res: Response) => {
+  app.post("/api/auto-build/preview", requireAuth, async (req: Request, res: Response) => {
     try {
-      const tenantId = req.user?.tenantId;
-      const userId = req.user?.id;
+      const tenantId = req.session.tenantId!;
+      const userId = req.session.userId!;
       
-      if (!tenantId) {
-        return res.status(401).json({ message: "Unauthorized - no tenant" });
-      }
-
       const { targetWeekStart } = req.body;
       if (!targetWeekStart) {
         return res.status(400).json({ message: "Missing required field: targetWeekStart" });
@@ -2472,13 +2460,9 @@ Be concise, professional, and helpful. Focus on trucking operations management. 
   });
 
   // GET /api/auto-build/runs - Get all auto-build runs for tenant
-  app.get("/api/auto-build/runs", async (req: Request, res: Response) => {
+  app.get("/api/auto-build/runs", requireAuth, async (req: Request, res: Response) => {
     try {
-      const tenantId = req.user?.tenantId;
-      if (!tenantId) {
-        return res.status(401).json({ message: "Unauthorized - no tenant" });
-      }
-
+      const tenantId = req.session.tenantId!;
       const { getAutoBuildRuns } = await import("./auto-build-engine");
       const runs = await getAutoBuildRuns(tenantId);
       
@@ -2490,9 +2474,9 @@ Be concise, professional, and helpful. Focus on trucking operations management. 
   });
 
   // POST /api/auto-build/commit - Commit approved auto-build suggestions
-  app.post("/api/auto-build/commit", async (req: Request, res: Response) => {
+  app.post("/api/auto-build/commit", requireAuth, async (req: Request, res: Response) => {
     try {
-      const userId = req.user?.id;
+      const userId = req.session.userId!;
       
       const { runId, approvedBlockIds } = req.body;
       if (!runId || !approvedBlockIds || !Array.isArray(approvedBlockIds)) {
@@ -2510,6 +2494,52 @@ Be concise, professional, and helpful. Focus on trucking operations management. 
     } catch (error: any) {
       console.error("Auto-build commit error:", error);
       res.status(500).json({ message: "Failed to commit auto-build", error: error.message });
+    }
+  });
+
+  // ==================== CSV IMPORT ====================
+
+  // POST /api/schedules/import-validate - Validate CSV import without committing
+  app.post("/api/schedules/import-validate", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { csvRows } = req.body;
+      if (!csvRows || !Array.isArray(csvRows)) {
+        return res.status(400).json({ message: "Missing required field: csvRows (array)" });
+      }
+
+      const { validateCSVImport } = await import("./csv-import");
+      const validationResults = await validateCSVImport(tenantId, csvRows);
+      
+      res.json(validationResults);
+    } catch (error: any) {
+      console.error("CSV validation error:", error);
+      res.status(500).json({ message: "Failed to validate CSV import", error: error.message });
+    }
+  });
+
+  // POST /api/schedules/import-commit - Commit validated CSV rows
+  app.post("/api/schedules/import-commit", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const userId = req.session.userId!;
+      
+      const { validatedRows } = req.body;
+      if (!validatedRows || !Array.isArray(validatedRows)) {
+        return res.status(400).json({ message: "Missing required field: validatedRows (array)" });
+      }
+
+      const { commitCSVImport } = await import("./csv-import");
+      const result = await commitCSVImport(tenantId, validatedRows, userId);
+      
+      res.json({
+        success: true,
+        message: `Successfully created ${result.created} assignments${result.failed > 0 ? `, ${result.failed} failed` : ""}`,
+        ...result,
+      });
+    } catch (error: any) {
+      console.error("CSV commit error:", error);
+      res.status(500).json({ message: "Failed to commit CSV import", error: error.message });
     }
   });
 

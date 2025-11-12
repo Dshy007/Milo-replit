@@ -21,6 +21,7 @@ import Import from "@/pages/Import";
 import Chat from "@/pages/Chat";
 import SpecialRequests from "@/pages/SpecialRequests";
 import AutoBuild from "@/pages/AutoBuild";
+import CSVImport from "@/pages/CSVImport";
 import NotFound from "@/pages/not-found";
 
 function ProtectedLayout({ children }: { children: ReactNode }) {
@@ -134,6 +135,13 @@ function Router() {
         <ProtectedRoute>
           <ProtectedLayout>
             <AutoBuild />
+          </ProtectedLayout>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/csv-import">
+        <ProtectedRoute>
+          <ProtectedLayout>
+            <CSVImport />
           </ProtectedLayout>
         </ProtectedRoute>
       </Route>
