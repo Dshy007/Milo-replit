@@ -94,11 +94,36 @@ Preferred communication style: Simple, everyday language.
   - GET /api/auto-build/runs: Get all auto-build runs
   - POST /api/auto-build/commit: Commit approved suggestions
 
-**Next Steps**:
-- Task 9: Auto-Build Review UI (display suggestions, manual adjustments, bulk approve)
-- Task 10: Milo AI Integration (conversational interface for workload queries + suggestions)
+**Task 10 - Auto-Build Review UI (Completed November 12, 2025)**:
+- New page: `client/src/pages/AutoBuild.tsx` at route `/auto-build`
+- Pattern Learning Stats Display:
+  - Total patterns, drivers, block types analyzed
+  - High/medium/low confidence breakdown
+  - Recompute patterns button with feedback
+- Auto-Build Preview Generation:
+  - "Generate Next Week Schedule" button
+  - Targets next Sunday-Saturday week automatically
+  - Creates auto_build_run record in database
+- Suggestion Review Table:
+  - Displays all block assignments with driver names
+  - Color-coded confidence badges (Green ≥50%, Yellow 35-50%, Red <35%)
+  - Score breakdown: Pattern/Workload/Compliance percentages
+  - Rationale text explaining each suggestion
+  - Protected assignment indicator
+  - Individual checkbox selection
+- Bulk Operations:
+  - Select All / Deselect All buttons
+  - Approve button commits selected assignments to database
+  - Cancel button discards preview
+- Warnings & Alerts:
+  - Warning list for blocks with no patterns
+  - Unassignable blocks alert (no eligible drivers)
+  - Summary stats (total blocks, confidence distribution)
+- Added to sidebar navigation with Brain icon
 
-**Next Steps (Phase 3)**:
+**Phase 2 Complete**: Pattern Learning + Auto-Build Next Week
+
+**Next Steps (Phase 3: Milo AI)**:
 - Task 11: Milo AI Integration (OpenAI function calling for workload queries + swap suggestions)
 - Task 12: Overtime Warnings (fairness scoring, utilization report)
 - Task 13: Comprehensive end-to-end testing across all phases

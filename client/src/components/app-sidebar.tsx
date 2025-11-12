@@ -1,4 +1,4 @@
-import { Home, Users, Calendar, Route, Truck, FileText, Upload, Sparkles, Settings, LogOut, MessageSquare } from "lucide-react";
+import { Home, Users, Calendar, Route, Truck, FileText, Upload, Sparkles, Settings, LogOut, MessageSquare, Brain } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import {
@@ -64,6 +64,12 @@ const navItems = [
     url: "/special-requests",
     icon: MessageSquare,
     testId: "nav-special-requests",
+  },
+  {
+    title: "Auto-Build",
+    url: "/auto-build",
+    icon: Brain,
+    testId: "nav-auto-build",
   },
 ];
 
