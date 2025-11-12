@@ -1,4 +1,4 @@
-import { startOfWeek, endOfWeek, parseISO, isSameDay, eachDayOfInterval } from "date-fns";
+import { startOfWeek, endOfWeek, isSameDay, eachDayOfInterval } from "date-fns";
 import type { Block, BlockAssignment, Driver, ProtectedDriverRule } from "@shared/schema";
 import { validateBlockAssignment } from "./rolling6-calculator";
 
@@ -40,7 +40,8 @@ export async function calculateDaysWorkedInWeek(
   const workedDays = new Set<string>();
   
   for (const assignment of driverAssignments) {
-    const blockStart = parseISO(assignment.block.startTimestamp as any);
+    // startTimestamp is already a Date object from Drizzle
+    const blockStart = new Date(assignment.block.startTimestamp);
     
     // Check if block starts within this week
     for (const day of daysInWeek) {
@@ -70,7 +71,8 @@ export async function calculateHoursWorkedInWeek(
   let totalHours = 0;
   
   for (const assignment of driverAssignments) {
-    const blockStart = parseISO(assignment.block.startTimestamp as any);
+    // startTimestamp is already a Date object from Drizzle
+    const blockStart = new Date(assignment.block.startTimestamp);
     
     // Only count blocks that start within this week
     if (blockStart >= weekStart && blockStart <= weekEnd) {
@@ -110,7 +112,8 @@ export async function getDriverWorkloadForWeek(
   const blocksThisWeek = assignments
     .filter(a => {
       if (a.driverId !== driver.id) return false;
-      const blockStart = parseISO(a.block.startTimestamp as any);
+      // startTimestamp is already a Date object from Drizzle
+      const blockStart = new Date(a.block.startTimestamp);
       return blockStart >= weekStart && blockStart <= weekEnd;
     })
     .map(a => a.block.id);
@@ -139,7 +142,8 @@ export async function findSwapCandidates(
   allAssignments: Array<BlockAssignment & { block: Block }>,
   protectedRules: ProtectedDriverRule[]
 ): Promise<SwapCandidate[]> {
-  const blockDate = parseISO(proposedBlock.startTimestamp as any);
+  // startTimestamp is already a Date object from Drizzle
+  const blockDate = new Date(proposedBlock.startTimestamp);
   const candidates: SwapCandidate[] = [];
   
   for (const driver of allDrivers) {
@@ -149,7 +153,8 @@ export async function findSwapCandidates(
     // Check if driver is already assigned on this date
     const hasAssignmentOnDate = allAssignments.some(a => {
       if (a.driverId !== driver.id) return false;
-      const assignmentDate = parseISO(a.block.startTimestamp as any);
+      // startTimestamp is already a Date object from Drizzle
+      const assignmentDate = new Date(a.block.startTimestamp);
       return isSameDay(assignmentDate, blockDate);
     });
     
