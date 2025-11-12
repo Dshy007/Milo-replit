@@ -37,12 +37,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const data = await response.json();
         setUser(data.user);
       } else {
+        // Auto-login as freedom user for development
+        await autoLogin();
+      }
+    } catch (error) {
+      // Auto-login as freedom user for development
+      await autoLogin();
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  async function autoLogin() {
+    try {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          username: "freedom", 
+          password: "password123", 
+          rememberMe: true 
+        }),
+        credentials: "include",
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setUser(data.user);
+      } else {
         setUser(null);
       }
     } catch (error) {
       setUser(null);
-    } finally {
-      setIsLoading(false);
     }
   }
 

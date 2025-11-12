@@ -45,6 +45,14 @@ function ProtectedLayout({ children }: { children: ReactNode }) {
 }
 
 function Router() {
+  const [location, setLocation] = useLocation();
+
+  // Auto-redirect to dashboard on root
+  if (location === "/") {
+    setLocation("/dashboard");
+    return null;
+  }
+
   return (
     <Switch>
       <Route path="/" component={Landing} />
