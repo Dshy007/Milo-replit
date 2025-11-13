@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -24,9 +24,19 @@ import { CalendarIcon, CheckCircle2, XCircle, Clock, AlertCircle, User, Calendar
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import type { z } from "zod";
-import type { SpecialRequest, Driver, Block } from "@shared/schema";
+import type { SpecialRequest, Driver, Block, Contract } from "@shared/schema";
 
 type FormValues = z.infer<typeof formSpecialRequestSchema>;
+
+type RequestType = "full_day" | "recurring_days" | "time_window";
+
+// Grouped contract times for display
+type ContractTimeOption = {
+  startTime: string;
+  blockType: "solo1" | "solo2" | "team";
+  blockTypeLabel: string;
+  contracts: Contract[];
+};
 
 // Helper function to convert military time to AM/PM
 function convertTo12Hour(time24: string): string {
@@ -41,6 +51,9 @@ export default function SpecialRequests() {
   const [selectedRequest, setSelectedRequest] = useState<SpecialRequest | null>(null);
   const [showSwapCandidates, setShowSwapCandidates] = useState(false);
   const [showSubmitForm, setShowSubmitForm] = useState(false);
+  const [requestType, setRequestType] = useState<RequestType>("full_day");
+  const [selectedContractTime, setSelectedContractTime] = useState<string>("");
+  const [useMilitaryTime, setUseMilitaryTime] = useState(true);
   const { toast } = useToast();
 
   const { data: requests, isLoading: requestsLoading } = useQuery<SpecialRequest[]>({
@@ -55,6 +68,63 @@ export default function SpecialRequests() {
     queryKey: ["/api/blocks"],
   });
 
+  const { data: contracts } = useQuery<Contract[]>({
+    queryKey: ["/api/contracts"],
+  });
+
+  // Normalize contract type to lowercase
+  const normalizeBlockType = (type: string): "solo1" | "solo2" | "team" => {
+    const normalized = type.toLowerCase();
+    if (normalized === "solo1" || normalized === "solo2" || normalized === "team") {
+      return normalized as "solo1" | "solo2" | "team";
+    }
+    // Fallback for unexpected values
+    return "solo1";
+  };
+
+  // Group contracts by start time and block type for the dropdown
+  const contractTimeOptions: ContractTimeOption[] = (() => {
+    if (!contracts) return [];
+    
+    const grouped = new Map<string, ContractTimeOption>();
+    
+    contracts.forEach(contract => {
+      const blockType = normalizeBlockType(contract.type);
+      const key = `${contract.startTime}-${blockType}`;
+      
+      if (!grouped.has(key)) {
+        const blockTypeLabel = blockType === "solo1" ? "Solo 1" : 
+                               blockType === "solo2" ? "Solo 2" : "Team";
+        grouped.set(key, {
+          startTime: contract.startTime,
+          blockType,
+          blockTypeLabel,
+          contracts: []
+        });
+      }
+      
+      grouped.get(key)!.contracts.push(contract);
+    });
+    
+    // Sort by time, then by block type
+    return Array.from(grouped.values()).sort((a, b) => {
+      if (a.startTime !== b.startTime) {
+        return a.startTime.localeCompare(b.startTime);
+      }
+      const typeOrder = { solo1: 1, solo2: 2, team: 3 };
+      return typeOrder[a.blockType] - typeOrder[b.blockType];
+    });
+  })();
+
+  // Get tractors for selected time/block type
+  const availableTractors = (() => {
+    if (!selectedContractTime) return [];
+    const option = contractTimeOptions.find(opt => 
+      `${opt.startTime}-${opt.blockType}` === selectedContractTime
+    );
+    return option?.contracts || [];
+  })();
+
   const form = useForm<FormValues>({
     resolver: zodResolver(formSpecialRequestSchema),
     defaultValues: {
@@ -62,6 +132,10 @@ export default function SpecialRequests() {
       driverId: "",
       startDate: new Date().toISOString() as any,
       endDate: new Date().toISOString() as any,
+      startTime: undefined,
+      endTime: undefined,
+      blockType: undefined,
+      contractId: undefined,
       isRecurring: false,
       recurringPattern: undefined,
       recurringDays: [],
@@ -77,6 +151,25 @@ export default function SpecialRequests() {
       swapCandidateId: undefined,
     },
   });
+
+  // Sync selectedContractTime with form values (bidirectional binding)
+  const formStartTime = form.watch("startTime");
+  const formBlockType = form.watch("blockType");
+  
+  useEffect(() => {
+    if (formStartTime && formBlockType) {
+      const key = `${formStartTime}-${formBlockType}`;
+      if (key !== selectedContractTime) {
+        setSelectedContractTime(key);
+      }
+    } else {
+      if (selectedContractTime !== "") {
+        setSelectedContractTime("");
+        // Clear contractId when contract time is cleared
+        form.setValue("contractId", undefined);
+      }
+    }
+  }, [formStartTime, formBlockType, selectedContractTime, form]);
 
   const createMutation = useMutation({
     mutationFn: async (data: FormValues) => {
@@ -152,6 +245,18 @@ export default function SpecialRequests() {
   });
 
   const onSubmit = (data: FormValues) => {
+    // Validate contract time selection for recurring_days and time_window types
+    if (requestType === "recurring_days" || requestType === "time_window") {
+      if (!data.startTime || !data.blockType) {
+        toast({
+          title: "Contract time required",
+          description: "Please select a contract start time for this request type",
+          variant: "destructive"
+        });
+        return;
+      }
+    }
+    
     createMutation.mutate(data);
   };
 
@@ -194,6 +299,31 @@ export default function SpecialRequests() {
         {dayLabels || "Recurring"}
       </Badge>
     );
+  };
+
+  const getContractInfo = (request: SpecialRequest) => {
+    if (!request.startTime || !request.blockType) return null;
+    
+    const blockTypeLabel = request.blockType === "solo1" ? "Solo 1" : 
+                           request.blockType === "solo2" ? "Solo 2" : "Team";
+    
+    // Find the contract name if contractId is specified
+    let contractName = null;
+    if (request.contractId) {
+      if (!contracts) {
+        // Contracts not loaded yet - show generic message
+        contractName = "Contract ID: " + request.contractId.slice(0, 8);
+      } else {
+        const contract = contracts.find(c => c.id === request.contractId);
+        contractName = contract?.name || "Unknown Contract";
+      }
+    }
+    
+    // Display format: "20:30 • Any tractor (Solo 1)" or "20:30 • Tractor_8"
+    const timeDisplay = useMilitaryTime ? request.startTime : convertTo12Hour(request.startTime);
+    const tractorInfo = contractName || "Any tractor";
+    
+    return `${timeDisplay} • ${tractorInfo} (${blockTypeLabel})`;
   };
 
   const getDateDisplay = (request: SpecialRequest) => {
@@ -326,6 +456,12 @@ export default function SpecialRequests() {
                       <CalendarIcon className="w-4 h-4 text-muted-foreground" />
                       <span>{getDateDisplay(request)}</span>
                     </div>
+                    {getContractInfo(request) && (
+                      <div className="flex items-center gap-2 text-sm">
+                        <Clock className="w-4 h-4 text-muted-foreground" />
+                        <span className="font-medium">{getContractInfo(request)}</span>
+                      </div>
+                    )}
                     {request.reason && (
                       <div className="flex items-start gap-2 text-sm">
                         <AlertCircle className="w-4 h-4 text-muted-foreground mt-0.5" />
@@ -379,6 +515,12 @@ export default function SpecialRequests() {
                       <CalendarIcon className="w-4 h-4 text-muted-foreground" />
                       <span>{getDateDisplay(request)}</span>
                     </div>
+                    {getContractInfo(request) && (
+                      <div className="flex items-center gap-2 text-sm">
+                        <Clock className="w-4 h-4 text-muted-foreground" />
+                        <span className="font-medium">{getContractInfo(request)}</span>
+                      </div>
+                    )}
                     {request.reason && (
                       <div className="flex items-start gap-2 text-sm">
                         <AlertCircle className="w-4 h-4 text-muted-foreground mt-0.5" />
@@ -438,6 +580,12 @@ export default function SpecialRequests() {
                       <CalendarIcon className="w-4 h-4 text-muted-foreground" />
                       <span>{getDateDisplay(request)}</span>
                     </div>
+                    {getContractInfo(request) && (
+                      <div className="flex items-center gap-2 text-sm">
+                        <Clock className="w-4 h-4 text-muted-foreground" />
+                        <span className="font-medium">{getContractInfo(request)}</span>
+                      </div>
+                    )}
                     {request.reason && (
                       <div className="flex items-start gap-2 text-sm">
                         <AlertCircle className="w-4 h-4 text-muted-foreground mt-0.5" />
@@ -466,6 +614,7 @@ export default function SpecialRequests() {
           </DialogHeader>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+              {/* Driver Selection */}
               <FormField
                 control={form.control}
                 name="driverId"
@@ -491,6 +640,66 @@ export default function SpecialRequests() {
                 )}
               />
 
+              {/* Request Type Selector */}
+              <div className="space-y-4">
+                <FormLabel>Request Type</FormLabel>
+                <ToggleGroup
+                  type="single"
+                  value={requestType}
+                  onValueChange={(value) => {
+                    if (value) {
+                      setRequestType(value as RequestType);
+                      // Reset all time/contract related fields first
+                      setSelectedContractTime("");
+                      
+                      // Reset relevant form fields when changing type
+                      if (value === "full_day") {
+                        form.setValue("startTime", undefined);
+                        form.setValue("endTime", undefined);
+                        form.setValue("blockType", undefined);
+                        form.setValue("contractId", undefined);
+                        form.setValue("isRecurring", false);
+                        form.setValue("recurringDays", []);
+                        form.setValue("recurringPattern", undefined);
+                      } else if (value === "recurring_days") {
+                        form.setValue("isRecurring", true);
+                        form.setValue("endTime", undefined);
+                        form.setValue("recurringPattern", "custom");
+                        // Keep blockType, contractId, startTime - user will select these
+                      } else if (value === "time_window") {
+                        form.setValue("isRecurring", false);
+                        form.setValue("recurringDays", []);
+                        form.setValue("recurringPattern", undefined);
+                        // Keep blockType, contractId, startTime, endTime - user will select these
+                      }
+                    }
+                  }}
+                  className="grid grid-cols-3 gap-2"
+                  data-testid="toggle-request-type"
+                >
+                  <ToggleGroupItem value="full_day" aria-label="Full Day Off" className="flex flex-col items-center gap-1 h-auto py-3" data-testid="toggle-full-day">
+                    <CalendarCheck className="w-5 h-5" />
+                    <span className="text-sm">Full Day Off</span>
+                  </ToggleGroupItem>
+                  <ToggleGroupItem value="recurring_days" aria-label="Recurring Days Off" className="flex flex-col items-center gap-1 h-auto py-3" data-testid="toggle-recurring-days">
+                    <Repeat className="w-5 h-5" />
+                    <span className="text-sm">Recurring Days</span>
+                  </ToggleGroupItem>
+                  <ToggleGroupItem value="time_window" aria-label="Time Window" className="flex flex-col items-center gap-1 h-auto py-3" data-testid="toggle-time-window">
+                    <Clock className="w-5 h-5" />
+                    <span className="text-sm">Time Window</span>
+                  </ToggleGroupItem>
+                </ToggleGroup>
+                <FormDescription>
+                  {requestType === "full_day" && "Request a full day off from work"}
+                  {requestType === "recurring_days" && "Set recurring days off (e.g., every Friday)"}
+                  {requestType === "time_window" && "Request specific time window unavailability"}
+                </FormDescription>
+              </div>
+
+              <Separator />
+
+              {/* Availability Type */}
               <FormField
                 control={form.control}
                 name="availabilityType"
@@ -527,9 +736,6 @@ export default function SpecialRequests() {
                         </ToggleGroupItem>
                       </ToggleGroup>
                     </FormControl>
-                    <FormDescription>
-                      Mark the driver as available or unavailable for scheduling
-                    </FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -626,55 +832,133 @@ export default function SpecialRequests() {
                   />
                 </div>
                 <FormDescription>
-                  Select the date range for this availability change
+                  {requestType === "full_day" && "Select the full day(s) you'll be unavailable"}
+                  {requestType === "recurring_days" && "Select when the recurring pattern begins"}
+                  {requestType === "time_window" && "Select the date range for this time window"}
                 </FormDescription>
-
-                <div className="grid grid-cols-2 gap-4 mt-4">
-                  <FormField
-                    control={form.control}
-                    name="startTime"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Start Time</FormLabel>
-                        <FormControl>
-                          <TimePicker
-                            value={field.value || "00:00"}
-                            onChange={field.onChange}
-                            placeholder="Select time"
-                            testId="input-start-time"
-                          />
-                        </FormControl>
-                        <FormDescription>
-                          Select time with AM/PM or 24h format
-                        </FormDescription>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-
-                  <FormField
-                    control={form.control}
-                    name="endTime"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>End Time (Optional)</FormLabel>
-                        <FormControl>
-                          <TimePicker
-                            value={field.value || ""}
-                            onChange={field.onChange}
-                            placeholder="Select time"
-                            testId="input-end-time"
-                          />
-                        </FormControl>
-                        <FormDescription>
-                          For time-specific restrictions (e.g., unavailable 4:30 PM - 9:30 PM)
-                        </FormDescription>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                </div>
               </div>
+
+              {/* Contract Time Selection - Only show for time_window or recurring_days */}
+              {(requestType === "time_window" || requestType === "recurring_days") && (
+                <div className="space-y-4">
+                  <FormLabel>Contract Start Time</FormLabel>
+                  <div className="space-y-2">
+                    <Select
+                      value={selectedContractTime}
+                      onValueChange={(value) => {
+                        setSelectedContractTime(value);
+                        // Parse the value to extract blockType and startTime
+                        const option = contractTimeOptions.find(opt => 
+                          `${opt.startTime}-${opt.blockType}` === value
+                        );
+                        if (option) {
+                          form.setValue("blockType", option.blockType);
+                          form.setValue("startTime", option.startTime);
+                          // Reset contractId when changing time/blockType
+                          form.setValue("contractId", undefined);
+                        }
+                      }}
+                      data-testid="select-contract-time"
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select contract time" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {contractTimeOptions.map((option) => {
+                          const displayTime = useMilitaryTime 
+                            ? option.startTime 
+                            : convertTo12Hour(option.startTime);
+                          return (
+                            <SelectItem 
+                              key={`${option.startTime}-${option.blockType}`}
+                              value={`${option.startTime}-${option.blockType}`}
+                            >
+                              {displayTime} • Any tractor ({option.blockTypeLabel})
+                            </SelectItem>
+                          );
+                        })}
+                      </SelectContent>
+                    </Select>
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        checked={useMilitaryTime}
+                        onCheckedChange={(checked) => setUseMilitaryTime(!!checked)}
+                        id="military-time-toggle"
+                        data-testid="checkbox-military-time"
+                      />
+                      <label htmlFor="military-time-toggle" className="text-sm cursor-pointer">
+                        Show times in 24-hour format (20:30 instead of 8:30 PM)
+                      </label>
+                    </div>
+                  </div>
+                  <FormDescription>
+                    Select from actual contract start times in your system
+                  </FormDescription>
+
+                  {/* Tractor Selector - Only show if a contract time is selected */}
+                  {selectedContractTime && availableTractors.length > 0 && (
+                    <FormField
+                      control={form.control}
+                      name="contractId"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Specific Tractor (Optional)</FormLabel>
+                          <Select 
+                            onValueChange={(value) => {
+                              // Map "any" to undefined for the form
+                              field.onChange(value === "any" ? undefined : value);
+                            }} 
+                            value={field.value || "any"}
+                          >
+                            <FormControl>
+                              <SelectTrigger data-testid="select-tractor">
+                                <SelectValue placeholder="Any tractor" />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              <SelectItem value="any">Any tractor at this time</SelectItem>
+                              {availableTractors.map((contract) => (
+                                <SelectItem key={contract.id} value={contract.id}>
+                                  {contract.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <FormDescription>
+                            Leave as "Any tractor" to apply to all contracts at this time
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  )}
+
+                  {/* End Time for time_window type */}
+                  {requestType === "time_window" && selectedContractTime && (
+                    <FormField
+                      control={form.control}
+                      name="endTime"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>End Time (Optional)</FormLabel>
+                          <FormControl>
+                            <TimePicker
+                              value={field.value || ""}
+                              onChange={field.onChange}
+                              placeholder="Select time"
+                              testId="input-end-time"
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            Leave blank for start time only, or set end time for a time window
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  )}
+                </div>
+              )}
 
               <Separator />
 

@@ -582,6 +582,8 @@ export const specialRequests = pgTable("special_requests", {
   endDate: timestamp("end_date"), // End of availability change (null for single day or recurring)
   startTime: text("start_time"), // HH:MM format (e.g., "16:30") - time of day when availability change begins
   endTime: text("end_time"), // HH:MM format (e.g., "21:30") - optional, for time range restrictions
+  blockType: text("block_type"), // solo1, solo2, team - links to contract types
+  contractId: varchar("contract_id").references(() => contracts.id), // Optional: specific contract/tractor, null = "any tractor at this time"
   isRecurring: boolean("is_recurring").default(false), // True for permanent patterns
   recurringPattern: text("recurring_pattern"), // every_monday, every_friday, every_weekend, every_week
   recurringDays: text("recurring_days").array(), // For custom patterns: ["monday", "friday"]
@@ -614,6 +616,8 @@ export const specialRequests = pgTable("special_requests", {
   statusCheck: check("status_check", sql`${table.status} IN ('approved', 'cancelled', 'pending', 'rejected')`),
   // Check constraint for recurring_pattern enum
   recurringPatternCheck: check("recurring_pattern_check", sql`${table.recurringPattern} IS NULL OR ${table.recurringPattern} IN ('every_monday', 'every_tuesday', 'every_wednesday', 'every_thursday', 'every_friday', 'every_saturday', 'every_sunday', 'every_weekend', 'every_week', 'custom')`),
+  // Check constraint for block_type enum
+  blockTypeCheck: check("block_type_check", sql`${table.blockType} IS NULL OR ${table.blockType} IN ('solo1', 'solo2', 'team')`),
 }));
 
 // Time format validation regex (HH:MM format: 00:00 to 23:59)
