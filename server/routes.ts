@@ -1646,14 +1646,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         try {
           if (existingContract) {
-            // Update if duration or baseRoutes changed
+            // Update if duration, baseRoutes, or domicile changed
             if (
               existingContract.duration !== benchContract.duration ||
-              existingContract.baseRoutes !== benchContract.baseRoutes
+              existingContract.baseRoutes !== benchContract.baseRoutes ||
+              existingContract.domicile !== benchContract.domicile
             ) {
               await dbStorage.updateContract(existingContract.id, {
                 duration: benchContract.duration,
                 baseRoutes: benchContract.baseRoutes,
+                domicile: benchContract.domicile,
               });
               results.updated++;
             } else {
@@ -1667,6 +1669,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               type: benchContract.type,
               startTime: benchContract.startTime,
               tractorId: benchContract.tractorId,
+              domicile: benchContract.domicile,
               duration: benchContract.duration,
               baseRoutes: benchContract.baseRoutes,
               daysPerWeek: 6, // Rolling 6-day pattern
