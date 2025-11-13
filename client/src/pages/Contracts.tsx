@@ -179,29 +179,40 @@ export default function Contracts() {
     mutationFn: async (file: File) => {
       const formData = new FormData();
       formData.append("file", file);
-      const response = await fetch("/api/contracts/import", {
+      const response = await fetch("/api/schedules/excel-import", {
         method: "POST",
         body: formData,
         credentials: "include",
       });
       if (!response.ok) {
         const error = await response.json();
-        throw new Error(error.message || "Failed to import contracts");
+        throw new Error(error.message || "Failed to import weekly assignments");
       }
       return response.json();
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/contracts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
+      
+      const title = data.created > 0 ? "Import Complete" : data.failed > 0 ? "Import Failed" : "Import Complete";
+      const variant = data.created > 0 ? "default" : data.failed > 0 ? "destructive" : "default";
+      
+      let description = `Created: ${data.created}, Failed: ${data.failed}`;
+      if (data.warnings && data.warnings > 0) {
+        description += `, Warnings: ${data.warnings}`;
+      }
+      
       toast({
-        title: "Success",
-        description: `Imported ${data.count} contracts successfully`,
+        title,
+        description,
+        variant,
       });
     },
     onError: (error: Error) => {
       toast({
         variant: "destructive",
         title: "Import Error",
-        description: error.message || "Failed to import contracts",
+        description: error.message || "Failed to import weekly assignments",
       });
     },
   });
@@ -409,14 +420,14 @@ export default function Contracts() {
                 data-testid="button-import-contracts"
               >
                 <Upload className="w-4 h-4 mr-2" />
-                {importContractsMutation.isPending ? "Importing..." : "Import CSV/Excel"}
+                {importContractsMutation.isPending ? "Importing..." : "Import Weekly Assignments"}
               </Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
-                <DialogTitle>Import Start Times</DialogTitle>
+                <DialogTitle>Import Weekly Assignments</DialogTitle>
                 <DialogDescription>
-                  Upload a CSV or Excel file with your contract start times
+                  Upload Excel file with weekly block assignments. System will auto-create contracts and blocks from the data.
                 </DialogDescription>
               </DialogHeader>
               <div
@@ -452,7 +463,8 @@ export default function Contracts() {
               <div className="text-xs text-muted-foreground space-y-2">
                 <p className="font-medium">Expected columns:</p>
                 <ul className="list-disc list-inside space-y-1 ml-2">
-                  <li>Name, Type, Start Time, Tractor, Duration, Days Per Week</li>
+                  <li>Block ID, Driver Name, Operator ID</li>
+                  <li>Stop 1/2 Planned Times (for schedule data)</li>
                 </ul>
               </div>
             </DialogContent>
