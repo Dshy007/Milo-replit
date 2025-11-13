@@ -571,41 +571,92 @@ export type InsertProtectedDriverRule = z.infer<typeof insertProtectedDriverRule
 export type UpdateProtectedDriverRule = z.infer<typeof updateProtectedDriverRuleSchema>;
 export type ProtectedDriverRule = typeof protectedDriverRules.$inferSelect;
 
-// Special Requests (Time-off, shift swaps, and scheduling requests)
+// Special Requests (Driver availability management - unavailability tracking and recurring patterns)
 export const specialRequests = pgTable("special_requests", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
   driverId: varchar("driver_id").notNull().references(() => drivers.id),
-  requestType: text("request_type").notNull(), // time_off, swap
-  affectedDate: timestamp("affected_date").notNull(), // The date they need off
-  affectedBlockId: varchar("affected_block_id").references(() => blocks.id), // Optional - specific block to swap
-  reason: text("reason"), // Why they need time off
-  status: text("status").notNull().default("pending"), // pending, approved, rejected
-  swapCandidateId: varchar("swap_candidate_id").references(() => drivers.id), // Driver assigned to cover (if approved)
+  // New fields (nullable during migration, will be made NOT NULL after backfill)
+  availabilityType: text("availability_type"), // available, unavailable
+  startDate: timestamp("start_date"), // Start of availability change
+  endDate: timestamp("end_date"), // End of availability change (null for single day or recurring)
+  isRecurring: boolean("is_recurring").default(false), // True for permanent patterns
+  recurringPattern: text("recurring_pattern"), // every_monday, every_friday, every_weekend, every_week
+  recurringDays: text("recurring_days").array(), // For custom patterns: ["monday", "friday"]
+  reason: text("reason"), // Reason for unavailability
+  status: text("status").default("approved"), // approved, cancelled (auto-approve for self-service)
   requestedAt: timestamp("requested_at").defaultNow().notNull(),
   reviewedAt: timestamp("reviewed_at"),
-  reviewedBy: varchar("reviewed_by").references(() => users.id), // User who approved/rejected
+  reviewedBy: varchar("reviewed_by").references(() => users.id), // User who approved/cancelled
   notes: text("notes"), // Admin notes about the request
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  // Legacy fields (kept for backward compatibility during migration)
+  requestType: text("request_type"), // DEPRECATED: will be removed after migration
+  affectedDate: timestamp("affected_date"), // DEPRECATED: will be removed after migration
+  affectedBlockId: varchar("affected_block_id").references(() => blocks.id), // DEPRECATED
+  swapCandidateId: varchar("swap_candidate_id").references(() => drivers.id), // DEPRECATED
 }, (table) => ({
   // Index for driver lookups
   driverIdIdx: index("special_requests_driver_id_idx").on(table.driverId),
   // Index for date range queries
-  affectedDateIdx: index("special_requests_affected_date_idx").on(table.affectedDate),
+  startDateIdx: index("special_requests_start_date_idx").on(table.startDate),
+  endDateIdx: index("special_requests_end_date_idx").on(table.endDate),
+  // Index for recurring patterns
+  isRecurringIdx: index("special_requests_is_recurring_idx").on(table.isRecurring),
   // Index for status filtering
   statusIdx: index("special_requests_status_idx").on(table.status),
-  // Check constraint for request_type enum
-  requestTypeCheck: check("request_type_check", sql`${table.requestType} IN ('time_off', 'swap')`),
+  // Check constraint for availability_type enum
+  availabilityTypeCheck: check("availability_type_check", sql`${table.availabilityType} IN ('available', 'unavailable')`),
   // Check constraint for status enum
-  statusCheck: check("status_check", sql`${table.status} IN ('pending', 'approved', 'rejected')`),
+  statusCheck: check("status_check", sql`${table.status} IN ('approved', 'cancelled', 'pending', 'rejected')`),
+  // Check constraint for recurring_pattern enum
+  recurringPatternCheck: check("recurring_pattern_check", sql`${table.recurringPattern} IS NULL OR ${table.recurringPattern} IN ('every_monday', 'every_tuesday', 'every_wednesday', 'every_thursday', 'every_friday', 'every_saturday', 'every_sunday', 'every_weekend', 'every_week', 'custom')`),
 }));
 
-export const insertSpecialRequestSchema = createInsertSchema(specialRequests, {
-  affectedDate: z.coerce.date(),
+// Base schema without complex validation - for frontend usage
+export const baseInsertSpecialRequestSchema = createInsertSchema(specialRequests, {
+  startDate: z.coerce.date(),
+  endDate: z.coerce.date().optional().nullable(),
   reviewedAt: z.coerce.date().optional().nullable(),
+  // Legacy fields for backward compatibility
+  affectedDate: z.coerce.date().optional().nullable(),
 }).omit({ id: true, createdAt: true, updatedAt: true });
-export const updateSpecialRequestSchema = insertSpecialRequestSchema.omit({ tenantId: true }).partial();
+
+// Full validated schema with refinements
+export const insertSpecialRequestSchema = baseInsertSpecialRequestSchema
+.refine((data) => {
+  // If endDate is provided, it must be after or equal to startDate
+  if (data.endDate) {
+    return data.endDate >= data.startDate;
+  }
+  return true;
+}, {
+  message: "End date must be after or equal to start date",
+  path: ["endDate"],
+})
+.refine((data) => {
+  // If isRecurring is true, must have a recurring pattern or custom days
+  if (data.isRecurring) {
+    return !!data.recurringPattern || (data.recurringDays && data.recurringDays.length > 0);
+  }
+  return true;
+}, {
+  message: "Recurring patterns require a pattern type or custom days to be specified",
+  path: ["isRecurring"],
+})
+.refine((data) => {
+  // If recurring pattern is "custom", must have custom days
+  if (data.recurringPattern === "custom") {
+    return data.recurringDays && data.recurringDays.length > 0;
+  }
+  return true;
+}, {
+  message: "Custom recurring patterns require specific days to be selected",
+  path: ["recurringDays"],
+});
+
+export const updateSpecialRequestSchema = baseInsertSpecialRequestSchema.omit({ tenantId: true }).partial();
 export type InsertSpecialRequest = z.infer<typeof insertSpecialRequestSchema>;
 export type UpdateSpecialRequest = z.infer<typeof updateSpecialRequestSchema>;
 export type SpecialRequest = typeof specialRequests.$inferSelect;
