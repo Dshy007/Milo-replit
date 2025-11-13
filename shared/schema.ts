@@ -623,7 +623,7 @@ export const baseInsertSpecialRequestSchema = createInsertSchema(specialRequests
   affectedDate: z.coerce.date().optional().nullable(),
 }).omit({ id: true, createdAt: true, updatedAt: true });
 
-// Full validated schema with refinements
+// Full validated schema with refinements and backward compatibility
 export const insertSpecialRequestSchema = baseInsertSpecialRequestSchema
 .refine((data) => {
   // If endDate is provided, it must be after or equal to startDate
@@ -654,6 +654,27 @@ export const insertSpecialRequestSchema = baseInsertSpecialRequestSchema
 }, {
   message: "Custom recurring patterns require specific days to be selected",
   path: ["recurringDays"],
+})
+.transform((data) => {
+  // Backward compatibility: backfill legacy fields from new fields
+  // If new fields are provided but legacy fields are missing, populate them
+  if (data.availabilityType && !data.requestType) {
+    data.requestType = data.availabilityType === "unavailable" ? "time_off" : undefined;
+  }
+  if (data.startDate && !data.affectedDate) {
+    data.affectedDate = data.startDate;
+  }
+  
+  // Forward compatibility: populate new fields from legacy if new fields missing
+  if (data.requestType && !data.availabilityType) {
+    data.availabilityType = "unavailable"; // Legacy requests were always unavailability
+  }
+  if (data.affectedDate && !data.startDate) {
+    data.startDate = data.affectedDate;
+    data.endDate = data.endDate || data.affectedDate; // Single-day range
+  }
+  
+  return data;
 });
 
 export const updateSpecialRequestSchema = baseInsertSpecialRequestSchema.omit({ tenantId: true }).partial();

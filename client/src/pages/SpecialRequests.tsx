@@ -11,11 +11,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Checkbox } from "@/components/ui/checkbox";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Separator } from "@/components/ui/separator";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { insertSpecialRequestSchema } from "@shared/schema";
-import { format, parseISO } from "date-fns";
-import { CalendarIcon, CheckCircle2, XCircle, Clock, AlertCircle, User } from "lucide-react";
+import { format, parseISO, isSameDay } from "date-fns";
+import { CalendarIcon, CheckCircle2, XCircle, Clock, AlertCircle, User, Calendar as CalendarCheck, Repeat } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import type { z } from "zod";
@@ -44,13 +47,23 @@ export default function SpecialRequests() {
   const form = useForm<FormValues>({
     resolver: zodResolver(insertSpecialRequestSchema.omit({ tenantId: true })),
     defaultValues: {
-      requestType: "time_off",
+      availabilityType: "unavailable",
       driverId: "",
-      affectedDate: new Date(),
+      startDate: new Date().toISOString() as any,
+      endDate: new Date().toISOString() as any,
+      isRecurring: false,
+      recurringPattern: undefined,
+      recurringDays: [],
       reason: "",
+      notes: undefined,
+      // Backend will set these automatically
+      // status: "pending" (default in backend)
+      // requestedAt: new Date() (default in backend)
+      // Legacy fields for backward compatibility
+      requestType: undefined,
+      affectedDate: undefined,
       affectedBlockId: undefined,
       swapCandidateId: undefined,
-      notes: undefined,
     },
   });
 
@@ -131,15 +144,43 @@ export default function SpecialRequests() {
     }
   };
 
-  const getTypeBadge = (requestType: string) => {
-    switch (requestType) {
-      case "time_off":
-        return <Badge variant="outline" data-testid={`badge-type-time-off`}>Time Off</Badge>;
-      case "swap":
-        return <Badge variant="outline" data-testid={`badge-type-swap`}>Shift Swap</Badge>;
-      default:
-        return <Badge variant="outline" data-testid={`badge-type-other`}>{requestType}</Badge>;
+  const getAvailabilityBadge = (availabilityType: string | null | undefined) => {
+    if (availabilityType === "available") {
+      return <Badge variant="default" className="bg-green-600 hover:bg-green-700" data-testid={`badge-type-available`}><CheckCircle2 className="w-3 h-3 mr-1" />Available</Badge>;
+    } else if (availabilityType === "unavailable") {
+      return <Badge variant="destructive" data-testid={`badge-type-unavailable`}><XCircle className="w-3 h-3 mr-1" />Unavailable</Badge>;
     }
+    return null;
+  };
+
+  const getRecurringBadge = (request: SpecialRequest) => {
+    if (!request.isRecurring) return null;
+    
+    const days = request.recurringDays;
+    const dayLabels = days?.map(d => d.charAt(0).toUpperCase() + d.slice(1, 3)).join(", ");
+    
+    return (
+      <Badge variant="outline" data-testid={`badge-recurring`}>
+        <Repeat className="w-3 h-3 mr-1" />
+        {dayLabels || "Recurring"}
+      </Badge>
+    );
+  };
+
+  const getDateDisplay = (request: SpecialRequest) => {
+    const startDate = request.startDate || request.affectedDate;
+    const endDate = request.endDate;
+    
+    if (!startDate) return "No date";
+    
+    const start = new Date(startDate);
+    const end = endDate ? new Date(endDate) : null;
+    
+    if (!end || isSameDay(start, end)) {
+      return format(start, "PPP");
+    }
+    
+    return `${format(start, "PPP")} - ${format(end, "PPP")}`;
   };
 
   const getDriverName = (driverId: string) => {
@@ -187,10 +228,11 @@ export default function SpecialRequests() {
                 <CardHeader>
                   <div className="flex items-start justify-between">
                     <div className="space-y-1">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <CardTitle>{getDriverName(request.driverId)}</CardTitle>
                         {getStatusBadge(request.status)}
-                        {getTypeBadge(request.requestType)}
+                        {getAvailabilityBadge(request.availabilityType)}
+                        {getRecurringBadge(request)}
                       </div>
                       <CardDescription>
                         Requested on {format(new Date(request.requestedAt), "PPP")}
@@ -229,12 +271,12 @@ export default function SpecialRequests() {
                   <div className="space-y-2">
                     <div className="flex items-center gap-2 text-sm">
                       <CalendarIcon className="w-4 h-4 text-muted-foreground" />
-                      <span>Affected Date: {format(new Date(request.affectedDate), "PPP")}</span>
+                      <span>{getDateDisplay(request)}</span>
                     </div>
                     {request.reason && (
                       <div className="flex items-start gap-2 text-sm">
                         <AlertCircle className="w-4 h-4 text-muted-foreground mt-0.5" />
-                        <span>Reason: {request.reason}</span>
+                        <span>Reason: {request.reason.charAt(0).toUpperCase() + request.reason.slice(1).replace(/_/g, " ")}</span>
                       </div>
                     )}
                   </div>
@@ -257,10 +299,11 @@ export default function SpecialRequests() {
                 <CardHeader>
                   <div className="flex items-center justify-between">
                     <div className="space-y-1">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <CardTitle>{getDriverName(request.driverId)}</CardTitle>
                         {getStatusBadge(request.status)}
-                        {getTypeBadge(request.requestType)}
+                        {getAvailabilityBadge(request.availabilityType)}
+                        {getRecurringBadge(request)}
                       </div>
                       <CardDescription>
                         Approved on {request.reviewedAt ? format(new Date(request.reviewedAt), "PPP") : "N/A"}
@@ -272,8 +315,14 @@ export default function SpecialRequests() {
                   <div className="space-y-2">
                     <div className="flex items-center gap-2 text-sm">
                       <CalendarIcon className="w-4 h-4 text-muted-foreground" />
-                      <span>Affected Date: {format(new Date(request.affectedDate), "PPP")}</span>
+                      <span>{getDateDisplay(request)}</span>
                     </div>
+                    {request.reason && (
+                      <div className="flex items-start gap-2 text-sm">
+                        <AlertCircle className="w-4 h-4 text-muted-foreground mt-0.5" />
+                        <span>Reason: {request.reason.charAt(0).toUpperCase() + request.reason.slice(1).replace(/_/g, " ")}</span>
+                      </div>
+                    )}
                     {request.notes && (
                       <div className="flex items-start gap-2 text-sm">
                         <AlertCircle className="w-4 h-4 text-muted-foreground mt-0.5" />
@@ -300,10 +349,11 @@ export default function SpecialRequests() {
                 <CardHeader>
                   <div className="flex items-center justify-between">
                     <div className="space-y-1">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <CardTitle>{getDriverName(request.driverId)}</CardTitle>
                         {getStatusBadge(request.status)}
-                        {getTypeBadge(request.requestType)}
+                        {getAvailabilityBadge(request.availabilityType)}
+                        {getRecurringBadge(request)}
                       </div>
                       <CardDescription>
                         Rejected on {request.reviewedAt ? format(new Date(request.reviewedAt), "PPP") : "N/A"}
@@ -315,8 +365,14 @@ export default function SpecialRequests() {
                   <div className="space-y-2">
                     <div className="flex items-center gap-2 text-sm">
                       <CalendarIcon className="w-4 h-4 text-muted-foreground" />
-                      <span>Affected Date: {format(new Date(request.affectedDate), "PPP")}</span>
+                      <span>{getDateDisplay(request)}</span>
                     </div>
+                    {request.reason && (
+                      <div className="flex items-start gap-2 text-sm">
+                        <AlertCircle className="w-4 h-4 text-muted-foreground mt-0.5" />
+                        <span>Reason: {request.reason.charAt(0).toUpperCase() + request.reason.slice(1).replace(/_/g, " ")}</span>
+                      </div>
+                    )}
                     {request.notes && (
                       <div className="flex items-start gap-2 text-sm">
                         <AlertCircle className="w-4 h-4 text-muted-foreground mt-0.5" />
@@ -332,35 +388,13 @@ export default function SpecialRequests() {
       </Tabs>
 
       <Dialog open={showSubmitForm} onOpenChange={setShowSubmitForm}>
-        <DialogContent className="max-w-xl" data-testid="dialog-submit-request">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" data-testid="dialog-submit-request">
           <DialogHeader>
-            <DialogTitle>Submit Special Request</DialogTitle>
-            <DialogDescription>Request time off, shift swap, or schedule change</DialogDescription>
+            <DialogTitle>Driver Availability</DialogTitle>
+            <DialogDescription>Manage driver time-off and recurring unavailability patterns</DialogDescription>
           </DialogHeader>
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-              <FormField
-                control={form.control}
-                name="requestType"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Request Type</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value}>
-                      <FormControl>
-                        <SelectTrigger data-testid="select-request-type">
-                          <SelectValue placeholder="Select request type" />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="time_off">Time Off</SelectItem>
-                        <SelectItem value="swap">Shift Swap</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
               <FormField
                 control={form.control}
                 name="driverId"
@@ -388,70 +422,281 @@ export default function SpecialRequests() {
 
               <FormField
                 control={form.control}
-                name="affectedDate"
+                name="availabilityType"
                 render={({ field }) => (
-                  <FormItem className="flex flex-col">
-                    <FormLabel>Affected Date</FormLabel>
-                    <Popover>
-                      <PopoverTrigger asChild>
-                        <FormControl>
-                          <Button
-                            variant="outline"
-                            className={cn(
-                              "pl-3 text-left font-normal",
-                              !field.value && "text-muted-foreground"
-                            )}
-                            data-testid="button-select-date"
-                          >
-                            {field.value ? format(field.value, "PPP") : <span>Pick a date</span>}
-                            <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
-                          </Button>
-                        </FormControl>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-auto p-0" align="start">
-                        <Calendar
-                          mode="single"
-                          selected={field.value}
-                          onSelect={field.onChange}
-                          disabled={(date) => date < new Date()}
-                        />
-                      </PopoverContent>
-                    </Popover>
-                    <FormDescription>The date affected by this request</FormDescription>
+                  <FormItem>
+                    <FormLabel>Availability Type</FormLabel>
+                    <FormControl>
+                      <ToggleGroup
+                        type="single"
+                        value={field.value || "unavailable"}
+                        onValueChange={(value) => {
+                          if (value) field.onChange(value);
+                        }}
+                        className="justify-start gap-2"
+                        data-testid="toggle-availability-type"
+                      >
+                        <ToggleGroupItem
+                          value="available"
+                          aria-label="Available"
+                          className="data-[state=on]:bg-green-600 data-[state=on]:text-white"
+                          data-testid="toggle-available"
+                        >
+                          <CheckCircle2 className="w-4 h-4 mr-2" />
+                          Available
+                        </ToggleGroupItem>
+                        <ToggleGroupItem
+                          value="unavailable"
+                          aria-label="Unavailable"
+                          className="data-[state=on]:bg-destructive data-[state=on]:text-destructive-foreground"
+                          data-testid="toggle-unavailable"
+                        >
+                          <XCircle className="w-4 h-4 mr-2" />
+                          Unavailable
+                        </ToggleGroupItem>
+                      </ToggleGroup>
+                    </FormControl>
+                    <FormDescription>
+                      Mark the driver as available or unavailable for scheduling
+                    </FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
               />
+
+              <div className="space-y-4">
+                <FormLabel>Date Range</FormLabel>
+                <div className="grid grid-cols-2 gap-4">
+                  <FormField
+                    control={form.control}
+                    name="startDate"
+                    render={({ field }) => (
+                      <FormItem className="flex flex-col">
+                        <FormLabel>Start Date</FormLabel>
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <FormControl>
+                              <Button
+                                variant="outline"
+                                className={cn(
+                                  "pl-3 text-left font-normal",
+                                  !field.value && "text-muted-foreground"
+                                )}
+                                data-testid="button-select-start-date"
+                              >
+                                {field.value ? format(field.value, "PPP") : <span>Pick start date</span>}
+                                <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
+                              </Button>
+                            </FormControl>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-auto p-0" align="start">
+                            <Calendar
+                              mode="single"
+                              selected={field.value ? new Date(field.value) : undefined}
+                              onSelect={(date) => {
+                                if (date) {
+                                  const isoString = date.toISOString();
+                                  field.onChange(isoString);
+                                  const endDate = form.getValues("endDate");
+                                  if (!endDate || new Date(isoString) > new Date(endDate)) {
+                                    form.setValue("endDate", isoString as any);
+                                  }
+                                }
+                              }}
+                            />
+                          </PopoverContent>
+                        </Popover>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name="endDate"
+                    render={({ field }) => (
+                      <FormItem className="flex flex-col">
+                        <FormLabel>End Date</FormLabel>
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <FormControl>
+                              <Button
+                                variant="outline"
+                                className={cn(
+                                  "pl-3 text-left font-normal",
+                                  !field.value && "text-muted-foreground"
+                                )}
+                                data-testid="button-select-end-date"
+                              >
+                                {field.value ? format(field.value, "PPP") : <span>Pick end date</span>}
+                                <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
+                              </Button>
+                            </FormControl>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-auto p-0" align="start">
+                            <Calendar
+                              mode="single"
+                              selected={field.value ? new Date(field.value) : undefined}
+                              onSelect={(date) => {
+                                if (date) {
+                                  field.onChange(date.toISOString());
+                                }
+                              }}
+                              disabled={(date) => {
+                                const startDate = form.getValues("startDate");
+                                return startDate ? date < new Date(startDate) : false;
+                              }}
+                            />
+                          </PopoverContent>
+                        </Popover>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+                <FormDescription>
+                  Select the date range for this availability change
+                </FormDescription>
+              </div>
+
+              <Separator />
+
+              <Card className="border-2">
+                <CardHeader className="pb-3">
+                  <FormField
+                    control={form.control}
+                    name="isRecurring"
+                    render={({ field }) => (
+                      <FormItem className="flex flex-row items-center justify-between space-y-0">
+                        <div className="space-y-0.5">
+                          <FormLabel className="text-base flex items-center gap-2">
+                            <Repeat className="w-4 h-4" />
+                            Recurring Pattern
+                          </FormLabel>
+                          <FormDescription>
+                            Make this a permanent schedule (e.g., "Every Friday off")
+                          </FormDescription>
+                        </div>
+                        <FormControl>
+                          <Checkbox
+                            checked={field.value || false}
+                            onCheckedChange={field.onChange}
+                            data-testid="checkbox-recurring"
+                          />
+                        </FormControl>
+                      </FormItem>
+                    )}
+                  />
+                </CardHeader>
+                {form.watch("isRecurring") && (
+                  <CardContent className="space-y-4">
+                    <FormField
+                      control={form.control}
+                      name="recurringDays"
+                      render={() => (
+                        <FormItem>
+                          <FormLabel>Select Days</FormLabel>
+                          <div className="grid grid-cols-4 gap-2">
+                            {["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map((day) => (
+                              <FormField
+                                key={day}
+                                control={form.control}
+                                name="recurringDays"
+                                render={({ field }) => {
+                                  const dayValue = day.toLowerCase();
+                                  return (
+                                    <FormItem
+                                      key={day}
+                                      className="flex flex-row items-center space-x-2 space-y-0"
+                                    >
+                                      <FormControl>
+                                        <Checkbox
+                                          checked={field.value?.includes(dayValue)}
+                                          onCheckedChange={(checked) => {
+                                            const currentDays = field.value || [];
+                                            const newDays = checked
+                                              ? [...currentDays, dayValue]
+                                              : currentDays.filter((d) => d !== dayValue);
+                                            field.onChange(newDays);
+                                            form.setValue("recurringPattern", "custom");
+                                          }}
+                                          data-testid={`checkbox-day-${dayValue}`}
+                                        />
+                                      </FormControl>
+                                      <FormLabel className="text-sm font-normal cursor-pointer">
+                                        {day.slice(0, 3)}
+                                      </FormLabel>
+                                    </FormItem>
+                                  );
+                                }}
+                              />
+                            ))}
+                          </div>
+                          <FormDescription>
+                            Select which days of the week this pattern applies to
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </CardContent>
+                )}
+              </Card>
 
               <FormField
                 control={form.control}
                 name="reason"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Reason (Optional)</FormLabel>
-                    <FormControl>
-                      <Textarea
-                        placeholder="Provide a reason for this request"
-                        value={field.value || ""}
-                        onChange={field.onChange}
-                        onBlur={field.onBlur}
-                        name={field.name}
-                        ref={field.ref}
-                        disabled={field.disabled}
-                        data-testid="textarea-reason"
-                      />
-                    </FormControl>
+                    <FormLabel>Reason</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value || ""}>
+                      <FormControl>
+                        <SelectTrigger data-testid="select-reason">
+                          <SelectValue placeholder="Select reason" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="vacation">Vacation</SelectItem>
+                        <SelectItem value="sick_leave">Sick Leave</SelectItem>
+                        <SelectItem value="personal">Personal Day</SelectItem>
+                        <SelectItem value="training">Training/Education</SelectItem>
+                        <SelectItem value="medical">Medical Appointment</SelectItem>
+                        <SelectItem value="family">Family Emergency</SelectItem>
+                        <SelectItem value="other">Other</SelectItem>
+                      </SelectContent>
+                    </Select>
                     <FormMessage />
                   </FormItem>
                 )}
               />
+
+              {form.watch("reason") === "other" && (
+                <FormField
+                  control={form.control}
+                  name="notes"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Additional Details</FormLabel>
+                      <FormControl>
+                        <Textarea
+                          placeholder="Provide additional details..."
+                          value={field.value || ""}
+                          onChange={field.onChange}
+                          data-testid="textarea-notes"
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              )}
 
               <div className="flex justify-end gap-2">
                 <Button type="button" variant="outline" onClick={() => setShowSubmitForm(false)} data-testid="button-cancel">
                   Cancel
                 </Button>
                 <Button type="submit" disabled={createMutation.isPending} data-testid="button-submit">
-                  {createMutation.isPending ? "Submitting..." : "Submit Request"}
+                  {createMutation.isPending ? "Submitting..." : "Submit"}
                 </Button>
               </div>
             </form>
