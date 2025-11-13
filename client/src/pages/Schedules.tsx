@@ -963,7 +963,6 @@ export default function Schedules() {
           </CardContent>
         </Card>
       </div>
-
       {/* Main Calendar Area */}
       <div className="flex-1 flex flex-col gap-6">
         {/* Header */}
@@ -974,8 +973,7 @@ export default function Schedules() {
             </div>
             <div>
               <h1 className="text-2xl font-bold text-foreground" data-testid="page-title">
-                Block Schedule
-              </h1>
+              Start Times </h1>
               <p className="text-sm text-muted-foreground" data-testid="page-subtitle">
                 {format(dateRange.start, "MMM d")} - {format(dateRange.end, "MMM d, yyyy")}
               </p>
