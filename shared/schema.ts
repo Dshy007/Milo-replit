@@ -646,6 +646,28 @@ const timeToMinutes = (time: string): number => {
 // Full validated schema with refinements and backward compatibility
 export const insertSpecialRequestSchema = baseInsertSpecialRequestSchema
 .refine((data) => {
+  // startTime and blockType must be provided together (both or neither, and both non-empty)
+  const startTimeProvided = data.startTime !== undefined && data.startTime !== null;
+  const blockTypeProvided = data.blockType !== undefined && data.blockType !== null;
+  
+  // If either is provided, both must be provided
+  if (startTimeProvided !== blockTypeProvided) {
+    return false;
+  }
+  
+  // If both are provided, both must be non-empty
+  if (startTimeProvided && blockTypeProvided) {
+    const startTimeFilled = data.startTime!.trim() !== "";
+    const blockTypeFilled = data.blockType!.trim() !== "";
+    return startTimeFilled && blockTypeFilled;
+  }
+  
+  return true;
+}, {
+  message: "startTime and blockType must be provided together and cannot be empty",
+  path: ["startTime"],
+})
+.refine((data) => {
   // If endDate is provided, it must be after or equal to startDate
   if (data.endDate) {
     return data.endDate >= data.startDate;

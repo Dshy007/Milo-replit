@@ -2757,6 +2757,45 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
         return res.status(403).json({ message: "Driver not found or access denied" });
       }
       
+      // Validate contract-based time selections
+      // Note: Schema validation already ensures startTime and blockType are provided together
+      if (data.startTime && data.blockType) {
+        // Verify this contract time exists in the tenant's contract inventory
+        const matchingContracts = await dbStorage.findContractsByTenantStartTimeAndType(
+          tenantId,
+          data.startTime,
+          data.blockType
+        );
+        
+        if (matchingContracts.length === 0) {
+          return res.status(400).json({ 
+            message: `Contract time ${data.startTime} with block type ${data.blockType} does not exist in your contract inventory` 
+          });
+        }
+        
+        // If contractId is also specified, verify it matches the startTime/blockType
+        if (data.contractId) {
+          const specificContract = await dbStorage.getContract(data.contractId);
+          if (!specificContract || specificContract.tenantId !== tenantId) {
+            return res.status(403).json({ message: "Contract not found or access denied" });
+          }
+          
+          // Verify the contractId matches the provided startTime and blockType
+          if (specificContract.startTime !== data.startTime || 
+              specificContract.type !== data.blockType) {
+            return res.status(400).json({ 
+              message: "Contract ID does not match the selected start time and block type" 
+            });
+          }
+        }
+      } else if (data.contractId) {
+        // If only contractId is provided (without startTime/blockType), verify it exists
+        const contract = await dbStorage.getContract(data.contractId);
+        if (!contract || contract.tenantId !== tenantId) {
+          return res.status(403).json({ message: "Contract not found or access denied" });
+        }
+      }
+      
       // If affectedBlockId provided, verify it exists and belongs to tenant
       if (data.affectedBlockId) {
         const block = await dbStorage.getBlock(data.affectedBlockId);
