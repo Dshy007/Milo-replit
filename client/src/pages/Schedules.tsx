@@ -64,7 +64,6 @@ export default function Schedules() {
   const [soloTypeFilter, setSoloTypeFilter] = useState<SoloTypeFilter>("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [selectedDrivers, setSelectedDrivers] = useState<Set<string>>(new Set());
-  const [showFilters, setShowFilters] = useState(false);
   const [draggedBlock, setDraggedBlock] = useState<BlockWithAssignment | null>(null);
   const [dragOverDriver, setDragOverDriver] = useState<string | null>(null);
   const [validationFeedback, setValidationFeedback] = useState<{ status: string; messages: string[] } | null>(null);
@@ -595,151 +594,141 @@ export default function Schedules() {
   };
 
   return (
-    <div className="flex flex-col h-full bg-background p-6 gap-6">
-      {/* Header */}
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center justify-center w-10 h-10 rounded-full bg-primary/10">
-            <Calendar className="w-5 h-5 text-primary" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-foreground" data-testid="page-title">
-              Block Schedule
-            </h1>
-            <p className="text-sm text-muted-foreground" data-testid="page-subtitle">
-              {format(dateRange.start, "MMM d")} - {format(dateRange.end, "MMM d, yyyy")}
-            </p>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {/* Driver Search */}
-          <div className="relative w-64">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <Input
-              type="text"
-              placeholder="Search driver..."
-              value={driverSearch}
-              onChange={(e) => setDriverSearch(e.target.value)}
-              className="pl-9"
-              data-testid="input-driver-search"
-            />
-          </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowFilters(!showFilters)}
-            data-testid="button-toggle-filters"
-          >
-            <Filter className="w-4 h-4 mr-2" />
-            Filters
-          </Button>
-          
-          <div className="flex items-center border rounded-md">
-            <Button
-              variant={viewMode === "week" ? "secondary" : "ghost"}
-              size="sm"
-              onClick={() => setViewMode("week")}
-              className="rounded-none rounded-l-md"
-              data-testid="button-week-view"
-            >
-              Week
-            </Button>
-            <Button
-              variant={viewMode === "month" ? "secondary" : "ghost"}
-              size="sm"
-              onClick={() => setViewMode("month")}
-              className="rounded-none border-x-0"
-              data-testid="button-month-view"
-            >
-              Month
-            </Button>
-            <Button
-              variant={viewMode === "tally" ? "secondary" : "ghost"}
-              size="sm"
-              onClick={() => setViewMode("tally")}
-              className="rounded-none rounded-r-md"
-              data-testid="button-tally-view"
-            >
-              Tally
-            </Button>
-          </div>
-
-          <div className="flex items-center gap-1">
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={handlePrevious}
-              data-testid="button-previous"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleToday}
-              data-testid="button-today"
-            >
-              Today
-            </Button>
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={handleNext}
-              data-testid="button-next"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </Button>
-          </div>
-        </div>
-      </div>
-
-      {/* Filters Panel */}
-      {showFilters && (
+    <div className="flex h-full bg-background p-6 gap-6">
+      {/* Left Sidebar - Always Visible */}
+      <div className="w-72 flex-shrink-0 space-y-4">
+        {/* Search */}
         <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">Filters</CardTitle>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium">Search Drivers</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input
+                type="text"
+                placeholder="Search driver..."
+                value={driverSearch}
+                onChange={(e) => setDriverSearch(e.target.value)}
+                className="pl-9"
+                data-testid="input-driver-search"
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Filters Card */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium">Filters</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {/* Solo Type Filter */}
-              <div className="space-y-2">
-                <Label>Solo Type</Label>
-                <Select value={soloTypeFilter} onValueChange={(v: SoloTypeFilter) => setSoloTypeFilter(v)}>
-                  <SelectTrigger data-testid="select-solo-type-filter">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Types</SelectItem>
-                    <SelectItem value="solo1">Solo 1</SelectItem>
-                    <SelectItem value="solo2">Solo 2</SelectItem>
-                    <SelectItem value="team">Team</SelectItem>
-                  </SelectContent>
-                </Select>
+            {/* Solo Type Filter - Toggle Chips */}
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground">Block Type</Label>
+              <div className="flex flex-wrap gap-2">
+                <Badge
+                  variant={soloTypeFilter === "all" ? "default" : "outline"}
+                  className="cursor-pointer hover-elevate"
+                  onClick={() => setSoloTypeFilter("all")}
+                  data-testid="badge-filter-all"
+                >
+                  All
+                </Badge>
+                <Badge
+                  variant={soloTypeFilter === "solo1" ? "default" : "outline"}
+                  className="cursor-pointer hover-elevate"
+                  onClick={() => setSoloTypeFilter("solo1")}
+                  data-testid="badge-filter-solo1"
+                >
+                  Solo 1
+                </Badge>
+                <Badge
+                  variant={soloTypeFilter === "solo2" ? "default" : "outline"}
+                  className="cursor-pointer hover-elevate"
+                  onClick={() => setSoloTypeFilter("solo2")}
+                  data-testid="badge-filter-solo2"
+                >
+                  Solo 2
+                </Badge>
+                <Badge
+                  variant={soloTypeFilter === "team" ? "default" : "outline"}
+                  className="cursor-pointer hover-elevate"
+                  onClick={() => setSoloTypeFilter("team")}
+                  data-testid="badge-filter-team"
+                >
+                  Team
+                </Badge>
               </div>
+            </div>
 
-              {/* Status Filter */}
+            {/* Status Filter - Checkboxes */}
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground">Status</Label>
               <div className="space-y-2">
-                <Label>Compliance Status</Label>
-                <Select value={statusFilter} onValueChange={(v: StatusFilter) => setStatusFilter(v)}>
-                  <SelectTrigger data-testid="select-status-filter">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Status</SelectItem>
-                    <SelectItem value="valid">Valid</SelectItem>
-                    <SelectItem value="warning">Warning</SelectItem>
-                    <SelectItem value="violation">Violation</SelectItem>
-                    <SelectItem value="unassigned">Unassigned</SelectItem>
-                  </SelectContent>
-                </Select>
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="status-all"
+                    checked={statusFilter === "all"}
+                    onCheckedChange={() => setStatusFilter("all")}
+                    data-testid="checkbox-status-all"
+                  />
+                  <Label htmlFor="status-all" className="text-sm cursor-pointer">All</Label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="status-valid"
+                    checked={statusFilter === "valid"}
+                    onCheckedChange={() => setStatusFilter("valid")}
+                    data-testid="checkbox-status-valid"
+                  />
+                  <Label htmlFor="status-valid" className="text-sm cursor-pointer flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3 text-green-600" />
+                    Valid
+                  </Label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="status-warning"
+                    checked={statusFilter === "warning"}
+                    onCheckedChange={() => setStatusFilter("warning")}
+                    data-testid="checkbox-status-warning"
+                  />
+                  <Label htmlFor="status-warning" className="text-sm cursor-pointer flex items-center gap-1">
+                    <AlertTriangle className="w-3 h-3 text-yellow-600" />
+                    Warning
+                  </Label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="status-violation"
+                    checked={statusFilter === "violation"}
+                    onCheckedChange={() => setStatusFilter("violation")}
+                    data-testid="checkbox-status-violation"
+                  />
+                  <Label htmlFor="status-violation" className="text-sm cursor-pointer flex items-center gap-1">
+                    <AlertCircle className="w-3 h-3 text-red-600" />
+                    Violation
+                  </Label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="status-unassigned"
+                    checked={statusFilter === "unassigned"}
+                    onCheckedChange={() => setStatusFilter("unassigned")}
+                    data-testid="checkbox-status-unassigned"
+                  />
+                  <Label htmlFor="status-unassigned" className="text-sm cursor-pointer">Unassigned</Label>
+                </div>
               </div>
             </div>
 
             {/* Driver Filter */}
             <div className="space-y-2">
-              <Label>Drivers ({selectedDrivers.size} selected)</Label>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 max-h-40 overflow-y-auto p-2 border rounded-md">
+              <Label className="text-xs text-muted-foreground">
+                Drivers ({selectedDrivers.size} selected)
+              </Label>
+              <div className="space-y-2 max-h-60 overflow-y-auto">
                 {drivers.map(driver => (
                   <div key={driver.id} className="flex items-center gap-2">
                     <Checkbox
@@ -759,6 +748,7 @@ export default function Schedules() {
                   variant="ghost"
                   size="sm"
                   onClick={() => setSelectedDrivers(new Set())}
+                  className="w-full"
                   data-testid="button-clear-drivers"
                 >
                   Clear Selection
@@ -767,7 +757,88 @@ export default function Schedules() {
             </div>
           </CardContent>
         </Card>
-      )}
+      </div>
+
+      {/* Main Calendar Area */}
+      <div className="flex-1 flex flex-col gap-6">
+        {/* Header */}
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center justify-center w-10 h-10 rounded-full bg-primary/10">
+              <Calendar className="w-5 h-5 text-primary" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-foreground" data-testid="page-title">
+                Block Schedule
+              </h1>
+              <p className="text-sm text-muted-foreground" data-testid="page-subtitle">
+                {format(dateRange.start, "MMM d")} - {format(dateRange.end, "MMM d, yyyy")}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <div className="flex items-center border rounded-md shadow-md">
+              <Button
+                variant={viewMode === "week" ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => setViewMode("week")}
+                className="rounded-none rounded-l-md"
+                data-testid="button-week-view"
+              >
+                Week
+              </Button>
+              <Button
+                variant={viewMode === "month" ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => setViewMode("month")}
+                className="rounded-none border-x-0"
+                data-testid="button-month-view"
+              >
+                Month
+              </Button>
+              <Button
+                variant={viewMode === "tally" ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => setViewMode("tally")}
+                className="rounded-none rounded-r-md"
+                data-testid="button-tally-view"
+              >
+                Tally
+              </Button>
+            </div>
+
+            <div className="flex items-center gap-1">
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={handlePrevious}
+                className="shadow-md hover:shadow-lg transition-shadow"
+                data-testid="button-previous"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleToday}
+                className="shadow-md hover:shadow-lg transition-shadow"
+                data-testid="button-today"
+              >
+                Today
+              </Button>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={handleNext}
+                className="shadow-md hover:shadow-lg transition-shadow"
+                data-testid="button-next"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </Button>
+            </div>
+          </div>
+        </div>
 
       {/* Legend */}
       <div className="flex items-center gap-6 text-sm">
@@ -1425,6 +1496,7 @@ export default function Schedules() {
           )}
         </DialogContent>
       </Dialog>
+      </div>
     </div>
   );
 }

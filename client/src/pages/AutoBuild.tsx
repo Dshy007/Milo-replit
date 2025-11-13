@@ -31,6 +31,7 @@ import {
   Brain,
   Play,
   Save,
+  Check,
 } from "lucide-react";
 
 interface BlockSuggestion {
@@ -69,9 +70,9 @@ interface PatternStats {
 }
 
 function getConfidenceBadgeVariant(confidence: number): "default" | "secondary" | "destructive" {
-  if (confidence >= 0.5) return "default"; // Green - high confidence
-  if (confidence >= 0.35) return "secondary"; // Yellow - medium confidence
-  return "destructive"; // Red - low confidence
+  if (confidence >= 0.5) return "default";
+  if (confidence >= 0.35) return "secondary";
+  return "destructive";
 }
 
 function getConfidenceLabel(confidence: number): string {
@@ -85,19 +86,16 @@ export default function AutoBuild() {
   const [selectedBlocks, setSelectedBlocks] = useState<Set<string>>(new Set());
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
   const [currentPreview, setCurrentPreview] = useState<AutoBuildPreview | null>(null);
-  const [manualOverrides, setManualOverrides] = useState<Map<string, string>>(new Map()); // blockId → driverId
+  const [manualOverrides, setManualOverrides] = useState<Map<string, string>>(new Map());
 
-  // Query all drivers for manual reassignment
   const { data: allDrivers = [] } = useQuery<Array<{ id: string; firstName: string; lastName: string }>>({
     queryKey: ["/api/drivers"],
   });
 
-  // Query pattern stats
   const { data: patternStats, isLoading: statsLoading } = useQuery<PatternStats>({
     queryKey: ["/api/patterns/stats"],
   });
 
-  // Recompute patterns mutation
   const recomputeMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/patterns/recompute");
@@ -119,7 +117,6 @@ export default function AutoBuild() {
     },
   });
 
-  // Generate auto-build preview mutation
   const generatePreviewMutation = useMutation({
     mutationFn: async () => {
       const nextWeekStart = startOfWeek(addWeeks(new Date(), 1), { weekStartsOn: 0 });
@@ -146,12 +143,10 @@ export default function AutoBuild() {
     },
   });
 
-  // Commit approved suggestions mutation
   const commitMutation = useMutation({
     mutationFn: async () => {
       if (!currentRunId || !currentPreview) throw new Error("No run selected");
       
-      // Apply manual overrides to suggestions before committing
       const finalAssignments = currentPreview.suggestions
         .filter(s => selectedBlocks.has(s.blockId))
         .map(s => ({
@@ -159,8 +154,6 @@ export default function AutoBuild() {
           driverId: manualOverrides.get(s.blockId) || s.driverId,
         }));
 
-      // For backend compatibility, we'll create the assignments directly
-      // Instead of using the run commit endpoint, we'll batch create assignments
       const results = await Promise.all(
         finalAssignments.map(async (assignment) => {
           try {
@@ -241,138 +234,196 @@ export default function AutoBuild() {
     return driver ? `${driver.firstName} ${driver.lastName}` : suggestion.driverName;
   };
 
+  // Calculate current step
+  const currentStep = currentPreview ? 3 : 1;
+  const steps = [
+    { number: 1, label: "Recompute Patterns", completed: true },
+    { number: 2, label: "Generate Schedule", completed: currentPreview !== null },
+    { number: 3, label: "Review & Adjust", completed: false },
+    { number: 4, label: "Publish", completed: false },
+  ];
+
   return (
     <div className="container mx-auto p-6 space-y-6">
-      <div className="flex items-center justify-between">
+      {/* Header with Progress Stepper */}
+      <div className="space-y-4">
         <div>
           <h1 className="text-3xl font-bold">Auto-Build Next Week</h1>
           <p className="text-muted-foreground">
             AI-powered schedule generation using historical patterns and workload balance
           </p>
         </div>
+
+        {/* Progress Stepper */}
+        <div className="flex items-center gap-2 overflow-x-auto pb-2">
+          {steps.map((step, index) => (
+            <div key={step.number} className="flex items-center gap-2">
+              <div className="flex items-center gap-2">
+                <div
+                  className={`flex items-center justify-center w-8 h-8 rounded-full font-semibold transition-colors ${
+                    step.number === currentStep
+                      ? "bg-primary text-primary-foreground"
+                      : step.completed
+                      ? "bg-green-600 text-white"
+                      : "bg-muted text-muted-foreground"
+                  }`}
+                >
+                  {step.completed ? <Check className="w-4 h-4" /> : step.number}
+                </div>
+                <span
+                  className={`text-sm font-medium whitespace-nowrap ${
+                    step.number === currentStep
+                      ? "text-foreground"
+                      : step.completed
+                      ? "text-muted-foreground"
+                      : "text-muted-foreground"
+                  }`}
+                >
+                  {step.label}
+                </span>
+              </div>
+              {index < steps.length - 1 && (
+                <div className={`h-0.5 w-8 ${step.completed ? "bg-green-600" : "bg-muted"}`} />
+              )}
+            </div>
+          ))}
+        </div>
       </div>
 
-      {/* Pattern Stats Card */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Brain className="w-5 h-5" />
-            Pattern Learning Status
-          </CardTitle>
-          <CardDescription>
-            Historical assignment patterns analyzed for intelligent suggestions
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {statsLoading ? (
-            <p className="text-muted-foreground">Loading pattern statistics...</p>
-          ) : patternStats ? (
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-              <div>
-                <div className="text-2xl font-bold">{patternStats.totalPatterns}</div>
-                <div className="text-sm text-muted-foreground">Total Patterns</div>
-              </div>
-              <div>
-                <div className="text-2xl font-bold">{patternStats.uniqueDrivers}</div>
-                <div className="text-sm text-muted-foreground">Drivers</div>
-              </div>
-              <div>
-                <div className="text-2xl font-bold">{patternStats.uniqueBlockSignatures}</div>
-                <div className="text-sm text-muted-foreground">Block Types</div>
-              </div>
-              <div>
-                <div className="text-2xl font-bold text-green-600">{patternStats.highConfidencePatterns}</div>
-                <div className="text-sm text-muted-foreground">High Confidence</div>
-              </div>
-              <div>
-                <div className="text-2xl font-bold text-yellow-600">{patternStats.mediumConfidencePatterns}</div>
-                <div className="text-sm text-muted-foreground">Medium Confidence</div>
-              </div>
-              <div>
-                <div className="text-2xl font-bold text-red-600">{patternStats.lowConfidencePatterns}</div>
-                <div className="text-sm text-muted-foreground">Low Confidence</div>
-              </div>
-            </div>
-          ) : (
-            <p className="text-muted-foreground">No pattern data available</p>
-          )}
-        </CardContent>
-        <CardFooter>
-          <Button
-            onClick={() => recomputeMutation.mutate()}
-            disabled={recomputeMutation.isPending}
-            variant="outline"
-            data-testid="button-recompute-patterns"
-          >
-            <TrendingUp className="w-4 h-4 mr-2" />
-            {recomputeMutation.isPending ? "Recomputing..." : "Recompute Patterns"}
-          </Button>
-        </CardFooter>
-      </Card>
-
-      {/* Generate Auto-Build Card */}
-      {!currentPreview && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Play className="w-5 h-5" />
-              Generate Auto-Build
-            </CardTitle>
-            <CardDescription>
-              Create intelligent schedule suggestions for next week based on learned patterns
-            </CardDescription>
-          </CardHeader>
-          <CardFooter>
-            <Button
-              onClick={() => generatePreviewMutation.mutate()}
-              disabled={generatePreviewMutation.isPending}
-              data-testid="button-generate-autobuild"
-            >
-              <Brain className="w-4 h-4 mr-2" />
-              {generatePreviewMutation.isPending ? "Generating..." : "Generate Next Week Schedule"}
-            </Button>
-          </CardFooter>
-        </Card>
+      {/* Summary Stats Grid */}
+      {!currentPreview && patternStats && !statsLoading && (
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">Total Patterns</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{patternStats.totalPatterns}</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">Drivers</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{patternStats.uniqueDrivers}</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">Block Types</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{patternStats.uniqueBlockSignatures}</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-green-600">High Confidence</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-green-600">{patternStats.highConfidencePatterns}</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-yellow-600">Medium Confidence</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-yellow-600">{patternStats.mediumConfidencePatterns}</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-red-600">Low Confidence</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-red-600">{patternStats.lowConfidencePatterns}</div>
+            </CardContent>
+          </Card>
+        </div>
       )}
 
-      {/* Auto-Build Preview */}
+      {/* Action Buttons */}
+      <div className="flex gap-4 items-center">
+        <Button
+          onClick={() => recomputeMutation.mutate()}
+          disabled={recomputeMutation.isPending}
+          variant="outline"
+          className="shadow-md hover:shadow-lg transition-shadow"
+          data-testid="button-recompute-patterns"
+        >
+          <TrendingUp className="w-4 h-4 mr-2" />
+          {recomputeMutation.isPending ? "Recomputing..." : "Recompute Patterns"}
+        </Button>
+
+        {!currentPreview && (
+          <Button
+            onClick={() => generatePreviewMutation.mutate()}
+            disabled={generatePreviewMutation.isPending}
+            className="shadow-md hover:shadow-lg transition-shadow"
+            size="lg"
+            data-testid="button-generate-autobuild"
+          >
+            <Brain className="w-4 h-4 mr-2" />
+            {generatePreviewMutation.isPending ? "Generating..." : "Generate Next Week Schedule"}
+          </Button>
+        )}
+      </div>
+
+      {/* Preview Section */}
       {currentPreview && (
         <>
-          {/* Summary Card */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center justify-between">
-                <span className="flex items-center gap-2">
-                  <Clock className="w-5 h-5" />
-                  Schedule Preview
-                </span>
-                <div className="text-sm font-normal text-muted-foreground">
+          {/* Summary Stats for Preview */}
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">Week</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-sm font-semibold">
                   {format(new Date(currentPreview.targetWeekStart), "MMM d")} -{" "}
-                  {format(new Date(currentPreview.targetWeekEnd), "MMM d, yyyy")}
+                  {format(new Date(currentPreview.targetWeekEnd), "MMM d")}
                 </div>
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div>
-                  <div className="text-2xl font-bold">{currentPreview.totalBlocks}</div>
-                  <div className="text-sm text-muted-foreground">Total Blocks</div>
-                </div>
-                <div>
-                  <div className="text-2xl font-bold text-green-600">{currentPreview.highConfidence}</div>
-                  <div className="text-sm text-muted-foreground">High Confidence</div>
-                </div>
-                <div>
-                  <div className="text-2xl font-bold text-yellow-600">{currentPreview.mediumConfidence}</div>
-                  <div className="text-sm text-muted-foreground">Medium Confidence</div>
-                </div>
-                <div>
-                  <div className="text-2xl font-bold text-red-600">{currentPreview.lowConfidence}</div>
-                  <div className="text-sm text-muted-foreground">Low Confidence</div>
-                </div>
-              </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">Total Blocks</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{currentPreview.totalBlocks}</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-green-600">High Confidence</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-green-600">{currentPreview.highConfidence}</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-yellow-600">Medium</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-yellow-600">{currentPreview.mediumConfidence}</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-red-600">Low</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-red-600">{currentPreview.lowConfidence}</div>
+              </CardContent>
+            </Card>
+          </div>
 
-              {/* Warnings */}
+          {/* Warnings & Issues */}
+          {(currentPreview.warnings.length > 0 || currentPreview.unassignable.length > 0) && (
+            <div className="space-y-2">
               {currentPreview.warnings.length > 0 && (
                 <Alert>
                   <AlertCircle className="h-4 w-4" />
@@ -392,7 +443,6 @@ export default function AutoBuild() {
                 </Alert>
               )}
 
-              {/* Unassignable Blocks */}
               {currentPreview.unassignable.length > 0 && (
                 <Alert variant="destructive">
                   <AlertCircle className="h-4 w-4" />
@@ -410,135 +460,143 @@ export default function AutoBuild() {
                   </AlertDescription>
                 </Alert>
               )}
-            </CardContent>
-            <CardFooter className="flex gap-2">
-              <Button
-                onClick={selectAllSuggestions}
-                variant="outline"
-                data-testid="button-select-all"
-              >
-                Select All
-              </Button>
-              <Button
-                onClick={deselectAll}
-                variant="outline"
-                data-testid="button-deselect-all"
-              >
-                Deselect All
-              </Button>
-              <Button
-                onClick={() => commitMutation.mutate()}
-                disabled={selectedBlocks.size === 0 || commitMutation.isPending}
-                data-testid="button-commit-autobuild"
-              >
-                <Save className="w-4 h-4 mr-2" />
-                {commitMutation.isPending
-                  ? "Saving..."
-                  : `Approve ${selectedBlocks.size} Assignments`}
-              </Button>
-              <Button
-                onClick={() => {
-                  setCurrentPreview(null);
-                  setCurrentRunId(null);
-                  setSelectedBlocks(new Set());
-                  setManualOverrides(new Map());
-                }}
-                variant="ghost"
-                data-testid="button-cancel-autobuild"
-              >
-                Cancel
-              </Button>
-            </CardFooter>
-          </Card>
+            </div>
+          )}
+
+          {/* Action Buttons */}
+          <div className="flex gap-2 flex-wrap">
+            <Button
+              onClick={selectAllSuggestions}
+              variant="outline"
+              className="shadow-md"
+              data-testid="button-select-all"
+            >
+              Select All
+            </Button>
+            <Button
+              onClick={deselectAll}
+              variant="outline"
+              className="shadow-md"
+              data-testid="button-deselect-all"
+            >
+              Deselect All
+            </Button>
+            <Button
+              onClick={() => commitMutation.mutate()}
+              disabled={selectedBlocks.size === 0 || commitMutation.isPending}
+              className="shadow-md hover:shadow-lg transition-shadow"
+              size="lg"
+              data-testid="button-commit-autobuild"
+            >
+              <Save className="w-4 h-4 mr-2" />
+              {commitMutation.isPending
+                ? "Publishing..."
+                : `Publish ${selectedBlocks.size} Assignments`}
+            </Button>
+            <Button
+              onClick={() => {
+                setCurrentPreview(null);
+                setCurrentRunId(null);
+                setSelectedBlocks(new Set());
+                setManualOverrides(new Map());
+              }}
+              variant="ghost"
+              data-testid="button-cancel-autobuild"
+            >
+              Cancel
+            </Button>
+          </div>
 
           {/* Suggestions Table */}
           <Card>
             <CardHeader>
-              <CardTitle>Suggested Assignments</CardTitle>
+              <CardTitle>Review Assignments</CardTitle>
               <CardDescription>
-                Review and approve auto-generated block assignments
+                Review AI suggestions and make manual adjustments as needed
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-12">Select</TableHead>
-                    <TableHead>Block ID</TableHead>
-                    <TableHead>AI Suggestion</TableHead>
-                    <TableHead>Manual Reassign</TableHead>
-                    <TableHead>Confidence</TableHead>
-                    <TableHead>Scores</TableHead>
-                    <TableHead>Rationale</TableHead>
-                    <TableHead>Protected</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {currentPreview.suggestions.map((suggestion) => (
-                    <TableRow key={suggestion.blockId} data-testid={`row-suggestion-${suggestion.blockDisplayId}`}>
-                      <TableCell>
-                        <Checkbox
-                          checked={selectedBlocks.has(suggestion.blockId)}
-                          onCheckedChange={() => toggleBlockSelection(suggestion.blockId)}
-                          data-testid={`checkbox-block-${suggestion.blockDisplayId}`}
-                        />
-                      </TableCell>
-                      <TableCell className="font-medium" data-testid={`text-block-id-${suggestion.blockDisplayId}`}>
-                        {suggestion.blockDisplayId}
-                      </TableCell>
-                      <TableCell data-testid={`text-suggested-driver-${suggestion.blockDisplayId}`}>
-                        {suggestion.driverName}
-                      </TableCell>
-                      <TableCell>
-                        <Select
-                          value={getEffectiveDriverId(suggestion)}
-                          onValueChange={(value) => handleDriverChange(suggestion.blockId, value)}
-                          disabled={suggestion.isProtectedAssignment}
-                        >
-                          <SelectTrigger className="w-[180px]" data-testid={`select-driver-${suggestion.blockDisplayId}`}>
-                            <SelectValue>{getEffectiveDriverName(suggestion)}</SelectValue>
-                          </SelectTrigger>
-                          <SelectContent>
-                            {allDrivers.map((driver) => (
-                              <SelectItem key={driver.id} value={driver.id}>
-                                {driver.firstName} {driver.lastName}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        {manualOverrides.has(suggestion.blockId) && (
-                          <Badge variant="outline" className="ml-2">
-                            Override
-                          </Badge>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={getConfidenceBadgeVariant(suggestion.confidence)} data-testid={`badge-confidence-${suggestion.blockDisplayId}`}>
-                          {getConfidenceLabel(suggestion.confidence)} ({(suggestion.confidence * 100).toFixed(0)}%)
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <div className="text-xs space-y-1">
-                          <div>Pattern: {(suggestion.patternScore * 100).toFixed(0)}%</div>
-                          <div>Workload: {(suggestion.workloadScore * 100).toFixed(0)}%</div>
-                          <div>Compliance: {(suggestion.complianceScore * 100).toFixed(0)}%</div>
-                        </div>
-                      </TableCell>
-                      <TableCell className="max-w-xs text-sm text-muted-foreground">
-                        {suggestion.rationale}
-                      </TableCell>
-                      <TableCell>
-                        {suggestion.isProtectedAssignment && (
-                          <Badge variant="outline">
-                            <CheckCircle2 className="w-3 h-3 mr-1" />
-                            Protected
-                          </Badge>
-                        )}
-                      </TableCell>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-12">Select</TableHead>
+                      <TableHead>Block ID</TableHead>
+                      <TableHead>AI Suggestion</TableHead>
+                      <TableHead>Manual Reassign</TableHead>
+                      <TableHead>Confidence</TableHead>
+                      <TableHead>Scores</TableHead>
+                      <TableHead>Rationale</TableHead>
+                      <TableHead>Protected</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {currentPreview.suggestions.map((suggestion) => (
+                      <TableRow key={suggestion.blockId} data-testid={`row-suggestion-${suggestion.blockDisplayId}`}>
+                        <TableCell>
+                          <Checkbox
+                            checked={selectedBlocks.has(suggestion.blockId)}
+                            onCheckedChange={() => toggleBlockSelection(suggestion.blockId)}
+                            data-testid={`checkbox-block-${suggestion.blockDisplayId}`}
+                          />
+                        </TableCell>
+                        <TableCell className="font-medium" data-testid={`text-block-id-${suggestion.blockDisplayId}`}>
+                          {suggestion.blockDisplayId}
+                        </TableCell>
+                        <TableCell data-testid={`text-suggested-driver-${suggestion.blockDisplayId}`}>
+                          {suggestion.driverName}
+                        </TableCell>
+                        <TableCell>
+                          <Select
+                            value={getEffectiveDriverId(suggestion)}
+                            onValueChange={(value) => handleDriverChange(suggestion.blockId, value)}
+                            disabled={suggestion.isProtectedAssignment}
+                          >
+                            <SelectTrigger className="w-[180px]" data-testid={`select-driver-${suggestion.blockDisplayId}`}>
+                              <SelectValue>{getEffectiveDriverName(suggestion)}</SelectValue>
+                            </SelectTrigger>
+                            <SelectContent>
+                              {allDrivers.map((driver) => (
+                                <SelectItem key={driver.id} value={driver.id}>
+                                  {driver.firstName} {driver.lastName}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          {manualOverrides.has(suggestion.blockId) && (
+                            <Badge variant="outline" className="ml-2">
+                              Override
+                            </Badge>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={getConfidenceBadgeVariant(suggestion.confidence)} data-testid={`badge-confidence-${suggestion.blockDisplayId}`}>
+                            {getConfidenceLabel(suggestion.confidence)} ({(suggestion.confidence * 100).toFixed(0)}%)
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <div className="text-xs space-y-1">
+                            <div>Pattern: {(suggestion.patternScore * 100).toFixed(0)}%</div>
+                            <div>Workload: {(suggestion.workloadScore * 100).toFixed(0)}%</div>
+                            <div>Compliance: {(suggestion.complianceScore * 100).toFixed(0)}%</div>
+                          </div>
+                        </TableCell>
+                        <TableCell className="max-w-xs text-sm text-muted-foreground">
+                          {suggestion.rationale}
+                        </TableCell>
+                        <TableCell>
+                          {suggestion.isProtectedAssignment && (
+                            <Badge variant="outline">
+                              <CheckCircle2 className="w-3 h-3 mr-1" />
+                              Protected
+                            </Badge>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             </CardContent>
           </Card>
         </>
