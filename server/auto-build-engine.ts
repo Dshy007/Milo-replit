@@ -207,16 +207,19 @@ export async function generateAutoBuildPreview(
 
   // Build a cache of driver availabilities for efficient lookup
   // Map<driverId, Set<blockSignature>> where blockSignature is "blockType:startTime:dayOfWeek"
+  // IMPORTANT: A driver with an empty Set has preferences configured but is available for NO blocks
   const driverAvailabilityCache = new Map<string, Set<string>>();
   for (const pref of allPreferences) {
-    if (!pref.isAvailable) continue; // Skip unavailable preferences
-    
+    // Initialize cache entry for this driver if not already present
     if (!driverAvailabilityCache.has(pref.driverId)) {
       driverAvailabilityCache.set(pref.driverId, new Set());
     }
     
-    const signature = createBlockSignature(pref.blockType, pref.startTime, pref.dayOfWeek);
-    driverAvailabilityCache.get(pref.driverId)!.add(signature);
+    // Only add to allowed set if driver IS available for this block
+    if (pref.isAvailable) {
+      const signature = createBlockSignature(pref.blockType, pref.startTime, pref.dayOfWeek);
+      driverAvailabilityCache.get(pref.driverId)!.add(signature);
+    }
   }
 
   // Fetch all block assignments for the week with block data
@@ -329,17 +332,18 @@ export async function generateAutoBuildPreview(
 
     for (const driver of allDrivers) {
       // Check driver availability preferences
-      // If preferences exist for this driver, enforce them
       const driverPreferences = driverAvailabilityCache.get(driver.id);
-      if (driverPreferences && driverPreferences.size > 0) {
-        // Driver has preferences configured - check if they're available for this block
-        if (!driverPreferences.has(availabilitySignature)) {
-          // Driver is not available for this block type/time/day combination
+      if (driverPreferences !== undefined) {
+        // Driver has preferences configured - enforce them strictly
+        // Empty Set means driver is unavailable for ALL blocks
+        // Non-empty Set means driver is ONLY available for blocks in the Set
+        if (driverPreferences.size === 0 || !driverPreferences.has(availabilitySignature)) {
+          // Driver is not available for this block
           availabilityFilteredCount++;
           continue;
         }
       }
-      // If no preferences exist for this driver, allow all blocks (backward compatible)
+      // If driver not in cache (no preferences configured), allow all blocks (backward compatible)
       
       // Find pattern for this driver
       const pattern = patterns.find(p => p.driverId === driver.id);
