@@ -623,6 +623,9 @@ export const baseInsertSpecialRequestSchema = createInsertSchema(specialRequests
   affectedDate: z.coerce.date().optional().nullable(),
 }).omit({ id: true, createdAt: true, updatedAt: true });
 
+// Form schema for frontend forms (omits tenantId, no transform)
+export const formSpecialRequestSchema = baseInsertSpecialRequestSchema.omit({ tenantId: true });
+
 // Full validated schema with refinements and backward compatibility
 export const insertSpecialRequestSchema = baseInsertSpecialRequestSchema
 .refine((data) => {

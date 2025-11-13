@@ -16,7 +16,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Separator } from "@/components/ui/separator";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { insertSpecialRequestSchema } from "@shared/schema";
+import { formSpecialRequestSchema } from "@shared/schema";
 import { format, parseISO, isSameDay } from "date-fns";
 import { CalendarIcon, CheckCircle2, XCircle, Clock, AlertCircle, User, Calendar as CalendarCheck, Repeat } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -24,7 +24,7 @@ import { useToast } from "@/hooks/use-toast";
 import type { z } from "zod";
 import type { SpecialRequest, Driver, Block } from "@shared/schema";
 
-type FormValues = z.infer<typeof insertSpecialRequestSchema>;
+type FormValues = z.infer<typeof formSpecialRequestSchema>;
 
 export default function SpecialRequests() {
   const [selectedRequest, setSelectedRequest] = useState<SpecialRequest | null>(null);
@@ -45,7 +45,7 @@ export default function SpecialRequests() {
   });
 
   const form = useForm<FormValues>({
-    resolver: zodResolver(insertSpecialRequestSchema.omit({ tenantId: true })),
+    resolver: zodResolver(formSpecialRequestSchema),
     defaultValues: {
       availabilityType: "unavailable",
       driverId: "",
