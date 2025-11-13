@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -7,15 +7,26 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import { Search, CheckCircle2, XCircle, RefreshCw, Save, Users } from "lucide-react";
+import { Search, ChevronLeft, ChevronRight, Save, Users, Calendar, RefreshCw, CheckCircle2, XCircle } from "lucide-react";
+import { format, startOfWeek, endOfWeek, eachDayOfInterval, addWeeks, subWeeks, getISOWeek } from "date-fns";
 import type { Driver, DriverAvailabilityPreference, Contract } from "@shared/schema";
+
+// Contract time grouped by block type for tree display
+type ContractTimeRow = {
+  startTime: string;
+  blockType: "solo1" | "solo2" | "team";
+  blockTypeLabel: string;
+  locationCode: string;
+  timezone: string;
+  contracts: Contract[];
+};
 
 export default function DriverAvailability() {
   const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [currentWeekStart, setCurrentWeekStart] = useState(() => startOfWeek(new Date(), { weekStartsOn: 1 }));
   const { toast } = useToast();
 
   // Fetch all drivers
@@ -44,7 +55,6 @@ export default function DriverAvailability() {
       return await apiRequest("POST", "/api/driver-availability-preferences/bulk", data);
     },
     onSuccess: () => {
-      // Refetch to ensure UI reflects server state
       queryClient.refetchQueries({ 
         queryKey: ["/api/driver-availability-preferences", selectedDriverId] 
       });
@@ -62,30 +72,6 @@ export default function DriverAvailability() {
     },
   });
 
-  // Mutation to clear all preferences for a driver
-  const clearPreferencesMutation = useMutation({
-    mutationFn: async (driverId: string) => {
-      return await apiRequest("DELETE", `/api/driver-availability-preferences/${driverId}`);
-    },
-    onSuccess: () => {
-      // Refetch preferences for the selected driver to update UI
-      queryClient.refetchQueries({ 
-        queryKey: ["/api/driver-availability-preferences", selectedDriverId] 
-      });
-      toast({
-        title: "Preferences cleared",
-        description: "All availability preferences removed for this driver",
-      });
-    },
-    onError: (error: Error) => {
-      toast({
-        variant: "destructive",
-        title: "Failed to clear preferences",
-        description: error.message,
-      });
-    },
-  });
-
   // Filter drivers by search query
   const filteredDrivers = drivers.filter((driver) =>
     driver.firstName.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -95,30 +81,82 @@ export default function DriverAvailability() {
 
   const selectedDriver = drivers.find((d) => d.id === selectedDriverId);
 
-  // Block configurations - dynamically determined from contracts
-  const blockTypes = ["solo1", "solo2", "team"];
-  const daysOfWeek = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
-  
-  // Build a map of block type → sorted start times from contracts
-  // This ensures we only show valid combinations that exist in the system
-  const blockTypeStartTimes = new Map<string, string[]>();
-  for (const blockType of blockTypes) {
-    const startTimesForType = Array.from(
-      new Set(
-        contracts
-          .filter(c => c.type === blockType)
-          .map(c => c.startTime)
-      )
-    ).sort((a, b) => {
-      const [aHour, aMin] = a.split(':').map(Number);
-      const [bHour, bMin] = b.split(':').map(Number);
-      return (aHour * 60 + aMin) - (bHour * 60 + bMin);
+  // Normalize contract type to lowercase
+  const normalizeBlockType = (type: string): "solo1" | "solo2" | "team" => {
+    const normalized = type.toLowerCase();
+    if (normalized === "solo1" || normalized === "solo2" || normalized === "team") {
+      return normalized as "solo1" | "solo2" | "team";
+    }
+    return "solo1";
+  };
+
+  // Group contracts by start time and block type (matches Special Requests logic)
+  const contractTimeRows: ContractTimeRow[] = useMemo(() => {
+    if (!contracts || contracts.length === 0) return [];
+    
+    const grouped = new Map<string, ContractTimeRow>();
+    
+    contracts.forEach(contract => {
+      const blockType = normalizeBlockType(contract.type);
+      const key = `${contract.startTime}-${blockType}`;
+      
+      if (!grouped.has(key)) {
+        const blockTypeLabel = blockType === "solo1" ? "Solo1" : 
+                               blockType === "solo2" ? "Solo2" : "Team";
+        
+        // Extract location and timezone from first contract in group
+        // Normalize domicile code to uppercase for display and timezone lookup
+        const locationCode = (contract.domicile || "N/A").toUpperCase();
+        
+        // TODO: Timezone should be configurable per domicile or added to contract schema
+        // For now, using a simple mapping based on common US domiciles
+        const timezoneMap: Record<string, string> = {
+          "HKC": "GMT-6", // Kansas City - Central
+          "MKC": "GMT-6", // Kansas City - Central
+          "PHX": "GMT-7", // Phoenix - Mountain
+          "LAX": "GMT-8", // Los Angeles - Pacific
+          "DFW": "GMT-6", // Dallas - Central
+          "NYC": "GMT-5", // New York - Eastern
+          "ATL": "GMT-5", // Atlanta - Eastern
+          "ORD": "GMT-6", // Chicago - Central
+          "DEN": "GMT-7", // Denver - Mountain
+          "SEA": "GMT-8", // Seattle - Pacific
+        };
+        const timezone = timezoneMap[locationCode] || "GMT-6"; // Default to Central time
+        
+        grouped.set(key, {
+          startTime: contract.startTime,
+          blockType,
+          blockTypeLabel,
+          locationCode,
+          timezone,
+          contracts: []
+        });
+      }
+      
+      grouped.get(key)!.contracts.push(contract);
     });
-    blockTypeStartTimes.set(blockType, startTimesForType);
-  }
-  
-  // Check if any block types have start times
-  const hasStartTimes = Array.from(blockTypeStartTimes.values()).some(times => times.length > 0);
+    
+    // Sort by block type (Solo1, Solo2, Team), then by time
+    return Array.from(grouped.values()).sort((a, b) => {
+      const typeOrder = { solo1: 1, solo2: 2, team: 3 };
+      if (a.blockType !== b.blockType) {
+        return typeOrder[a.blockType] - typeOrder[b.blockType];
+      }
+      return a.startTime.localeCompare(b.startTime);
+    });
+  }, [contracts]);
+
+  // Get week days for column headers
+  const weekDays = useMemo(() => {
+    const weekEnd = endOfWeek(currentWeekStart, { weekStartsOn: 1 });
+    return eachDayOfInterval({ start: currentWeekStart, end: weekEnd });
+  }, [currentWeekStart]);
+
+  // Get day of week string (lowercase for API compatibility)
+  const getDayOfWeek = (date: Date): string => {
+    return format(date, 'EEEE').toLowerCase();
+  };
 
   // Build preference state from API data
   const preferenceMap = new Map<string, boolean>();
@@ -144,14 +182,11 @@ export default function DriverAvailability() {
   const togglePreference = (blockType: string, startTime: string, dayOfWeek: string) => {
     const key = `${blockType}:${startTime}:${dayOfWeek}`;
     const currentAvailable = localPreferences.get(key) ?? isAvailable(blockType, startTime, dayOfWeek);
-    // Flip for UI: when checkbox is toggled, we toggle the availability (not unavailability)
     const newAvailable = !currentAvailable;
     const serverAvailable = isAvailable(blockType, startTime, dayOfWeek);
     
     const newPreferences = new Map(localPreferences);
     
-    // If new value matches server state, remove from local changes
-    // Otherwise, track the change
     if (newAvailable === serverAvailable) {
       newPreferences.delete(key);
     } else {
@@ -164,8 +199,7 @@ export default function DriverAvailability() {
   const getPreferenceValue = (blockType: string, startTime: string, dayOfWeek: string): boolean => {
     const key = `${blockType}:${startTime}:${dayOfWeek}`;
     const available = localPreferences.get(key) ?? isAvailable(blockType, startTime, dayOfWeek);
-    // Flip for UI: checked = unavailable, unchecked = available
-    return !available;
+    return available;
   };
 
   // Save preferences
@@ -173,21 +207,19 @@ export default function DriverAvailability() {
     if (!selectedDriverId) return;
 
     const preferencesToSave = [];
+    const daysOfWeek = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
     
-    // Only save valid block type + start time combinations
-    for (const blockType of blockTypes) {
-      const startTimesForType = blockTypeStartTimes.get(blockType) || [];
-      for (const startTime of startTimesForType) {
-        for (const dayOfWeek of daysOfWeek) {
-          const key = `${blockType}:${startTime}:${dayOfWeek}`;
-          const value = localPreferences.get(key) ?? isAvailable(blockType, startTime, dayOfWeek);
-          preferencesToSave.push({
-            blockType,
-            startTime,
-            dayOfWeek,
-            isAvailable: value,
-          });
-        }
+    // Save all contract time + day combinations
+    for (const row of contractTimeRows) {
+      for (const dayOfWeek of daysOfWeek) {
+        const key = `${row.blockType}:${row.startTime}:${dayOfWeek}`;
+        const value = localPreferences.get(key) ?? isAvailable(row.blockType, row.startTime, dayOfWeek);
+        preferencesToSave.push({
+          blockType: row.blockType,
+          startTime: row.startTime,
+          dayOfWeek,
+          isAvailable: value,
+        });
       }
     }
 
@@ -195,13 +227,6 @@ export default function DriverAvailability() {
       driverId: selectedDriverId,
       preferences: preferencesToSave,
     });
-  };
-
-  // Clear all preferences
-  const handleClear = () => {
-    if (!selectedDriverId) return;
-    clearPreferencesMutation.mutate(selectedDriverId);
-    setLocalPreferences(new Map());
   };
 
   // Reset to server state
@@ -212,43 +237,32 @@ export default function DriverAvailability() {
   // Check if there are unsaved changes
   const hasUnsavedChanges = localPreferences.size > 0;
 
-  // Set all blocks to available (uncheck all - meaning driver can work all shifts)
-  const handleSetAllAvailable = () => {
-    const newPreferences = new Map<string, boolean>();
-    for (const blockType of blockTypes) {
-      const startTimesForType = blockTypeStartTimes.get(blockType) || [];
-      for (const startTime of startTimesForType) {
-        for (const dayOfWeek of daysOfWeek) {
-          const key = `${blockType}:${startTime}:${dayOfWeek}`;
-          const serverValue = isAvailable(blockType, startTime, dayOfWeek);
-          // Set to available (true in DB) - only track if different from server state
-          if (!serverValue) {
-            newPreferences.set(key, true);
-          }
-        }
-      }
-    }
-    setLocalPreferences(newPreferences);
+  // Week navigation
+  const goToPreviousWeek = () => {
+    setCurrentWeekStart(prev => subWeeks(prev, 1));
   };
 
-  // Set all blocks to unavailable (check all - meaning driver can't work any shifts)
-  const handleSetAllUnavailable = () => {
-    const newPreferences = new Map<string, boolean>();
-    for (const blockType of blockTypes) {
-      const startTimesForType = blockTypeStartTimes.get(blockType) || [];
-      for (const startTime of startTimesForType) {
-        for (const dayOfWeek of daysOfWeek) {
-          const key = `${blockType}:${startTime}:${dayOfWeek}`;
-          const serverValue = isAvailable(blockType, startTime, dayOfWeek);
-          // Set to unavailable (false in DB) - only track if different from server state
-          if (serverValue) {
-            newPreferences.set(key, false);
-          }
-        }
-      }
-    }
-    setLocalPreferences(newPreferences);
+  const goToNextWeek = () => {
+    setCurrentWeekStart(prev => addWeeks(prev, 1));
   };
+
+  const goToCurrentWeek = () => {
+    setCurrentWeekStart(startOfWeek(new Date(), { weekStartsOn: 1 }));
+  };
+
+  const weekNumber = getISOWeek(currentWeekStart);
+
+  // Group rows by block type for tree display
+  const rowsByBlockType = useMemo(() => {
+    const grouped = new Map<string, ContractTimeRow[]>();
+    contractTimeRows.forEach(row => {
+      if (!grouped.has(row.blockTypeLabel)) {
+        grouped.set(row.blockTypeLabel, []);
+      }
+      grouped.get(row.blockTypeLabel)!.push(row);
+    });
+    return grouped;
+  }, [contractTimeRows]);
 
   return (
     <div className="flex h-full">
@@ -311,7 +325,7 @@ export default function DriverAvailability() {
       </div>
 
       {/* Right Panel - Availability Grid */}
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 flex flex-col overflow-hidden">
         {!selectedDriverId ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-center text-muted-foreground" data-testid="text-no-selection">
@@ -321,157 +335,172 @@ export default function DriverAvailability() {
             </div>
           </div>
         ) : (
-          <div className="p-6 max-w-6xl mx-auto">
-            {/* Header */}
-            <div className="mb-6">
-              <h2 className="text-2xl font-bold mb-1" data-testid="text-selected-driver">
-                {selectedDriver && `${selectedDriver.firstName} ${selectedDriver.lastName}`}
-              </h2>
-              <p className="text-sm text-muted-foreground" data-testid="text-instructions">
-                Check the blocks when this driver is UNAVAILABLE. Unchecked blocks mean the driver can work that shift.
-              </p>
+          <>
+            {/* Header with Actions */}
+            <div className="p-4 border-b border-border bg-card/50">
+              <div className="flex items-center justify-between gap-4 mb-4">
+                <div>
+                  <h2 className="text-xl font-bold" data-testid="text-selected-driver">
+                    {selectedDriver && `${selectedDriver.firstName} ${selectedDriver.lastName}`}
+                  </h2>
+                  <p className="text-sm text-muted-foreground" data-testid="text-instructions">
+                    Check boxes to mark driver as AVAILABLE for that shift
+                  </p>
+                </div>
+                
+                {/* Week Navigation */}
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={goToPreviousWeek}
+                    data-testid="button-previous-week"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={goToCurrentWeek}
+                    className="min-w-[120px]"
+                    data-testid="button-current-week"
+                  >
+                    <Calendar className="w-4 h-4 mr-2" />
+                    Week {weekNumber}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={goToNextWeek}
+                    data-testid="button-next-week"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </Button>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  onClick={handleSave}
+                  disabled={!hasUnsavedChanges || updatePreferencesMutation.isPending}
+                  data-testid="button-save"
+                >
+                  <Save className="w-4 h-4 mr-2" />
+                  Save Changes
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleReset}
+                  disabled={!hasUnsavedChanges}
+                  data-testid="button-reset"
+                >
+                  <RefreshCw className="w-4 h-4 mr-2" />
+                  Reset
+                </Button>
+              </div>
+
+              {/* Unsaved Changes Warning */}
+              {hasUnsavedChanges && (
+                <div className="mt-4 p-3 bg-primary/10 border border-primary/20 rounded-md">
+                  <p className="text-sm font-medium text-primary" data-testid="text-unsaved-changes">
+                    You have unsaved changes. Click "Save Changes" to apply your modifications.
+                  </p>
+                </div>
+              )}
             </div>
 
-            {/* Action Buttons */}
-            <div className="flex flex-wrap items-center gap-2 mb-6">
-              <Button
-                onClick={handleSave}
-                disabled={!hasUnsavedChanges || updatePreferencesMutation.isPending}
-                data-testid="button-save"
-              >
-                <Save className="w-4 h-4 mr-2" />
-                Save Changes
-              </Button>
-              <Button
-                variant="outline"
-                onClick={handleReset}
-                disabled={!hasUnsavedChanges}
-                data-testid="button-reset"
-              >
-                <RefreshCw className="w-4 h-4 mr-2" />
-                Reset
-              </Button>
-              <Separator orientation="vertical" className="h-8" />
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleSetAllAvailable}
-                data-testid="button-all-available"
-              >
-                <CheckCircle2 className="w-4 h-4 mr-2" />
-                Mark All Available
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleSetAllUnavailable}
-                data-testid="button-all-unavailable"
-              >
-                <XCircle className="w-4 h-4 mr-2" />
-                Mark All Unavailable
-              </Button>
-              <Separator orientation="vertical" className="h-8" />
-              <Button
-                variant="destructive"
-                size="sm"
-                onClick={handleClear}
-                disabled={clearPreferencesMutation.isPending}
-                data-testid="button-clear"
-              >
-                Clear All Preferences
-              </Button>
-            </div>
+            {/* Grid Container */}
+            <div className="flex-1 overflow-auto">
+              {preferencesLoading || contractsLoading ? (
+                <div className="flex items-center justify-center h-full">
+                  <div className="text-center text-muted-foreground" data-testid="text-loading-preferences">
+                    Loading preferences...
+                  </div>
+                </div>
+              ) : contractTimeRows.length === 0 ? (
+                <div className="flex items-center justify-center h-full">
+                  <div className="text-center text-muted-foreground" data-testid="text-no-start-times">
+                    <p className="text-lg font-medium">No contracts configured</p>
+                    <p className="text-sm">Please add contracts with start times to manage driver availability.</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-4">
+                  {/* Date Column Headers */}
+                  <div className="flex mb-4">
+                    <div className="w-72 flex-shrink-0" />
+                    <div className="flex-1 grid grid-cols-7 gap-2">
+                      {weekDays.map(day => (
+                        <div 
+                          key={day.toISOString()} 
+                          className="text-center"
+                          data-testid={`header-date-${format(day, 'yyyy-MM-dd')}`}
+                        >
+                          <div className="text-sm font-medium">{format(day, 'EEE')}</div>
+                          <div className="text-xs text-muted-foreground">{format(day, 'MMM d')}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
 
-            {preferencesLoading || contractsLoading ? (
-              <div className="text-center text-muted-foreground py-12" data-testid="text-loading-preferences">
-                Loading preferences...
-              </div>
-            ) : !hasStartTimes ? (
-              <div className="text-center text-muted-foreground py-12" data-testid="text-no-start-times">
-                <p className="text-lg font-medium">No start times configured</p>
-                <p className="text-sm">Please add contracts with start times to manage driver availability.</p>
-              </div>
-            ) : (
-              <div className="space-y-6">
-                {/* Availability Grid - Organized by Day */}
-                {daysOfWeek.map((day) => (
-                  <Card key={day}>
-                    <CardHeader>
-                      <CardTitle className="text-lg capitalize" data-testid={`text-day-${day}`}>
-                        {day}
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="grid grid-cols-3 gap-4">
-                        {blockTypes.map((blockType) => {
-                          const startTimesForType = blockTypeStartTimes.get(blockType) || [];
-                          
-                          // Only show block type if it has start times
-                          if (startTimesForType.length === 0) {
-                            return (
-                              <div key={blockType} className="space-y-2">
-                                <div className="flex items-center gap-2 mb-3">
-                                  <Badge variant="secondary" className="uppercase text-xs">
-                                    {blockType}
-                                  </Badge>
+                  {/* Contract Time Rows Grouped by Block Type */}
+                  <div className="space-y-6">
+                    {Array.from(rowsByBlockType.entries()).map(([blockTypeLabel, rows]) => (
+                      <Card key={blockTypeLabel}>
+                        <CardHeader className="pb-3">
+                          <CardTitle className="text-base flex items-center gap-2">
+                            <Badge variant="outline" className="font-medium">
+                              {blockTypeLabel}
+                            </Badge>
+                          </CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-2">
+                          {rows.map(row => (
+                            <div 
+                              key={`${row.blockType}-${row.startTime}`} 
+                              className="flex items-center"
+                              data-testid={`row-${row.blockType}-${row.startTime}`}
+                            >
+                              {/* Contract Time Label */}
+                              <div className="w-72 flex-shrink-0 pr-4">
+                                <div className="text-sm font-medium">
+                                  {row.startTime} {row.timezone}
                                 </div>
                                 <div className="text-xs text-muted-foreground">
-                                  No contracts configured
+                                  {row.locationCode} • {row.blockTypeLabel}
                                 </div>
                               </div>
-                            );
-                          }
-                          
-                          return (
-                            <div key={blockType} className="space-y-2">
-                              <div className="flex items-center gap-2 mb-3">
-                                <Badge variant="secondary" className="uppercase text-xs">
-                                  {blockType}
-                                </Badge>
-                              </div>
-                              <div className="space-y-2">
-                                {startTimesForType.map((startTime) => {
-                                  const isUnavailable = getPreferenceValue(blockType, startTime, day);
+
+                              {/* Day Checkboxes */}
+                              <div className="flex-1 grid grid-cols-7 gap-2">
+                                {weekDays.map(day => {
+                                  const dayOfWeek = getDayOfWeek(day);
+                                  const isChecked = getPreferenceValue(row.blockType, row.startTime, dayOfWeek);
+                                  
                                   return (
-                                    <div
-                                      key={startTime}
-                                      className="flex items-center space-x-2"
+                                    <div 
+                                      key={day.toISOString()} 
+                                      className="flex items-center justify-center"
                                     >
                                       <Checkbox
-                                        id={`${blockType}-${startTime}-${day}`}
-                                        checked={isUnavailable}
-                                        onCheckedChange={() => togglePreference(blockType, startTime, day)}
-                                        data-testid={`checkbox-${blockType}-${startTime}-${day}`}
+                                        checked={isChecked}
+                                        onCheckedChange={() => togglePreference(row.blockType, row.startTime, dayOfWeek)}
+                                        data-testid={`checkbox-${row.blockType}-${row.startTime}-${dayOfWeek}`}
                                       />
-                                      <Label
-                                        htmlFor={`${blockType}-${startTime}-${day}`}
-                                        className="text-sm font-normal cursor-pointer"
-                                      >
-                                        {startTime}
-                                      </Label>
                                     </div>
                                   );
                                 })}
                               </div>
                             </div>
-                          );
-                        })}
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            )}
-
-            {/* Save Reminder */}
-            {hasUnsavedChanges && (
-              <div className="mt-6 p-4 bg-primary/10 border border-primary/20 rounded-md">
-                <p className="text-sm font-medium text-primary" data-testid="text-unsaved-changes">
-                  You have unsaved changes. Click "Save Changes" to apply your modifications.
-                </p>
-              </div>
-            )}
-          </div>
+                          ))}
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </>
         )}
       </div>
     </div>
