@@ -25,6 +25,7 @@ import AutoBuild from "@/pages/AutoBuild";
 import CSVImport from "@/pages/CSVImport";
 import DriverAvailability from "@/pages/DriverAvailability";
 import CascadeEffect from "@/pages/CascadeEffect";
+import ScheduleImport from "@/pages/ScheduleImport";
 import NotFound from "@/pages/not-found";
 
 function ProtectedLayout({ children }: { children: ReactNode }) {
@@ -160,6 +161,13 @@ function Router() {
         <ProtectedRoute>
           <ProtectedLayout>
             <CascadeEffect />
+          </ProtectedLayout>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/schedule-import">
+        <ProtectedRoute>
+          <ProtectedLayout>
+            <ScheduleImport />
           </ProtectedLayout>
         </ProtectedRoute>
       </Route>

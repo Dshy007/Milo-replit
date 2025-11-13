@@ -3205,6 +3205,33 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
     }
   });
 
+  // ==================== EXCEL IMPORT ====================
+
+  // POST /api/schedules/excel-import - Import schedule from Excel file
+  // Uses existing multer upload configuration
+  app.post("/api/schedules/excel-import", requireAuth, upload.single('file'), async (req: any, res: any) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const userId = req.session.userId!;
+      
+      if (!req.file) {
+        return res.status(400).json({ message: "No file uploaded" });
+      }
+
+      const { parseExcelSchedule } = await import("./excel-import");
+      const result = await parseExcelSchedule(tenantId, req.file.buffer, userId);
+      
+      res.json({
+        success: true,
+        message: `Successfully imported ${result.created} assignments${result.failed > 0 ? `, ${result.failed} failed` : ''}`,
+        ...result,
+      });
+    } catch (error: any) {
+      console.error("Excel import error:", error);
+      res.status(500).json({ message: "Failed to import Excel file", error: error.message });
+    }
+  });
+
   // ==================== CSV IMPORT ====================
 
   // POST /api/schedules/import-validate - Validate CSV import without committing

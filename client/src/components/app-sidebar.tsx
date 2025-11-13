@@ -60,6 +60,12 @@ const navItems = [
     testId: "nav-csv-import",
   },
   {
+    title: "Excel Import",
+    url: "/schedule-import",
+    icon: FileSpreadsheet,
+    testId: "nav-schedule-import",
+  },
+  {
     title: "AI Assistant",
     url: "/chat",
     icon: Sparkles,
