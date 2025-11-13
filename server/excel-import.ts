@@ -1,13 +1,20 @@
 import { db } from "./db";
-import { drivers, blocks, blockAssignments, protectedDriverRules } from "@shared/schema";
+import { drivers, blocks, blockAssignments, protectedDriverRules, contracts } from "@shared/schema";
 import { eq, and, inArray } from "drizzle-orm";
 import { validateBlockAssignment } from "./rolling6-calculator";
 import * as XLSX from "xlsx";
+import { startOfWeek, parseISO } from "date-fns";
 
 interface ExcelRow {
   "Block ID": string;
   "Driver Name": string;
   "Operator ID": string;
+  "Stop 1 Planned Arrival Date"?: number;
+  "Stop 1 Planned Arrival Time"?: number;
+  "Stop 1  Planned Departure Date"?: number;
+  "Stop 1  Planned Departure Time"?: number;
+  "Stop 2 Planned Arrival Date"?: number;
+  "Stop 2 Planned Arrival Time"?: number;
 }
 
 interface ImportResult {
@@ -17,6 +24,33 @@ interface ImportResult {
   errors: string[];
   warnings: string[];
   committedWithWarnings: number;
+}
+
+/**
+ * Parse Operator ID to extract contract type and tractor
+ * Format: "FTIM_MKC_Solo1_Tractor_2_d2" → { type: "solo1", tractorId: "Tractor_2" }
+ */
+function parseOperatorId(operatorId: string): { type: string; tractorId: string } | null {
+  const match = operatorId.match(/_(Solo1|Solo2|Team)_Tractor_(\d+)/i);
+  if (!match) return null;
+  
+  return {
+    type: match[1].toLowerCase(), // "solo1", "solo2", "team"
+    tractorId: `Tractor_${match[2]}`, // "Tractor_1", "Tractor_2", etc.
+  };
+}
+
+/**
+ * Convert Excel serial number to JavaScript Date
+ * Excel stores dates as days since Jan 1, 1900
+ * Times are stored as fractions of a day (0.5 = noon)
+ */
+function excelDateToJSDate(excelDate: number, excelTime?: number): Date {
+  // Excel epoch: January 1, 1900 (but Excel incorrectly treats 1900 as a leap year)
+  const excelEpoch = new Date(1899, 11, 30); // Dec 30, 1899 to account for Excel bug
+  const days = excelDate + (excelTime || 0);
+  const milliseconds = days * 24 * 60 * 60 * 1000;
+  return new Date(excelEpoch.getTime() + milliseconds);
 }
 
 /**
@@ -59,6 +93,107 @@ export async function parseExcelSchedule(
 
     if (rows.length === 0) {
       throw new Error("Excel file is empty");
+    }
+
+    // ========== PREPROCESSING STAGE: Auto-create missing blocks ==========
+    // Group rows by Block ID to extract block metadata
+    const blockGroups = new Map<string, ExcelRow[]>();
+    for (const row of rows) {
+      const blockId = row["Block ID"]?.trim();
+      if (!blockId) continue;
+      
+      if (!blockGroups.has(blockId)) {
+        blockGroups.set(blockId, []);
+      }
+      blockGroups.get(blockId)!.push(row);
+    }
+
+    // Upsert blocks and contracts from Excel data
+    for (const [blockId, blockRows] of Array.from(blockGroups.entries())) {
+      const firstRow = blockRows[0];
+      
+      // Parse Operator ID to extract contract info
+      const parsedOperator = parseOperatorId(firstRow["Operator ID"]);
+      if (!parsedOperator) {
+        result.warnings.push(`Block ${blockId}: Could not parse Operator ID "${firstRow["Operator ID"]}"`);
+        continue;
+      }
+
+      // Extract start and end times from Excel date numbers
+      const startDate = firstRow["Stop 1  Planned Departure Date"];
+      const startTime = firstRow["Stop 1  Planned Departure Time"];
+      const endDate = firstRow["Stop 2 Planned Arrival Date"];
+      const endTime = firstRow["Stop 2 Planned Arrival Time"];
+
+      if (!startDate || !endDate || startTime === undefined || endTime === undefined) {
+        result.warnings.push(`Block ${blockId}: Missing timing data (Stop 1/2 planned times)`);
+        continue;
+      }
+
+      const startTimestamp = excelDateToJSDate(startDate, startTime);
+      const endTimestamp = excelDateToJSDate(endDate, endTime);
+
+      // Extract start time in HH:MM format for contract matching
+      const startTimeStr = startTimestamp.toTimeString().slice(0, 5); // "HH:MM"
+
+      // Find or create contract
+      const existingContracts = await db
+        .select()
+        .from(contracts)
+        .where(
+          and(
+            eq(contracts.tenantId, tenantId),
+            eq(contracts.type, parsedOperator.type),
+            eq(contracts.startTime, startTimeStr),
+            eq(contracts.tractorId, parsedOperator.tractorId)
+          )
+        );
+
+      let contractId: string;
+      if (existingContracts.length > 0) {
+        contractId = existingContracts[0].id;
+      } else {
+        // Create new contract
+        const duration = Math.round((endTimestamp.getTime() - startTimestamp.getTime()) / (1000 * 60 * 60));
+        const [newContract] = await db
+          .insert(contracts)
+          .values({
+            tenantId,
+            name: `${parsedOperator.type.toUpperCase()} ${startTimeStr} ${parsedOperator.tractorId}`,
+            type: parsedOperator.type,
+            startTime: startTimeStr,
+            tractorId: parsedOperator.tractorId,
+            duration,
+            baseRoutes: parsedOperator.type === "solo1" ? 10 : 7,
+            daysPerWeek: 6,
+            status: "active",
+          })
+          .returning();
+        contractId = newContract.id;
+      }
+
+      // Upsert block (update if exists, insert if new)
+      const existingBlock = await db
+        .select()
+        .from(blocks)
+        .where(and(eq(blocks.tenantId, tenantId), eq(blocks.blockId, blockId)))
+        .limit(1);
+
+      if (existingBlock.length === 0) {
+        // Create new block
+        const duration = Math.round((endTimestamp.getTime() - startTimestamp.getTime()) / (1000 * 60 * 60));
+        
+        await db.insert(blocks).values({
+          tenantId,
+          blockId,
+          contractId,
+          soloType: parsedOperator.type,
+          startTimestamp,
+          endTimestamp,
+          tractorId: parsedOperator.tractorId, // From Operator ID: "Tractor_1", "Tractor_2", etc.
+          duration,
+        });
+      }
     }
 
     // Fetch all data for validation (following CSV import pattern)
