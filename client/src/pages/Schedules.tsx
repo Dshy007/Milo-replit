@@ -251,9 +251,12 @@ export default function Schedules() {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [viewMode, setViewMode] = useState<ViewMode>("week");
   const [displayMode, setDisplayMode] = useState<DisplayMode>(() => {
-    // Load from localStorage
-    const saved = localStorage.getItem("schedules-display-mode");
-    return (saved === "list" || saved === "calendar") ? saved : "calendar";
+    // Load from localStorage (guard against SSR/non-browser contexts)
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem("schedules-display-mode");
+      return (saved === "list" || saved === "calendar") ? saved : "calendar";
+    }
+    return "calendar";
   });
   const [selectedBlock, setSelectedBlock] = useState<BlockWithAssignment | null>(null);
   const [soloTypeFilter, setSoloTypeFilter] = useState<SoloTypeFilter>("all");
@@ -266,9 +269,11 @@ export default function Schedules() {
   const [driverSearch, setDriverSearch] = useState<string>("");
   const { toast } = useToast();
 
-  // Save displayMode to localStorage
+  // Save displayMode to localStorage (guard against SSR/non-browser contexts)
   useEffect(() => {
-    localStorage.setItem("schedules-display-mode", displayMode);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem("schedules-display-mode", displayMode);
+    }
   }, [displayMode]);
 
   // Calculate date range based on view mode (needed early for data fetching)
