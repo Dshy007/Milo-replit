@@ -580,6 +580,8 @@ export const specialRequests = pgTable("special_requests", {
   availabilityType: text("availability_type"), // available, unavailable
   startDate: timestamp("start_date"), // Start of availability change
   endDate: timestamp("end_date"), // End of availability change (null for single day or recurring)
+  startTime: text("start_time"), // HH:MM format (e.g., "16:30") - time of day when availability change begins
+  endTime: text("end_time"), // HH:MM format (e.g., "21:30") - optional, for time range restrictions
   isRecurring: boolean("is_recurring").default(false), // True for permanent patterns
   recurringPattern: text("recurring_pattern"), // every_monday, every_friday, every_weekend, every_week
   recurringDays: text("recurring_days").array(), // For custom patterns: ["monday", "friday"]
@@ -614,10 +616,15 @@ export const specialRequests = pgTable("special_requests", {
   recurringPatternCheck: check("recurring_pattern_check", sql`${table.recurringPattern} IS NULL OR ${table.recurringPattern} IN ('every_monday', 'every_tuesday', 'every_wednesday', 'every_thursday', 'every_friday', 'every_saturday', 'every_sunday', 'every_weekend', 'every_week', 'custom')`),
 }));
 
+// Time format validation regex (HH:MM format: 00:00 to 23:59)
+const TIME_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/;
+
 // Base schema without complex validation - for frontend usage
 export const baseInsertSpecialRequestSchema = createInsertSchema(specialRequests, {
   startDate: z.coerce.date(),
   endDate: z.coerce.date().optional().nullable(),
+  startTime: z.string().regex(TIME_REGEX, "Time must be in HH:MM format (e.g., 16:30)").optional().nullable(),
+  endTime: z.string().regex(TIME_REGEX, "Time must be in HH:MM format (e.g., 21:30)").optional().nullable(),
   reviewedAt: z.coerce.date().optional().nullable(),
   // Legacy fields for backward compatibility
   affectedDate: z.coerce.date().optional().nullable(),
@@ -625,6 +632,12 @@ export const baseInsertSpecialRequestSchema = createInsertSchema(specialRequests
 
 // Form schema for frontend forms (omits tenantId, no transform)
 export const formSpecialRequestSchema = baseInsertSpecialRequestSchema.omit({ tenantId: true });
+
+// Helper function to convert HH:MM to minutes for comparison
+const timeToMinutes = (time: string): number => {
+  const [hours, minutes] = time.split(':').map(Number);
+  return hours * 60 + minutes;
+};
 
 // Full validated schema with refinements and backward compatibility
 export const insertSpecialRequestSchema = baseInsertSpecialRequestSchema
@@ -637,6 +650,19 @@ export const insertSpecialRequestSchema = baseInsertSpecialRequestSchema
 }, {
   message: "End date must be after or equal to start date",
   path: ["endDate"],
+})
+.refine((data) => {
+  // If both times are provided, ensure endTime >= startTime for same-day requests
+  if (data.startTime && data.endTime) {
+    // Single-day (no endDate) or same-day range
+    if (!data.endDate || (data.startDate && data.endDate.getTime() === data.startDate.getTime())) {
+      return timeToMinutes(data.endTime) >= timeToMinutes(data.startTime);
+    }
+  }
+  return true;
+}, {
+  message: "End time must be after or equal to start time on the same day",
+  path: ["endTime"],
 })
 .refine((data) => {
   // If isRecurring is true, must have a recurring pattern or custom days

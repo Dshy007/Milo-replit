@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -188,16 +189,35 @@ export default function SpecialRequests() {
   const getDateDisplay = (request: SpecialRequest) => {
     const startDate = request.startDate || request.affectedDate;
     const endDate = request.endDate;
+    const startTime = request.startTime;
+    const endTime = request.endTime;
     
     if (!startDate) return "No date";
     
     const start = new Date(startDate);
     const end = endDate ? new Date(endDate) : null;
     
+    // Same day or single day
     if (!end || isSameDay(start, end)) {
+      // If we have time information
+      if (startTime) {
+        if (endTime && endTime !== startTime) {
+          return `${format(start, "PPP")} at ${startTime} - ${endTime}`;
+        }
+        return `${format(start, "PPP")} at ${startTime}`;
+      }
+      // Legacy: date only
       return format(start, "PPP");
     }
     
+    // Multi-day range
+    if (startTime) {
+      const startDisplay = `${format(start, "PPP")} at ${startTime}`;
+      const endDisplay = endTime ? `${format(end, "PPP")} at ${endTime}` : format(end, "PPP");
+      return `${startDisplay} - ${endDisplay}`;
+    }
+    
+    // Legacy: dates only
     return `${format(start, "PPP")} - ${format(end, "PPP")}`;
   };
 
@@ -593,6 +613,51 @@ export default function SpecialRequests() {
                 </div>
                 <FormDescription>
                   Select the date range for this availability change
+                </FormDescription>
+
+                <div className="grid grid-cols-2 gap-4 mt-4">
+                  <FormField
+                    control={form.control}
+                    name="startTime"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Start Time</FormLabel>
+                        <FormControl>
+                          <Input
+                            type="time"
+                            placeholder="00:00"
+                            {...field}
+                            value={field.value || "00:00"}
+                            data-testid="input-start-time"
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name="endTime"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>End Time (Optional)</FormLabel>
+                        <FormControl>
+                          <Input
+                            type="time"
+                            placeholder="23:59"
+                            {...field}
+                            value={field.value || ""}
+                            data-testid="input-end-time"
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+                <FormDescription>
+                  Specify time windows (e.g., "16:30" to "21:30"). Leave end time blank for all-day.
                 </FormDescription>
               </div>
 
