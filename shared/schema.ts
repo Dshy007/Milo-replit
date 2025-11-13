@@ -679,3 +679,37 @@ export const updateAutoBuildRunSchema = insertAutoBuildRunSchema.omit({ tenantId
 export type InsertAutoBuildRun = z.infer<typeof insertAutoBuildRunSchema>;
 export type UpdateAutoBuildRun = z.infer<typeof updateAutoBuildRunSchema>;
 export type AutoBuildRun = typeof autoBuildRuns.$inferSelect;
+
+// Driver Availability Preferences
+// Allows granular control of driver availability by block type, start time, and day of week
+export const driverAvailabilityPreferences = pgTable("driver_availability_preferences", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+  driverId: varchar("driver_id").notNull().references(() => drivers.id),
+  blockType: text("block_type").notNull(), // solo1, solo2, team
+  startTime: text("start_time").notNull(), // e.g., "16:30", "20:30", "11:30"
+  dayOfWeek: text("day_of_week").notNull(), // monday, tuesday, wednesday, thursday, friday, saturday, sunday
+  isAvailable: boolean("is_available").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  // Unique constraint: one preference per driver + block type + start time + day
+  uniquePreference: uniqueIndex("driver_pref_unique_idx").on(
+    table.driverId,
+    table.blockType,
+    table.startTime,
+    table.dayOfWeek
+  ),
+  // Index for quick lookups by driver
+  driverIdx: index("driver_pref_driver_idx").on(table.driverId),
+}));
+
+export const insertDriverAvailabilityPreferenceSchema = createInsertSchema(driverAvailabilityPreferences).omit({ 
+  id: true, 
+  createdAt: true, 
+  updatedAt: true 
+});
+export const updateDriverAvailabilityPreferenceSchema = insertDriverAvailabilityPreferenceSchema.omit({ tenantId: true }).partial();
+export type InsertDriverAvailabilityPreference = z.infer<typeof insertDriverAvailabilityPreferenceSchema>;
+export type UpdateDriverAvailabilityPreference = z.infer<typeof updateDriverAvailabilityPreferenceSchema>;
+export type DriverAvailabilityPreference = typeof driverAvailabilityPreferences.$inferSelect;

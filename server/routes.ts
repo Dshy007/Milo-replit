@@ -12,7 +12,8 @@ import {
   insertBlockSchema, updateBlockSchema,
   insertBlockAssignmentSchema,
   insertProtectedDriverRuleSchema, updateProtectedDriverRuleSchema,
-  insertSpecialRequestSchema, updateSpecialRequestSchema
+  insertSpecialRequestSchema, updateSpecialRequestSchema,
+  insertDriverAvailabilityPreferenceSchema, updateDriverAvailabilityPreferenceSchema
 } from "@shared/schema";
 import session from "express-session";
 import { fromZodError } from "zod-validation-error";
@@ -370,6 +371,76 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ message: "Driver deleted successfully" });
     } catch (error: any) {
       res.status(500).json({ message: "Failed to delete driver", error: error.message });
+    }
+  });
+
+  // Driver Availability Preferences Routes
+  app.get("/api/driver-availability-preferences", requireAuth, async (req, res) => {
+    try {
+      const { driverId } = req.query;
+      const preferences = await dbStorage.getDriverAvailabilityPreferences(
+        req.session.tenantId!,
+        driverId as string | undefined
+      );
+      res.json(preferences);
+    } catch (error: any) {
+      res.status(500).json({ message: "Failed to fetch preferences", error: error.message });
+    }
+  });
+
+  app.post("/api/driver-availability-preferences/bulk", requireAuth, async (req, res) => {
+    try {
+      const { driverId, preferences } = req.body;
+      
+      if (!driverId || !Array.isArray(preferences)) {
+        return res.status(400).json({ message: "driverId and preferences array required" });
+      }
+      
+      // Validate driver ownership
+      const driver = await dbStorage.getDriver(driverId);
+      if (!driver || driver.tenantId !== req.session.tenantId) {
+        return res.status(404).json({ message: "Driver not found" });
+      }
+      
+      // Delete existing preferences for this driver
+      await dbStorage.deleteDriverAvailabilityPreferences(driverId);
+      
+      // Create new preferences
+      const createdPreferences = [];
+      for (const pref of preferences) {
+        const prefData = insertDriverAvailabilityPreferenceSchema.parse({
+          ...pref,
+          driverId,
+          tenantId: req.session.tenantId,
+        });
+        const created = await dbStorage.createDriverAvailabilityPreference(prefData);
+        createdPreferences.push(created);
+      }
+      
+      res.json({ 
+        message: "Preferences updated successfully", 
+        preferences: createdPreferences 
+      });
+    } catch (error: any) {
+      if (error.name === "ZodError") {
+        return res.status(400).json({ message: fromZodError(error).message });
+      }
+      res.status(500).json({ message: "Failed to update preferences", error: error.message });
+    }
+  });
+
+  app.delete("/api/driver-availability-preferences/:driverId", requireAuth, async (req, res) => {
+    try {
+      // Validate driver ownership
+      const driver = await dbStorage.getDriver(req.params.driverId);
+      if (!driver || driver.tenantId !== req.session.tenantId) {
+        return res.status(404).json({ message: "Driver not found" });
+      }
+      
+      await dbStorage.deleteDriverAvailabilityPreferences(req.params.driverId);
+      res.json({ message: "Preferences deleted successfully" });
+    } catch (error: any) {
+      res.status(500).json({ message: "Failed to delete preferences", error: error.message });
     }
   });
 
