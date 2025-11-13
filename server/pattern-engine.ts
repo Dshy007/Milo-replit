@@ -36,17 +36,21 @@ export const CONFIDENCE_THRESHOLDS = {
  * Format: "contractId_soloType_startTimeBucket_dayOfWeek_tractor"
  * 
  * This ensures future blocks can be matched to historical patterns
+ * Normalizes null/undefined tractorId to "UNASSIGNED" for consistent matching
  */
 export function generateBlockSignature(
   contractId: string,
   soloType: string,
   startTimestamp: Date,
-  tractorId: string
+  tractorId: string | null | undefined
 ): string {
   const dayOfWeek = format(startTimestamp, "EEEE"); // Monday, Tuesday, etc.
   const startTimeBucket = format(startTimestamp, "HH:mm"); // e.g., "16:30"
   
-  return `${contractId}_${soloType}_${startTimeBucket}_${dayOfWeek}_${tractorId}`;
+  // Normalize falsy tractorId values to consistent token
+  const normalizedTractor = tractorId || "UNASSIGNED";
+  
+  return `${contractId}_${soloType}_${startTimeBucket}_${dayOfWeek}_${normalizedTractor}`;
 }
 
 /**
