@@ -31,12 +31,12 @@ type FormValues = z.infer<typeof formSpecialRequestSchema>;
 
 type RequestType = "full_day" | "recurring_days" | "time_window";
 
-// Grouped contract times for display
+// Individual contract time option for display
 type ContractTimeOption = {
   startTime: string;
   blockType: "solo1" | "solo2" | "team";
   blockTypeLabel: string;
-  contracts: Contract[];
+  contract: Contract; // Single contract, not array
 };
 
 // Helper function to convert military time to AM/PM
@@ -85,47 +85,48 @@ export default function SpecialRequests() {
     return "solo1";
   };
 
-  // Group contracts by start time and block type for the dropdown
+  // Show individual contracts in order (not grouped)
   const contractTimeOptions: ContractTimeOption[] = (() => {
     if (!contracts) return [];
     
-    const grouped = new Map<string, ContractTimeOption>();
-    
-    contracts.forEach(contract => {
+    // Map each contract to an option
+    const options: ContractTimeOption[] = contracts.map(contract => {
       const blockType = normalizeBlockType(contract.type);
-      const key = `${contract.startTime}-${blockType}`;
-      
-      if (!grouped.has(key)) {
-        const blockTypeLabel = blockType === "solo1" ? "Solo 1" : 
-                               blockType === "solo2" ? "Solo 2" : "Team";
-        grouped.set(key, {
-          startTime: contract.startTime,
-          blockType,
-          blockTypeLabel,
-          contracts: []
-        });
-      }
-      
-      grouped.get(key)!.contracts.push(contract);
+      const blockTypeLabel = blockType === "solo1" ? "Solo 1" : 
+                             blockType === "solo2" ? "Solo 2" : "Team";
+      return {
+        startTime: contract.startTime,
+        blockType,
+        blockTypeLabel,
+        contract
+      };
     });
     
-    // Sort by time, then by block type
-    return Array.from(grouped.values()).sort((a, b) => {
+    // Sort by block type, then by time, then by tractor
+    return options.sort((a, b) => {
+      const typeOrder = { solo1: 1, solo2: 2, team: 3 };
+      if (a.blockType !== b.blockType) {
+        return typeOrder[a.blockType] - typeOrder[b.blockType];
+      }
       if (a.startTime !== b.startTime) {
         return a.startTime.localeCompare(b.startTime);
       }
-      const typeOrder = { solo1: 1, solo2: 2, team: 3 };
-      return typeOrder[a.blockType] - typeOrder[b.blockType];
+      // Sort by tractor ID (extract number from "Tractor_X")
+      const getTractorNum = (opt: ContractTimeOption) => {
+        const match = opt.contract.tractorId?.match(/\d+/);
+        return match ? parseInt(match[0]) : 0;
+      };
+      return getTractorNum(a) - getTractorNum(b);
     });
   })();
 
-  // Get tractors for selected time/block type
-  const availableTractors = (() => {
-    if (!selectedContractTime) return [];
+  // Get selected contract from contractId key
+  const selectedContract = (() => {
+    if (!selectedContractTime) return null;
     const option = contractTimeOptions.find(opt => 
-      `${opt.startTime}-${opt.blockType}` === selectedContractTime
+      opt.contract.id === selectedContractTime
     );
-    return option?.contracts || [];
+    return option?.contract || null;
   })();
 
   const form = useForm<FormValues>({
@@ -155,24 +156,16 @@ export default function SpecialRequests() {
     },
   });
 
-  // Sync selectedContractTime with form values (bidirectional binding)
-  const formStartTime = form.watch("startTime");
-  const formBlockType = form.watch("blockType");
+  // Sync selectedContractTime with contractId from form
+  const formContractId = form.watch("contractId");
   
   useEffect(() => {
-    if (formStartTime && formBlockType) {
-      const key = `${formStartTime}-${formBlockType}`;
-      if (key !== selectedContractTime) {
-        setSelectedContractTime(key);
-      }
-    } else {
-      if (selectedContractTime !== "") {
-        setSelectedContractTime("");
-        // Clear contractId when contract time is cleared
-        form.setValue("contractId", undefined);
-      }
+    if (formContractId && formContractId !== selectedContractTime) {
+      setSelectedContractTime(formContractId);
+    } else if (!formContractId && selectedContractTime !== "") {
+      setSelectedContractTime("");
     }
-  }, [formStartTime, formBlockType, selectedContractTime, form]);
+  }, [formContractId, selectedContractTime]);
 
   const createMutation = useMutation({
     mutationFn: async (data: FormValues) => {
@@ -867,15 +860,14 @@ export default function SpecialRequests() {
                       value={selectedContractTime}
                       onValueChange={(value) => {
                         setSelectedContractTime(value);
-                        // Parse the value to extract blockType and startTime
+                        // Find the selected contract and set form values
                         const option = contractTimeOptions.find(opt => 
-                          `${opt.startTime}-${opt.blockType}` === value
+                          opt.contract.id === value
                         );
                         if (option) {
                           form.setValue("blockType", option.blockType);
                           form.setValue("startTime", option.startTime);
-                          // Reset contractId when changing time/blockType
-                          form.setValue("contractId", undefined);
+                          form.setValue("contractId", option.contract.id);
                         }
                       }}
                       data-testid="select-contract-time"
@@ -888,12 +880,13 @@ export default function SpecialRequests() {
                           const displayTime = useMilitaryTime 
                             ? option.startTime 
                             : convertTo12Hour(option.startTime);
+                          const tractorLabel = option.contract.name || option.contract.tractorId || 'N/A';
                           return (
                             <SelectItem 
-                              key={`${option.startTime}-${option.blockType}`}
-                              value={`${option.startTime}-${option.blockType}`}
+                              key={option.contract.id}
+                              value={option.contract.id}
                             >
-                              {displayTime} • Any tractor ({option.blockTypeLabel})
+                              {displayTime} • {tractorLabel} ({option.blockTypeLabel})
                             </SelectItem>
                           );
                         })}
@@ -912,46 +905,8 @@ export default function SpecialRequests() {
                     </div>
                   </div>
                   <FormDescription>
-                    Select from actual contract start times in your system
+                    Select a specific contract with start time and tractor assignment
                   </FormDescription>
-
-                  {/* Tractor Selector - Only show if a contract time is selected */}
-                  {selectedContractTime && availableTractors.length > 0 && (
-                    <FormField
-                      control={form.control}
-                      name="contractId"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Specific Tractor (Optional)</FormLabel>
-                          <Select 
-                            onValueChange={(value) => {
-                              // Map "any" to undefined for the form
-                              field.onChange(value === "any" ? undefined : value);
-                            }} 
-                            value={field.value || "any"}
-                          >
-                            <FormControl>
-                              <SelectTrigger data-testid="select-tractor">
-                                <SelectValue placeholder="Any tractor" />
-                              </SelectTrigger>
-                            </FormControl>
-                            <SelectContent>
-                              <SelectItem value="any">Any tractor at this time</SelectItem>
-                              {availableTractors.map((contract) => (
-                                <SelectItem key={contract.id} value={contract.id}>
-                                  {contract.name}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          <FormDescription>
-                            Leave as "Any tractor" to apply to all contracts at this time
-                          </FormDescription>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                  )}
 
                   {/* End Time for time_window type */}
                   {requestType === "time_window" && selectedContractTime && (
@@ -1355,11 +1310,11 @@ export default function SpecialRequests() {
                         value={selectedContractTime}
                         onValueChange={(value) => {
                           setSelectedContractTime(value);
-                          const option = contractTimeOptions.find(opt => `${opt.startTime}-${opt.blockType}` === value);
+                          const option = contractTimeOptions.find(opt => opt.contract.id === value);
                           if (option) {
                             form.setValue("startTime", option.startTime);
                             form.setValue("blockType", option.blockType);
-                            form.setValue("contractId", undefined);
+                            form.setValue("contractId", option.contract.id);
                           }
                         }}
                       >
@@ -1371,12 +1326,13 @@ export default function SpecialRequests() {
                             const displayTime = useMilitaryTime 
                               ? option.startTime 
                               : convertTo12Hour(option.startTime);
+                            const tractorLabel = option.contract.name || option.contract.tractorId || 'N/A';
                             return (
                               <SelectItem 
-                                key={`${option.startTime}-${option.blockType}`} 
-                                value={`${option.startTime}-${option.blockType}`}
+                                key={option.contract.id} 
+                                value={option.contract.id}
                               >
-                                {displayTime} • Any tractor ({option.blockTypeLabel})
+                                {displayTime} • {tractorLabel} ({option.blockTypeLabel})
                               </SelectItem>
                             );
                           })}
@@ -1399,16 +1355,18 @@ export default function SpecialRequests() {
                               </SelectTrigger>
                             </FormControl>
                             <SelectContent>
-                              {contractTimeOptions.map((option) => {
-                                const displayTime = useMilitaryTime 
-                                  ? option.startTime 
-                                  : convertTo12Hour(option.startTime);
-                                return (
-                                  <SelectItem key={option.startTime} value={option.startTime}>
-                                    {displayTime}
-                                  </SelectItem>
-                                );
-                              })}
+                              {Array.from(new Set(contractTimeOptions.map(opt => opt.startTime)))
+                                .sort()
+                                .map((startTime) => {
+                                  const displayTime = useMilitaryTime 
+                                    ? startTime 
+                                    : convertTo12Hour(startTime);
+                                  return (
+                                    <SelectItem key={startTime} value={startTime}>
+                                      {displayTime}
+                                    </SelectItem>
+                                  );
+                                })}
                             </SelectContent>
                           </Select>
                           <FormDescription>

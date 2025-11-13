@@ -90,60 +90,60 @@ export default function DriverAvailability() {
     return "solo1";
   };
 
-  // Group contracts by start time and block type (matches Special Requests logic)
+  // Show individual contracts in order (not grouped)
   const contractTimeRows: ContractTimeRow[] = useMemo(() => {
     if (!contracts || contracts.length === 0) return [];
     
-    const grouped = new Map<string, ContractTimeRow>();
-    
-    contracts.forEach(contract => {
+    // Map each contract to a row
+    const rows: ContractTimeRow[] = contracts.map(contract => {
       const blockType = normalizeBlockType(contract.type);
-      const key = `${contract.startTime}-${blockType}`;
+      const blockTypeLabel = blockType === "solo1" ? "Solo1" : 
+                             blockType === "solo2" ? "Solo2" : "Team";
       
-      if (!grouped.has(key)) {
-        const blockTypeLabel = blockType === "solo1" ? "Solo1" : 
-                               blockType === "solo2" ? "Solo2" : "Team";
-        
-        // Extract location and timezone from first contract in group
-        // Normalize domicile code to uppercase for display and timezone lookup
-        const locationCode = (contract.domicile || "N/A").toUpperCase();
-        
-        // TODO: Timezone should be configurable per domicile or added to contract schema
-        // For now, using a simple mapping based on common US domiciles
-        const timezoneMap: Record<string, string> = {
-          "HKC": "GMT-6", // Kansas City - Central
-          "MKC": "GMT-6", // Kansas City - Central
-          "PHX": "GMT-7", // Phoenix - Mountain
-          "LAX": "GMT-8", // Los Angeles - Pacific
-          "DFW": "GMT-6", // Dallas - Central
-          "NYC": "GMT-5", // New York - Eastern
-          "ATL": "GMT-5", // Atlanta - Eastern
-          "ORD": "GMT-6", // Chicago - Central
-          "DEN": "GMT-7", // Denver - Mountain
-          "SEA": "GMT-8", // Seattle - Pacific
-        };
-        const timezone = timezoneMap[locationCode] || "GMT-6"; // Default to Central time
-        
-        grouped.set(key, {
-          startTime: contract.startTime,
-          blockType,
-          blockTypeLabel,
-          locationCode,
-          timezone,
-          contracts: []
-        });
-      }
+      // Normalize domicile code to uppercase for display and timezone lookup
+      const locationCode = (contract.domicile || "N/A").toUpperCase();
       
-      grouped.get(key)!.contracts.push(contract);
+      // TODO: Timezone should be configurable per domicile or added to contract schema
+      // For now, using a simple mapping based on common US domiciles
+      const timezoneMap: Record<string, string> = {
+        "HKC": "GMT-6", // Kansas City - Central
+        "MKC": "GMT-6", // Kansas City - Central
+        "PHX": "GMT-7", // Phoenix - Mountain
+        "LAX": "GMT-8", // Los Angeles - Pacific
+        "DFW": "GMT-6", // Dallas - Central
+        "NYC": "GMT-5", // New York - Eastern
+        "ATL": "GMT-5", // Atlanta - Eastern
+        "ORD": "GMT-6", // Chicago - Central
+        "DEN": "GMT-7", // Denver - Mountain
+        "SEA": "GMT-8", // Seattle - Pacific
+      };
+      const timezone = timezoneMap[locationCode] || "GMT-6"; // Default to Central time
+      
+      return {
+        startTime: contract.startTime,
+        blockType,
+        blockTypeLabel,
+        locationCode,
+        timezone,
+        contracts: [contract] // Single contract per row
+      };
     });
     
-    // Sort by block type (Solo1, Solo2, Team), then by time
-    return Array.from(grouped.values()).sort((a, b) => {
+    // Sort by block type (Solo1, Solo2, Team), then by time, then by tractor
+    return rows.sort((a, b) => {
       const typeOrder = { solo1: 1, solo2: 2, team: 3 };
       if (a.blockType !== b.blockType) {
         return typeOrder[a.blockType] - typeOrder[b.blockType];
       }
-      return a.startTime.localeCompare(b.startTime);
+      if (a.startTime !== b.startTime) {
+        return a.startTime.localeCompare(b.startTime);
+      }
+      // Sort by tractor ID (extract number from "Tractor_X")
+      const getTractorNum = (row: ContractTimeRow) => {
+        const match = row.contracts[0]?.tractorId?.match(/\d+/);
+        return match ? parseInt(match[0]) : 0;
+      };
+      return getTractorNum(a) - getTractorNum(b);
     });
   }, [contracts]);
 
@@ -455,44 +455,48 @@ export default function DriverAvailability() {
                           </CardTitle>
                         </CardHeader>
                         <CardContent className="space-y-2">
-                          {rows.map(row => (
-                            <div 
-                              key={`${row.blockType}-${row.startTime}`} 
-                              className="flex items-center"
-                              data-testid={`row-${row.blockType}-${row.startTime}`}
-                            >
-                              {/* Contract Time Label */}
-                              <div className="w-72 flex-shrink-0 pr-4">
-                                <div className="text-sm font-medium">
-                                  {row.startTime} {row.timezone}
+                          {rows.map(row => {
+                            const contract = row.contracts[0];
+                            const contractKey = `${row.blockType}-${row.startTime}-${contract?.id || 'unknown'}`;
+                            return (
+                              <div 
+                                key={contractKey} 
+                                className="flex items-center"
+                                data-testid={`row-${contractKey}`}
+                              >
+                                {/* Contract Time Label */}
+                                <div className="w-72 flex-shrink-0 pr-4">
+                                  <div className="text-sm font-medium">
+                                    {row.startTime} {row.timezone}
+                                  </div>
+                                  <div className="text-xs text-muted-foreground">
+                                    {row.locationCode} • {contract?.name || contract?.tractorId || 'N/A'}
+                                  </div>
                                 </div>
-                                <div className="text-xs text-muted-foreground">
-                                  {row.locationCode} • {row.blockTypeLabel}
-                                </div>
-                              </div>
 
-                              {/* Day Checkboxes */}
-                              <div className="flex-1 grid grid-cols-7 gap-2">
-                                {weekDays.map(day => {
-                                  const dayOfWeek = getDayOfWeek(day);
-                                  const isChecked = getPreferenceValue(row.blockType, row.startTime, dayOfWeek);
-                                  
-                                  return (
-                                    <div 
-                                      key={day.toISOString()} 
-                                      className="flex items-center justify-center"
-                                    >
-                                      <Checkbox
-                                        checked={isChecked}
-                                        onCheckedChange={() => togglePreference(row.blockType, row.startTime, dayOfWeek)}
-                                        data-testid={`checkbox-${row.blockType}-${row.startTime}-${dayOfWeek}`}
-                                      />
-                                    </div>
-                                  );
-                                })}
+                                {/* Day Checkboxes */}
+                                <div className="flex-1 grid grid-cols-7 gap-2">
+                                  {weekDays.map(day => {
+                                    const dayOfWeek = getDayOfWeek(day);
+                                    const isChecked = getPreferenceValue(row.blockType, row.startTime, dayOfWeek);
+                                    
+                                    return (
+                                      <div 
+                                        key={day.toISOString()} 
+                                        className="flex items-center justify-center"
+                                      >
+                                        <Checkbox
+                                          checked={isChecked}
+                                          onCheckedChange={() => togglePreference(row.blockType, row.startTime, dayOfWeek)}
+                                          data-testid={`checkbox-${row.blockType}-${row.startTime}-${dayOfWeek}`}
+                                        />
+                                      </div>
+                                    );
+                                  })}
+                                </div>
                               </div>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </CardContent>
                       </Card>
                     ))}
