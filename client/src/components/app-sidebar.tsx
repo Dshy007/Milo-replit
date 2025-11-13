@@ -1,4 +1,4 @@
-import { Home, Users, Calendar, Route, Truck, FileText, Upload, Sparkles, Settings, LogOut, MessageSquare, Brain, FileSpreadsheet } from "lucide-react";
+import { Home, Users, Calendar, Route, Truck, FileText, Upload, Sparkles, Settings, LogOut, MessageSquare, Brain, FileSpreadsheet, CalendarCheck } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import {
@@ -76,6 +76,12 @@ const navItems = [
     url: "/auto-build",
     icon: Brain,
     testId: "nav-auto-build",
+  },
+  {
+    title: "Driver Availability",
+    url: "/driver-availability",
+    icon: CalendarCheck,
+    testId: "nav-driver-availability",
   },
 ];
 

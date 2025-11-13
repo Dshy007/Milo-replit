@@ -23,6 +23,7 @@ import Chat from "@/pages/Chat";
 import SpecialRequests from "@/pages/SpecialRequests";
 import AutoBuild from "@/pages/AutoBuild";
 import CSVImport from "@/pages/CSVImport";
+import DriverAvailability from "@/pages/DriverAvailability";
 import NotFound from "@/pages/not-found";
 
 function ProtectedLayout({ children }: { children: ReactNode }) {
@@ -144,6 +145,13 @@ function Router() {
         <ProtectedRoute>
           <ProtectedLayout>
             <CSVImport />
+          </ProtectedLayout>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/driver-availability">
+        <ProtectedRoute>
+          <ProtectedLayout>
+            <DriverAvailability />
           </ProtectedLayout>
         </ProtectedRoute>
       </Route>
