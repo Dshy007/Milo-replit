@@ -44,7 +44,10 @@ export default function DriverAvailability() {
       return await apiRequest("POST", "/api/driver-availability-preferences/bulk", data);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/driver-availability-preferences"] });
+      // Refetch to ensure UI reflects server state
+      queryClient.refetchQueries({ 
+        queryKey: ["/api/driver-availability-preferences", selectedDriverId] 
+      });
       toast({
         title: "Preferences saved",
         description: "Driver availability preferences updated successfully",
@@ -140,18 +143,19 @@ export default function DriverAvailability() {
 
   const togglePreference = (blockType: string, startTime: string, dayOfWeek: string) => {
     const key = `${blockType}:${startTime}:${dayOfWeek}`;
-    const currentValue = localPreferences.get(key) ?? isAvailable(blockType, startTime, dayOfWeek);
-    const newValue = !currentValue;
-    const serverValue = isAvailable(blockType, startTime, dayOfWeek);
+    const currentAvailable = localPreferences.get(key) ?? isAvailable(blockType, startTime, dayOfWeek);
+    // Flip for UI: when checkbox is toggled, we toggle the availability (not unavailability)
+    const newAvailable = !currentAvailable;
+    const serverAvailable = isAvailable(blockType, startTime, dayOfWeek);
     
     const newPreferences = new Map(localPreferences);
     
     // If new value matches server state, remove from local changes
     // Otherwise, track the change
-    if (newValue === serverValue) {
+    if (newAvailable === serverAvailable) {
       newPreferences.delete(key);
     } else {
-      newPreferences.set(key, newValue);
+      newPreferences.set(key, newAvailable);
     }
     
     setLocalPreferences(newPreferences);
@@ -159,7 +163,9 @@ export default function DriverAvailability() {
 
   const getPreferenceValue = (blockType: string, startTime: string, dayOfWeek: string): boolean => {
     const key = `${blockType}:${startTime}:${dayOfWeek}`;
-    return localPreferences.get(key) ?? isAvailable(blockType, startTime, dayOfWeek);
+    const available = localPreferences.get(key) ?? isAvailable(blockType, startTime, dayOfWeek);
+    // Flip for UI: checked = unavailable, unchecked = available
+    return !available;
   };
 
   // Save preferences
@@ -206,7 +212,7 @@ export default function DriverAvailability() {
   // Check if there are unsaved changes
   const hasUnsavedChanges = localPreferences.size > 0;
 
-  // Set all blocks to available
+  // Set all blocks to available (uncheck all - meaning driver can work all shifts)
   const handleSetAllAvailable = () => {
     const newPreferences = new Map<string, boolean>();
     for (const blockType of blockTypes) {
@@ -215,7 +221,7 @@ export default function DriverAvailability() {
         for (const dayOfWeek of daysOfWeek) {
           const key = `${blockType}:${startTime}:${dayOfWeek}`;
           const serverValue = isAvailable(blockType, startTime, dayOfWeek);
-          // Only track if different from server state
+          // Set to available (true in DB) - only track if different from server state
           if (!serverValue) {
             newPreferences.set(key, true);
           }
@@ -225,7 +231,7 @@ export default function DriverAvailability() {
     setLocalPreferences(newPreferences);
   };
 
-  // Set all blocks to unavailable
+  // Set all blocks to unavailable (check all - meaning driver can't work any shifts)
   const handleSetAllUnavailable = () => {
     const newPreferences = new Map<string, boolean>();
     for (const blockType of blockTypes) {
@@ -234,7 +240,7 @@ export default function DriverAvailability() {
         for (const dayOfWeek of daysOfWeek) {
           const key = `${blockType}:${startTime}:${dayOfWeek}`;
           const serverValue = isAvailable(blockType, startTime, dayOfWeek);
-          // Only track if different from server state
+          // Set to unavailable (false in DB) - only track if different from server state
           if (serverValue) {
             newPreferences.set(key, false);
           }
@@ -322,7 +328,7 @@ export default function DriverAvailability() {
                 {selectedDriver && `${selectedDriver.firstName} ${selectedDriver.lastName}`}
               </h2>
               <p className="text-sm text-muted-foreground" data-testid="text-instructions">
-                Check the blocks this driver is available to work. Unchecked blocks will be excluded from auto-build suggestions.
+                Check the blocks when this driver is UNAVAILABLE. Unchecked blocks mean the driver can work that shift.
               </p>
             </div>
 
@@ -353,7 +359,7 @@ export default function DriverAvailability() {
                 data-testid="button-all-available"
               >
                 <CheckCircle2 className="w-4 h-4 mr-2" />
-                All Available
+                Mark All Available
               </Button>
               <Button
                 variant="outline"
@@ -362,7 +368,7 @@ export default function DriverAvailability() {
                 data-testid="button-all-unavailable"
               >
                 <XCircle className="w-4 h-4 mr-2" />
-                All Unavailable
+                Mark All Unavailable
               </Button>
               <Separator orientation="vertical" className="h-8" />
               <Button
@@ -425,7 +431,7 @@ export default function DriverAvailability() {
                               </div>
                               <div className="space-y-2">
                                 {startTimesForType.map((startTime) => {
-                                  const available = getPreferenceValue(blockType, startTime, day);
+                                  const isUnavailable = getPreferenceValue(blockType, startTime, day);
                                   return (
                                     <div
                                       key={startTime}
@@ -433,7 +439,7 @@ export default function DriverAvailability() {
                                     >
                                       <Checkbox
                                         id={`${blockType}-${startTime}-${day}`}
-                                        checked={available}
+                                        checked={isUnavailable}
                                         onCheckedChange={() => togglePreference(blockType, startTime, day)}
                                         data-testid={`checkbox-${blockType}-${startTime}-${day}`}
                                       />
