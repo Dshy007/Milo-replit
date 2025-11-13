@@ -1,7 +1,7 @@
 import { db } from "./db";
 import { 
   users, tenants, drivers, trucks, routes, contracts, schedules, loads,
-  blocks, blockAssignments, protectedDriverRules, specialRequests,
+  blocks, blockAssignments, protectedDriverRules, specialRequests, driverAvailabilityPreferences,
   type User, type InsertUser,
   type Tenant, type InsertTenant,
   type Driver, type InsertDriver,
@@ -13,7 +13,8 @@ import {
   type Block, type InsertBlock,
   type BlockAssignment, type InsertBlockAssignment,
   type ProtectedDriverRule, type InsertProtectedDriverRule,
-  type SpecialRequest, type InsertSpecialRequest
+  type SpecialRequest, type InsertSpecialRequest,
+  type DriverAvailabilityPreference, type InsertDriverAvailabilityPreference
 } from "@shared/schema";
 import { eq, and, gte, lte } from "drizzle-orm";
 import type { IStorage } from "./storage";
@@ -68,6 +69,40 @@ export class DbStorage implements IStorage {
 
   async deleteDriver(id: string): Promise<boolean> {
     const result = await db.delete(drivers).where(eq(drivers.id, id)).returning();
+    return result.length > 0;
+  }
+
+  // Driver Availability Preferences
+  async getDriverAvailabilityPreferences(
+    tenantId: string, 
+    driverId?: string
+  ): Promise<DriverAvailabilityPreference[]> {
+    if (driverId) {
+      return await db.select()
+        .from(driverAvailabilityPreferences)
+        .where(
+          and(
+            eq(driverAvailabilityPreferences.tenantId, tenantId),
+            eq(driverAvailabilityPreferences.driverId, driverId)
+          )
+        );
+    }
+    return await db.select()
+      .from(driverAvailabilityPreferences)
+      .where(eq(driverAvailabilityPreferences.tenantId, tenantId));
+  }
+
+  async createDriverAvailabilityPreference(
+    insertPref: InsertDriverAvailabilityPreference
+  ): Promise<DriverAvailabilityPreference> {
+    const result = await db.insert(driverAvailabilityPreferences).values(insertPref).returning();
+    return result[0];
+  }
+
+  async deleteDriverAvailabilityPreferences(driverId: string): Promise<boolean> {
+    const result = await db.delete(driverAvailabilityPreferences)
+      .where(eq(driverAvailabilityPreferences.driverId, driverId))
+      .returning();
     return result.length > 0;
   }
 

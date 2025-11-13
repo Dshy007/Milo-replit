@@ -10,7 +10,8 @@ import {
   type Block, type InsertBlock,
   type BlockAssignment, type InsertBlockAssignment,
   type ProtectedDriverRule, type InsertProtectedDriverRule,
-  type SpecialRequest, type InsertSpecialRequest
+  type SpecialRequest, type InsertSpecialRequest,
+  type DriverAvailabilityPreference, type InsertDriverAvailabilityPreference
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 
@@ -30,6 +31,11 @@ export interface IStorage {
   createDriver(driver: InsertDriver): Promise<Driver>;
   updateDriver(id: string, driver: Partial<InsertDriver>): Promise<Driver | undefined>;
   deleteDriver(id: string): Promise<boolean>;
+  
+  // Driver Availability Preferences
+  getDriverAvailabilityPreferences(tenantId: string, driverId?: string): Promise<DriverAvailabilityPreference[]>;
+  createDriverAvailabilityPreference(pref: InsertDriverAvailabilityPreference): Promise<DriverAvailabilityPreference>;
+  deleteDriverAvailabilityPreferences(driverId: string): Promise<boolean>;
   
   // Trucks
   getTruck(id: string): Promise<Truck | undefined>;
@@ -117,6 +123,7 @@ export class MemStorage implements IStorage {
   private tenants: Map<string, Tenant>;
   private specialRequests: Map<string, SpecialRequest>;
   private drivers: Map<string, Driver>;
+  private driverAvailabilityPreferences: Map<string, DriverAvailabilityPreference>;
   private trucks: Map<string, Truck>;
   private routes: Map<string, Route>;
   private contracts: Map<string, Contract>;
@@ -130,6 +137,7 @@ export class MemStorage implements IStorage {
     this.users = new Map();
     this.tenants = new Map();
     this.drivers = new Map();
+    this.driverAvailabilityPreferences = new Map();
     this.trucks = new Map();
     this.routes = new Map();
     this.contracts = new Map();
@@ -214,6 +222,44 @@ export class MemStorage implements IStorage {
 
   async deleteDriver(id: string): Promise<boolean> {
     return this.drivers.delete(id);
+  }
+
+  // Driver Availability Preferences
+  async getDriverAvailabilityPreferences(
+    tenantId: string,
+    driverId?: string
+  ): Promise<DriverAvailabilityPreference[]> {
+    return Array.from(this.driverAvailabilityPreferences.values()).filter(
+      (pref) => {
+        if (driverId) {
+          return pref.tenantId === tenantId && pref.driverId === driverId;
+        }
+        return pref.tenantId === tenantId;
+      }
+    );
+  }
+
+  async createDriverAvailabilityPreference(
+    insertPref: InsertDriverAvailabilityPreference
+  ): Promise<DriverAvailabilityPreference> {
+    const id = randomUUID();
+    const pref: DriverAvailabilityPreference = {
+      ...insertPref,
+      id,
+      isAvailable: insertPref.isAvailable ?? true,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    this.driverAvailabilityPreferences.set(id, pref);
+    return pref;
+  }
+
+  async deleteDriverAvailabilityPreferences(driverId: string): Promise<boolean> {
+    const prefsToDelete = Array.from(this.driverAvailabilityPreferences.entries())
+      .filter(([_, pref]) => pref.driverId === driverId);
+    
+    prefsToDelete.forEach(([id]) => this.driverAvailabilityPreferences.delete(id));
+    return prefsToDelete.length > 0;
   }
 
   // Trucks
