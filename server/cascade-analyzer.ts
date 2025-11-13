@@ -122,14 +122,14 @@ export async function analyzeCascadeEffect(
       block: true,
       driver: true,
     },
-  });
+  }) as (BlockAssignment & { block: Block; driver: Driver }) | undefined;
   
-  if (!sourceAssignmentData || !sourceAssignmentData.block || !sourceAssignmentData.driver) {
+  if (!sourceAssignmentData) {
     throw new Error("Assignment not found or missing related data");
   }
   
-  const sourceDriver = sourceAssignmentData.driver;
-  const sourceBlock = sourceAssignmentData.block;
+  const sourceDriver: Driver = sourceAssignmentData.driver;
+  const sourceBlock: Block = sourceAssignmentData.block;
   const centerDate = new Date(sourceBlock.startTimestamp);
   
   // 2. Fetch target driver if needed

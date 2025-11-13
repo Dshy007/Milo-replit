@@ -1,4 +1,4 @@
-import { Home, Users, Calendar, Route, Truck, FileText, Upload, Sparkles, Settings, LogOut, MessageSquare, Brain, FileSpreadsheet, CalendarCheck } from "lucide-react";
+import { Home, Users, Calendar, Route, Truck, FileText, Upload, Sparkles, Settings, LogOut, MessageSquare, Brain, FileSpreadsheet, CalendarCheck, GitBranch } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import {
@@ -82,6 +82,12 @@ const navItems = [
     url: "/driver-availability",
     icon: CalendarCheck,
     testId: "nav-driver-availability",
+  },
+  {
+    title: "Cascade Effect",
+    url: "/cascade-effect",
+    icon: GitBranch,
+    testId: "nav-cascade-effect",
   },
 ];
 

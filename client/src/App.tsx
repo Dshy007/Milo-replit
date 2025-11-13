@@ -24,6 +24,7 @@ import SpecialRequests from "@/pages/SpecialRequests";
 import AutoBuild from "@/pages/AutoBuild";
 import CSVImport from "@/pages/CSVImport";
 import DriverAvailability from "@/pages/DriverAvailability";
+import CascadeEffect from "@/pages/CascadeEffect";
 import NotFound from "@/pages/not-found";
 
 function ProtectedLayout({ children }: { children: ReactNode }) {
@@ -152,6 +153,13 @@ function Router() {
         <ProtectedRoute>
           <ProtectedLayout>
             <DriverAvailability />
+          </ProtectedLayout>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/cascade-effect">
+        <ProtectedRoute>
+          <ProtectedLayout>
+            <CascadeEffect />
           </ProtectedLayout>
         </ProtectedRoute>
       </Route>
