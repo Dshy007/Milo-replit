@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, eachDayOfInterval, addWeeks, addMonths, subWeeks, subMonths, isSameDay, isToday, parseISO, isSameMonth } from "date-fns";
-import { Calendar, ChevronLeft, ChevronRight, Filter, User, AlertTriangle, CheckCircle2, AlertCircle, GripVertical, X } from "lucide-react";
+import { Calendar, ChevronLeft, ChevronRight, Filter, User, AlertTriangle, CheckCircle2, AlertCircle, GripVertical, X, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -10,6 +10,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Block, BlockAssignment, Driver, Contract } from "@shared/schema";
@@ -68,6 +69,7 @@ export default function Schedules() {
   const [dragOverDriver, setDragOverDriver] = useState<string | null>(null);
   const [validationFeedback, setValidationFeedback] = useState<{ status: string; messages: string[] } | null>(null);
   const [reassignDriverId, setReassignDriverId] = useState<string>("");
+  const [driverSearch, setDriverSearch] = useState<string>("");
   const { toast } = useToast();
 
   // Calculate date range based on view mode (needed early for data fetching)
@@ -353,6 +355,33 @@ export default function Schedules() {
     return grouped;
   }, [dateRange.days, filteredBlocks]);
 
+  // Group blocks by Solo Type for driver-row layout
+  const blocksBySoloType = useMemo(() => {
+    const solo1Blocks = filteredBlocks.filter(b => {
+      const normalized = b.soloType.toLowerCase().replace(/\s+/g, "");
+      return normalized === "solo1";
+    });
+    const solo2Blocks = filteredBlocks.filter(b => {
+      const normalized = b.soloType.toLowerCase().replace(/\s+/g, "");
+      return normalized === "solo2";
+    });
+    
+    // Filter by driver search if provided
+    const filterByDriver = (blocks: BlockWithAssignment[]) => {
+      if (!driverSearch.trim()) return blocks;
+      return blocks.filter(block => {
+        if (!block.assignment?.driver) return false;
+        const driverName = `${block.assignment.driver.firstName} ${block.assignment.driver.lastName}`.toLowerCase();
+        return driverName.includes(driverSearch.toLowerCase());
+      });
+    };
+    
+    return {
+      solo1: filterByDriver(solo1Blocks),
+      solo2: filterByDriver(solo2Blocks),
+    };
+  }, [filteredBlocks, driverSearch]);
+
   // Navigation handlers
   const handlePrevious = () => {
     if (viewMode === "week") {
@@ -584,6 +613,18 @@ export default function Schedules() {
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Driver Search */}
+          <div className="relative w-64">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input
+              type="text"
+              placeholder="Search driver..."
+              value={driverSearch}
+              onChange={(e) => setDriverSearch(e.target.value)}
+              className="pl-9"
+              data-testid="input-driver-search"
+            />
+          </div>
           <Button
             variant="outline"
             size="sm"
@@ -757,119 +798,235 @@ export default function Schedules() {
         </div>
       </div>
 
-      {/* Calendar Grid (Week / Month views) */}
+      {/* Driver-Row Schedule Grid (Week / Month views) */}
       {(viewMode === "week" || viewMode === "month") && (
         <div className="flex-1 overflow-auto">
-          <div className={`grid ${viewMode === "week" ? "grid-cols-7" : "grid-cols-7"} gap-2`}>
-          {/* Day Headers - Fixed weekday order */}
-          {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day, idx) => (
-            <div
-              key={idx}
-              className="text-center font-medium text-sm text-muted-foreground p-2 border-b"
-              data-testid={`day-header-${idx}`}
-            >
-              {day}
-            </div>
-          ))}
-
-          {/* Day Cells */}
-          {dateRange.days.map((day) => {
-            const dayKey = format(day, "yyyy-MM-dd");
-            const dayBlocks = blocksByDay[dayKey] || [];
-            const isCurrentDay = isToday(day);
-
-            const isCurrentMonth = viewMode === "month" && isSameMonth(day, currentDate);
-            const opacity = viewMode === "month" && !isCurrentMonth ? "opacity-40" : "";
-
-            return (
-              <Card
-                key={dayKey}
-                className={`min-h-32 ${isCurrentDay ? "ring-2 ring-primary" : ""} ${opacity}`}
-                data-testid={`day-cell-${dayKey}`}
-              >
-                <CardHeader className="p-2">
-                  <div className="flex items-center justify-between">
-                    <span className={`text-sm font-medium ${isCurrentDay ? "text-primary" : "text-foreground"}`}>
-                      {format(day, "d")}
-                    </span>
-                    {dayBlocks.length > 0 && (
-                      <Badge variant="secondary" className="text-xs">
-                        {dayBlocks.length}
-                      </Badge>
-                    )}
-                  </div>
-                </CardHeader>
-                <CardContent className="p-2 space-y-1">
-                  {dayBlocks.slice(0, 5).map((block) => {
-                    // Get driver workload for this day
-                    const driverWorkload = block.assignment?.driver 
-                      ? getDriverWorkload(block.assignment.driverId, day)
-                      : null;
-                    const isCritical = driverWorkload && driverWorkload.daysWorked >= 6;
-                    
-                    // Get compliance status
-                    const compliance = getBlockCompliance(block);
-                    const hasComplianceWarning = compliance && compliance.status !== "compliant";
-                    const isDragging = draggedBlock?.id === block.id;
-                    
-                    // Determine border styling based on criticality and compliance
-                    let borderClass = "border";
-                    if (isCritical) {
-                      borderClass = "border-2 border-red-500";
-                    } else if (hasComplianceWarning && compliance?.status === "violation") {
-                      borderClass = "border-2 border-red-500";
-                    } else if (hasComplianceWarning && compliance?.status === "warning") {
-                      borderClass = "border-2 border-yellow-500";
-                    }
-
-                    return (
+          <div className="space-y-6">
+            {/* Solo 1 Section */}
+            {blocksBySoloType.solo1.length > 0 && (
+              <div>
+                <h2 className="text-lg font-semibold text-foreground mb-3 pb-2 border-b">
+                  Solo 1
+                </h2>
+                <div className="border rounded-lg overflow-hidden">
+                  {/* Header Row */}
+                  <div className="grid grid-cols-8 bg-muted/50">
+                    <div className="p-3 font-medium text-sm border-r">Block ID</div>
+                    {dateRange.days.map((day, idx) => (
                       <div
-                        key={block.id}
-                        draggable={!!block.assignment}
-                        onDragStart={(e) => block.assignment && handleDragStart(e, block)}
-                        onDragEnd={handleDragEnd}
-                        onClick={() => setSelectedBlock(block)}
-                        className={`w-full text-left p-2 rounded text-xs hover-elevate transition-all cursor-pointer ${getSoloTypeColor(block.soloType)} ${borderClass} ${isDragging ? "opacity-50" : ""} ${!block.assignment ? "cursor-default" : "cursor-grab active:cursor-grabbing"}`}
-                        data-testid={`block-${block.id}`}
+                        key={idx}
+                        className="p-3 text-center font-medium text-sm border-r last:border-r-0"
+                        data-testid={`day-header-${idx}`}
                       >
-                        <div className="flex items-center justify-between gap-1 mb-1">
-                          <span className="font-medium truncate">{block.blockId}</span>
-                          {getStatusIcon(block)}
-                        </div>
-                        <div className="text-xs opacity-80">
-                          {format(new Date(block.startTimestamp), "HH:mm")}
-                        </div>
-                        {block.assignment?.driver && (
-                          <div className="flex items-center justify-between gap-1 mt-1 text-xs">
-                            <div className="flex items-center gap-1 opacity-70">
-                              <User className="w-3 h-3" />
-                              <span className="truncate">
-                                {block.assignment.driver.firstName} {block.assignment.driver.lastName}
-                              </span>
-                            </div>
-                            {driverWorkload && (
-                              <Badge 
-                                variant={getWorkloadBadgeVariant(driverWorkload.workloadLevel)} 
-                                className={`text-xs flex-shrink-0 ${getWorkloadBadgeColor(driverWorkload.workloadLevel)}`}
-                                data-testid={`badge-workload-${block.id}`}
-                              >
-                                {driverWorkload.daysWorked}d
-                              </Badge>
-                            )}
+                        <div>{format(day, "EEE")}</div>
+                        <div className="text-xs text-muted-foreground">{format(day, "MMM d")}</div>
+                      </div>
+                    ))}
+                  </div>
+                  
+                  {/* Block Rows */}
+                  {blocksBySoloType.solo1.map((block) => {
+                    const blockDay = new Date(block.startTimestamp);
+                    
+                    return (
+                      <div key={block.id} className="grid grid-cols-8 border-t">
+                        <div className="p-3 border-r bg-background">
+                          <div className="font-medium text-sm">{block.blockId}</div>
+                          <div className="text-xs text-muted-foreground">
+                            {format(blockDay, "HH:mm")}
                           </div>
-                        )}
+                        </div>
+                        
+                        {dateRange.days.map((day) => {
+                          const dayKey = format(day, "yyyy-MM-dd");
+                          const isBlockDay = isSameDay(day, blockDay);
+                          const isAssigned = block.assignment?.driver;
+                          
+                          // Get compliance and workload info
+                          const driverWorkload = isAssigned
+                            ? getDriverWorkload(block.assignment.driverId, day)
+                            : null;
+                          const compliance = getBlockCompliance(block);
+                          const isCritical = driverWorkload && driverWorkload.daysWorked >= 6;
+                          const hasViolation = compliance && compliance.status === "violation";
+                          const hasWarning = compliance && compliance.status === "warning";
+                          
+                          // Determine cell styling
+                          let cellBg = "bg-background";
+                          let borderClass = "border-r last:border-r-0";
+                          
+                          if (isBlockDay) {
+                            if (!isAssigned) {
+                              // Unassigned - grey gradient
+                              cellBg = "bg-gradient-to-br from-muted/30 to-muted/10";
+                            } else {
+                              // Assigned - solo type color
+                              cellBg = "bg-gradient-to-br from-blue-500/20 to-blue-500/5";
+                              if (isCritical || hasViolation) {
+                                borderClass = "border-r border-l-4 border-l-red-500";
+                              } else if (hasWarning) {
+                                borderClass = "border-r border-l-4 border-l-yellow-500";
+                              }
+                            }
+                          }
+                          
+                          return (
+                            <div
+                              key={dayKey}
+                              className={`p-2 min-h-[60px] ${cellBg} ${borderClass} transition-colors`}
+                              data-testid={`block-cell-${block.id}-${dayKey}`}
+                            >
+                              {isBlockDay && (
+                                <div
+                                  onClick={() => setSelectedBlock(block)}
+                                  className="cursor-pointer hover-elevate p-2 rounded h-full"
+                                >
+                                  {isAssigned ? (
+                                    <div className="space-y-1">
+                                      <div className="flex items-center justify-between gap-1">
+                                        <span className="text-xs font-medium truncate">
+                                          {block.assignment.driver.firstName} {block.assignment.driver.lastName}
+                                        </span>
+                                        {getStatusIcon(block)}
+                                      </div>
+                                      {driverWorkload && (
+                                        <Badge
+                                          variant={getWorkloadBadgeVariant(driverWorkload.workloadLevel)}
+                                          className={`text-xs ${getWorkloadBadgeColor(driverWorkload.workloadLevel)}`}
+                                        >
+                                          {driverWorkload.daysWorked}d
+                                        </Badge>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <div className="text-xs text-muted-foreground italic">
+                                      Available
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     );
                   })}
-                  {dayBlocks.length > 5 && (
-                    <div className="text-xs text-center text-muted-foreground">
-                      +{dayBlocks.length - 5} more
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            );
-          })}
+                </div>
+              </div>
+            )}
+            
+            {/* Solo 2 Section */}
+            {blocksBySoloType.solo2.length > 0 && (
+              <div>
+                <h2 className="text-lg font-semibold text-foreground mb-3 pb-2 border-b">
+                  Solo 2
+                </h2>
+                <div className="border rounded-lg overflow-hidden">
+                  {/* Header Row */}
+                  <div className="grid grid-cols-8 bg-muted/50">
+                    <div className="p-3 font-medium text-sm border-r">Block ID</div>
+                    {dateRange.days.map((day, idx) => (
+                      <div
+                        key={idx}
+                        className="p-3 text-center font-medium text-sm border-r last:border-r-0"
+                        data-testid={`day-header-solo2-${idx}`}
+                      >
+                        <div>{format(day, "EEE")}</div>
+                        <div className="text-xs text-muted-foreground">{format(day, "MMM d")}</div>
+                      </div>
+                    ))}
+                  </div>
+                  
+                  {/* Block Rows */}
+                  {blocksBySoloType.solo2.map((block) => {
+                    const blockDay = new Date(block.startTimestamp);
+                    
+                    return (
+                      <div key={block.id} className="grid grid-cols-8 border-t">
+                        <div className="p-3 border-r bg-background">
+                          <div className="font-medium text-sm">{block.blockId}</div>
+                          <div className="text-xs text-muted-foreground">
+                            {format(blockDay, "HH:mm")}
+                          </div>
+                        </div>
+                        
+                        {dateRange.days.map((day) => {
+                          const dayKey = format(day, "yyyy-MM-dd");
+                          const isBlockDay = isSameDay(day, blockDay);
+                          const isAssigned = block.assignment?.driver;
+                          
+                          // Get compliance and workload info
+                          const driverWorkload = isAssigned
+                            ? getDriverWorkload(block.assignment.driverId, day)
+                            : null;
+                          const compliance = getBlockCompliance(block);
+                          const isCritical = driverWorkload && driverWorkload.daysWorked >= 6;
+                          const hasViolation = compliance && compliance.status === "violation";
+                          const hasWarning = compliance && compliance.status === "warning";
+                          
+                          // Determine cell styling
+                          let cellBg = "bg-background";
+                          let borderClass = "border-r last:border-r-0";
+                          
+                          if (isBlockDay) {
+                            if (!isAssigned) {
+                              // Unassigned - grey gradient
+                              cellBg = "bg-gradient-to-br from-muted/30 to-muted/10";
+                            } else {
+                              // Assigned - solo type color (purple for Solo2)
+                              cellBg = "bg-gradient-to-br from-purple-500/20 to-purple-500/5";
+                              if (isCritical || hasViolation) {
+                                borderClass = "border-r border-l-4 border-l-red-500";
+                              } else if (hasWarning) {
+                                borderClass = "border-r border-l-4 border-l-yellow-500";
+                              }
+                            }
+                          }
+                          
+                          return (
+                            <div
+                              key={dayKey}
+                              className={`p-2 min-h-[60px] ${cellBg} ${borderClass} transition-colors`}
+                              data-testid={`block-cell-${block.id}-${dayKey}`}
+                            >
+                              {isBlockDay && (
+                                <div
+                                  onClick={() => setSelectedBlock(block)}
+                                  className="cursor-pointer hover-elevate p-2 rounded h-full"
+                                >
+                                  {isAssigned ? (
+                                    <div className="space-y-1">
+                                      <div className="flex items-center justify-between gap-1">
+                                        <span className="text-xs font-medium truncate">
+                                          {block.assignment.driver.firstName} {block.assignment.driver.lastName}
+                                        </span>
+                                        {getStatusIcon(block)}
+                                      </div>
+                                      {driverWorkload && (
+                                        <Badge
+                                          variant={getWorkloadBadgeVariant(driverWorkload.workloadLevel)}
+                                          className={`text-xs ${getWorkloadBadgeColor(driverWorkload.workloadLevel)}`}
+                                        >
+                                          {driverWorkload.daysWorked}d
+                                        </Badge>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <div className="text-xs text-muted-foreground italic">
+                                      Available
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
