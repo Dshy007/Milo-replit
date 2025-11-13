@@ -521,10 +521,12 @@ export default function Schedules() {
     
     heatmapData.drivers.forEach(driver => {
       const driverMap = new Map<string, { status: string; hoursRemaining: number }>();
-      driver.compliance.forEach(c => {
-        const timestamp = new Date(c.timestamp).toISOString();
-        driverMap.set(timestamp, { status: c.status, hoursRemaining: c.hoursRemaining });
-      });
+      if (driver.compliance) {
+        driver.compliance.forEach(c => {
+          const timestamp = new Date(c.timestamp).toISOString();
+          driverMap.set(timestamp, { status: c.status, hoursRemaining: c.hoursRemaining });
+        });
+      }
       map.set(driver.id, driverMap);
     });
     
