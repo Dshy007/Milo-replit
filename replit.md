@@ -6,6 +6,54 @@ Milo is an AI-powered trucking operations management platform designed to stream
 
 ## Recent Changes
 
+### Unified Excel Import Workflow & Contract-Centric Schedules (November 2025)
+
+Streamlined weekly schedule management by consolidating Excel import on the Start Times page and restructuring the Schedules view to mirror the contract-based layout.
+
+**Navigation Simplification**:
+- Removed redundant "CSV Import" and "Excel Import" sidebar items
+- Kept "Import Data" page as backup option
+- Primary workflow now starts from Start Times (Contracts) page
+
+**Excel Import on Start Times Page**:
+- Added "Import Weekly Assignments" button to Contracts page header
+- Upload modal accepts Excel files (e.g., weekly roster spreadsheets)
+- Backend parses Excel using `server/excel-import.ts`:
+  - Extracts contract info from "Operator ID" column (format: "Solo1 Tractor_8")
+  - Converts Excel date/time values to JavaScript Date objects
+  - Auto-creates contracts based on start time and tractor assignments
+  - Creates blocks with full validation (DOT compliance, overlaps, protected drivers)
+  - Returns detailed import results (created/failed/warnings)
+- Frontend cache invalidation ensures both Start Times and Schedules refresh automatically
+
+**Restructured Schedules Page** (`client/src/pages/Schedules.tsx`):
+- Simplified from 1745 lines to 295 lines
+- Contract-centric grid layout:
+  - **Rows**: Contracts (sorted by type and start time)
+  - **Columns**: Week days (Sun-Sat)
+  - **Cells**: Blocks and driver assignments for each contract/day
+- Week navigation with Previous/Next buttons
+- Fetches data from:
+  - `GET /api/contracts` - All contracts (same as Start Times)
+  - `GET /api/schedules/calendar?startDate=X&endDate=Y` - Blocks with assignments
+- Displays contract details: start time, tractor ID, solo type, domicile
+- Shows block IDs and driver names in day cells
+
+**Core User Workflow**:
+1. Navigate to Start Times page (permanent contract structure)
+2. Click "Import Weekly Assignments" every Friday
+3. Upload weekly roster Excel file
+4. Contracts and blocks auto-created/updated
+5. Navigate to Schedules page to view weekly assignments in grid format
+6. Use week navigation to view past/future weeks
+
+**Technical Implementation**:
+- Excel parsing: XLSX library with robust date/time conversion
+- Contract upsert: Matches by `startTime + tractorId + type`
+- Block creation: Links to contracts, includes full timestamps
+- Cache invalidation: Refreshes `/api/contracts` and `/api/schedules/calendar`
+- End-to-end tested: Upload → Create → Display → Navigate
+
 ### Compliance Heatmap Dashboard (November 2025)
 
 Implemented DOT compliance visualization system with exact sliding-window sweep algorithm for real-time driver workload monitoring.
