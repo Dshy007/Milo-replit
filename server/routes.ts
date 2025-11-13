@@ -2319,6 +2319,7 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
       
       // Store all tool results for validation
       const allToolResults: Array<{ name: string; content: string }> = [];
+      console.log('[AI Chat] Initial response has tool_calls?', !!responseMessage.tool_calls);
       
       while (responseMessage.tool_calls && iteration < MAX_TOOL_ITERATIONS) {
         iteration++;
@@ -2394,36 +2395,65 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
 
       // STEP 2: Validate against tool results (if any tool calls were made)
       let validatedResponse = fullResponse;
+      console.log('[AI Validation] Starting validation. Tool results count:', allToolResults.length);
+      
       if (allToolResults.length > 0) {
         const { validIds, validNames } = collectValidDrivers(allToolResults);
+        console.log('[AI Validation] Valid IDs extracted:', Array.from(validIds));
+        console.log('[AI Validation] Response preview:', fullResponse.substring(0, 300));
         
         // Find all UUIDs mentioned in response
         const uuidRegex = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
         const mentionedIds = fullResponse.match(uuidRegex) || [];
+        console.log('[AI Validation] UUIDs found in response:', mentionedIds);
         
         // Identify fabricated IDs (UUIDs that aren't in our valid set)
         const fabricatedIds = mentionedIds.filter(id => !validIds.has(id));
+        console.log('[AI Validation] Fabricated IDs detected:', fabricatedIds);
         
         if (fabricatedIds.length > 0) {
-          // Log hallucination event
+          // Log hallucination event with full details
           console.log('[AI Hallucination Detected]', {
             fabricatedIds,
             toolCallsCount: allToolResults.length,
             validIdsCount: validIds.size,
-            message: fullResponse.substring(0, 200)
+            validIds: Array.from(validIds),
+            fullResponse: fullResponse,
+            userQuery: message
           });
           
-          // Replace fabricated IDs with placeholder
-          validatedResponse = fullResponse;
-          fabricatedIds.forEach(fabricatedId => {
-            validatedResponse = validatedResponse.replace(
-              new RegExp(fabricatedId, 'gi'),
-              '[unverified driver ID]'
-            );
+          // PRODUCTION SAFETY: Block fabricated response entirely
+          // Provide safe fallback that references only verified data
+          validatedResponse = `I found information in the database, but I'm having trouble formatting it accurately. Here's what I can verify:\n\n`;
+          
+          // Safely present the raw tool data
+          allToolResults.forEach(toolResult => {
+            try {
+              const parsed = JSON.parse(toolResult.content);
+              
+              if (parsed.drivers && Array.isArray(parsed.drivers)) {
+                validatedResponse += `Found ${parsed.drivers.length} driver(s):\n`;
+                parsed.drivers.forEach((driver: any, idx: number) => {
+                  validatedResponse += `${idx + 1}. ${driver.name || 'Unknown'} (ID: ${driver.id})\n`;
+                  if (driver.status) validatedResponse += `   Status: ${driver.status}\n`;
+                  if (driver.domicile) validatedResponse += `   Domicile: ${driver.domicile}\n`;
+                });
+                validatedResponse += '\n';
+              }
+              
+              if (parsed.count !== undefined) {
+                validatedResponse += `Count: ${parsed.count}\n`;
+              }
+              
+              if (parsed.driverType) {
+                validatedResponse += `Driver type: ${parsed.driverType}\n`;
+              }
+            } catch (err) {
+              validatedResponse += `${toolResult.name}: ${toolResult.content}\n\n`;
+            }
           });
           
-          // Append disclaimer
-          validatedResponse += '\n\n⚠️ Note: Some driver references could not be verified against the database. Please verify important information.';
+          validatedResponse += '\n⚠️ I detected potentially inaccurate information in my initial response, so I\'m showing you the raw database results instead. Please verify any critical information.';
         }
       }
 
