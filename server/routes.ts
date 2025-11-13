@@ -23,6 +23,7 @@ import multer from "multer";
 import { validateBlockAssignment, normalizeSoloType } from "./rolling6-calculator";
 import { subDays, parseISO, format, startOfWeek, addWeeks } from "date-fns";
 import { findSwapCandidates, getAllDriverWorkloads } from "./workload-calculator";
+import { analyzeCascadeEffect, type CascadeAnalysisRequest } from "./cascade-analyzer";
 
 // Require SESSION_SECRET
 const SESSION_SECRET = process.env.SESSION_SECRET!;
@@ -1227,6 +1228,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error: any) {
       res.status(500).json({ message: "Failed to fetch calendar data", error: error.message });
+    }
+  });
+
+  // POST /api/schedules/cascade-analysis - Analyze cascade effects of schedule changes
+  app.post("/api/schedules/cascade-analysis", requireAuth, async (req, res) => {
+    try {
+      const request: CascadeAnalysisRequest = req.body;
+      
+      // Validate request
+      if (!request.assignmentId || !request.action) {
+        return res.status(400).json({ message: "Missing assignmentId or action" });
+      }
+      
+      if ((request.action === "swap" || request.action === "reassign") && !request.targetDriverId) {
+        return res.status(400).json({ message: "targetDriverId required for swap/reassign actions" });
+      }
+      
+      const analysis = await analyzeCascadeEffect(req.session.tenantId!, request);
+      res.json(analysis);
+    } catch (error: any) {
+      console.error("Cascade analysis error:", error);
+      res.status(500).json({ message: "Failed to analyze cascade effect", error: error.message });
     }
   });
 
