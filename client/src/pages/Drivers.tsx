@@ -1,7 +1,7 @@
 import { useState, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import type { Driver } from "@shared/schema";
+import type { Driver, SpecialRequest } from "@shared/schema";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -52,7 +52,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { baseInsertDriverSchema } from "@shared/schema";
 import { z } from "zod";
-import { Plus, Search, Edit, Trash2, CheckCircle, Upload, FileSpreadsheet, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
+import { Plus, Search, Edit, Trash2, CheckCircle, Upload, FileSpreadsheet, ArrowUpDown, ArrowUp, ArrowDown, Clock, XCircle, Calendar } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 
@@ -69,6 +69,7 @@ type SortDirection = 'asc' | 'desc' | null;
 
 export default function Drivers() {
   const [searchQuery, setSearchQuery] = useState("");
+  const [showActiveOnly, setShowActiveOnly] = useState(false);
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [editingDriver, setEditingDriver] = useState<Driver | null>(null);
@@ -81,6 +82,22 @@ export default function Drivers() {
   // Fetch drivers
   const { data: drivers = [], isLoading } = useQuery<Driver[]>({
     queryKey: ["/api/drivers"],
+  });
+
+  // Fetch all special requests to determine drivers with active requests
+  const { data: allRequests = [] } = useQuery<SpecialRequest[]>({
+    queryKey: ["/api/special-requests"],
+  });
+
+  // Fetch special requests for the driver being edited
+  const { data: driverRequests = [] } = useQuery<SpecialRequest[]>({
+    queryKey: ["/api/special-requests", editingDriver?.id],
+    enabled: !!editingDriver,
+    queryFn: async () => {
+      const response = await fetch(`/api/special-requests?driverId=${editingDriver?.id}`);
+      if (!response.ok) throw new Error("Failed to fetch driver requests");
+      return response.json();
+    },
   });
 
   // Sort toggle function
@@ -99,17 +116,33 @@ export default function Drivers() {
     }
   };
 
+  // Determine drivers with active/upcoming special requests
+  const driversWithActiveRequests = new Set<string>();
+  const now = new Date();
+  allRequests.forEach(request => {
+    if ((request.status === "approved" || request.status === "pending") && request.driverId) {
+      const requestDate = request.startDate ? new Date(request.startDate) : null;
+      if (requestDate && requestDate >= now) {
+        driversWithActiveRequests.add(request.driverId);
+      }
+    }
+  });
+
   // Filter and sort drivers
   const filteredDrivers = drivers
     .filter((driver) => {
       const searchLower = searchQuery.toLowerCase();
-      return (
+      const matchesSearch = (
         driver.firstName.toLowerCase().includes(searchLower) ||
         driver.lastName.toLowerCase().includes(searchLower) ||
         driver.email?.toLowerCase().includes(searchLower) ||
         driver.phoneNumber?.toLowerCase().includes(searchLower) ||
         driver.domicile?.toLowerCase().includes(searchLower)
       );
+
+      const matchesActiveFilter = !showActiveOnly || driversWithActiveRequests.has(driver.id);
+      
+      return matchesSearch && matchesActiveFilter;
     })
     .sort((a, b) => {
       if (!sortField || !sortDirection) return 0;
@@ -344,15 +377,31 @@ export default function Drivers() {
                 {filteredDrivers.length} driver{filteredDrivers.length !== 1 ? "s" : ""} found
               </CardDescription>
             </div>
-            <div className="flex items-center gap-2 w-full sm:w-auto">
-              <Search className="h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search drivers..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full sm:w-64"
-                data-testid="input-search-drivers"
-              />
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 w-full sm:w-auto">
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                <Search className="h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search drivers..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full sm:w-64"
+                  data-testid="input-search-drivers"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <Checkbox 
+                  id="active-filter"
+                  checked={showActiveOnly}
+                  onCheckedChange={(checked) => setShowActiveOnly(!!checked)}
+                  data-testid="checkbox-active-requests-filter"
+                />
+                <label 
+                  htmlFor="active-filter" 
+                  className="text-sm cursor-pointer whitespace-nowrap"
+                >
+                  Show only drivers with active requests ({driversWithActiveRequests.size})
+                </label>
+              </div>
             </div>
           </div>
         </CardHeader>
@@ -962,6 +1011,78 @@ export default function Drivers() {
                   </FormItem>
                 )}
               />
+
+              {/* Special Requests Section */}
+              {driverRequests.length > 0 && (
+                <div className="space-y-3 pt-4 border-t">
+                  <h3 className="text-sm font-semibold">Special Requests</h3>
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {driverRequests
+                      .filter(req => {
+                        const requestDate = req.startDate ? new Date(req.startDate) : null;
+                        return requestDate && requestDate >= new Date() && (req.status === "approved" || req.status === "pending");
+                      })
+                      .map((request) => (
+                        <div 
+                          key={request.id} 
+                          className="flex items-start justify-between gap-2 p-3 rounded-lg border bg-card"
+                          data-testid={`driver-request-${request.id}`}
+                        >
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {request.status === "approved" && (
+                                <Badge variant="default" className="bg-green-600 hover:bg-green-700">
+                                  <CheckCircle className="w-3 h-3 mr-1" />
+                                  Approved
+                                </Badge>
+                              )}
+                              {request.status === "pending" && (
+                                <Badge variant="secondary">
+                                  <Clock className="w-3 h-3 mr-1" />
+                                  Pending
+                                </Badge>
+                              )}
+                              {request.status === "rejected" && (
+                                <Badge variant="destructive">
+                                  <XCircle className="w-3 h-3 mr-1" />
+                                  Rejected
+                                </Badge>
+                              )}
+                              {request.isRecurring && (
+                                <Badge variant="outline">
+                                  <Calendar className="w-3 h-3 mr-1" />
+                                  Recurring
+                                </Badge>
+                              )}
+                            </div>
+                            <p className="text-sm mt-1">
+                              {request.startDate && format(new Date(request.startDate), "PPP")}
+                              {request.endDate && request.startDate !== request.endDate && 
+                                ` - ${format(new Date(request.endDate), "PPP")}`}
+                            </p>
+                            {request.startTime && (
+                              <p className="text-xs text-muted-foreground">
+                                {request.startTime}
+                                {request.endTime && ` - ${request.endTime}`}
+                              </p>
+                            )}
+                            {request.reason && (
+                              <p className="text-xs text-muted-foreground mt-1">
+                                {request.reason.replace(/_/g, " ")}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    {driverRequests.filter(req => {
+                      const requestDate = req.startDate ? new Date(req.startDate) : null;
+                      return requestDate && requestDate >= new Date() && (req.status === "approved" || req.status === "pending");
+                    }).length === 0 && (
+                      <p className="text-sm text-muted-foreground py-2">No active or upcoming requests</p>
+                    )}
+                  </div>
+                </div>
+              )}
 
               <DialogFooter>
                 <Button

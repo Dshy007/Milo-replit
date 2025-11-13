@@ -414,8 +414,9 @@ export class DbStorage implements IStorage {
     return await db.select().from(specialRequests).where(eq(specialRequests.tenantId, tenantId));
   }
 
-  async getSpecialRequestsByDriver(driverId: string): Promise<SpecialRequest[]> {
-    return await db.select().from(specialRequests).where(eq(specialRequests.driverId, driverId));
+  async getSpecialRequestsByDriver(tenantId: string, driverId: string): Promise<SpecialRequest[]> {
+    return await db.select().from(specialRequests)
+      .where(and(eq(specialRequests.tenantId, tenantId), eq(specialRequests.driverId, driverId)));
   }
 
   async getSpecialRequestsByStatus(tenantId: string, status: string): Promise<SpecialRequest[]> {

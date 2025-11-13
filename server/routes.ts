@@ -59,8 +59,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       rolling: true, // Refresh session on every request
       proxy: true, // Trust the reverse proxy
       cookie: {
-        secure: 'auto', // Auto-detect based on connection
-        httpOnly: false, // Allow JS access for better mobile compatibility
+        secure: process.env.NODE_ENV === 'production', // Secure cookies in production
+        httpOnly: true, // Prevent client-side JS access - critical for security
         sameSite: 'lax',
         maxAge: 1000 * 60 * 60 * 24 * 30, // 30 days
         path: '/',
@@ -78,13 +78,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
     next();
   });
 
-  // Middleware to check authentication
-  const requireAuth = (req: any, res: any, next: any) => {
+  // Middleware to check authentication and validate tenant context
+  const requireAuth = async (req: any, res: any, next: any) => {
     console.log('Auth check - Session ID:', req.sessionID, 'User ID:', req.session?.userId);
     if (!req.session.userId) {
       return res.status(401).json({ message: "Unauthorized" });
     }
-    next();
+    
+    // Re-validate tenantId from database to prevent session tampering
+    try {
+      const user = await dbStorage.getUser(req.session.userId);
+      if (!user) {
+        return res.status(401).json({ message: "User not found" });
+      }
+      
+      // Update session tenantId from authoritative database source
+      if (req.session.tenantId !== user.tenantId) {
+        console.warn(`Session tenantId mismatch detected for user ${user.id}. Correcting from ${req.session.tenantId} to ${user.tenantId}`);
+        req.session.tenantId = user.tenantId;
+      }
+      
+      next();
+    } catch (error) {
+      console.error('Auth validation error:', error);
+      return res.status(500).json({ message: "Authentication validation failed" });
+    }
   };
 
   // Validate entity belongs to tenant
@@ -2683,7 +2701,11 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
   // GET /api/special-requests - List all special requests for tenant
   app.get("/api/special-requests", requireAuth, async (req, res) => {
     try {
-      const tenantId = req.session.tenantId!;
+      const tenantId = req.session.tenantId;
+      if (!tenantId) {
+        return res.status(401).json({ message: "Authentication required - no tenant context" });
+      }
+      
       const { status, driverId, startDate, endDate } = req.query;
 
       let requests;
@@ -2691,7 +2713,12 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
       if (status) {
         requests = await dbStorage.getSpecialRequestsByStatus(tenantId, status as string);
       } else if (driverId) {
-        requests = await dbStorage.getSpecialRequestsByDriver(driverId as string);
+        // Verify driver belongs to tenant before fetching their requests
+        const driver = await dbStorage.getDriver(driverId as string);
+        if (!driver || driver.tenantId !== tenantId) {
+          return res.status(403).json({ message: "Driver not found or access denied" });
+        }
+        requests = await dbStorage.getSpecialRequestsByDriver(tenantId, driverId as string);
       } else if (startDate && endDate) {
         requests = await dbStorage.getSpecialRequestsByDateRange(
           tenantId, 
@@ -2712,6 +2739,11 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
   // GET /api/special-requests/:id - Get specific special request
   app.get("/api/special-requests/:id", requireAuth, async (req, res) => {
     try {
+      const tenantId = req.session.tenantId;
+      if (!tenantId) {
+        return res.status(401).json({ message: "Authentication required - no tenant context" });
+      }
+      
       const { id } = req.params;
       const request = await dbStorage.getSpecialRequest(id);
       
@@ -2720,7 +2752,7 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
       }
       
       // Verify tenant access
-      if (request.tenantId !== req.session.tenantId) {
+      if (request.tenantId !== tenantId) {
         return res.status(403).json({ message: "Access denied" });
       }
       

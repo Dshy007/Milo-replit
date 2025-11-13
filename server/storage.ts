@@ -110,7 +110,7 @@ export interface IStorage {
   // Special Requests
   getSpecialRequest(id: string): Promise<SpecialRequest | undefined>;
   getSpecialRequestsByTenant(tenantId: string): Promise<SpecialRequest[]>;
-  getSpecialRequestsByDriver(driverId: string): Promise<SpecialRequest[]>;
+  getSpecialRequestsByDriver(tenantId: string, driverId: string): Promise<SpecialRequest[]>;
   getSpecialRequestsByStatus(tenantId: string, status: string): Promise<SpecialRequest[]>;
   getSpecialRequestsByDateRange(tenantId: string, startDate: Date, endDate: Date): Promise<SpecialRequest[]>;
   createSpecialRequest(request: InsertSpecialRequest): Promise<SpecialRequest>;
@@ -659,9 +659,9 @@ export class MemStorage implements IStorage {
     );
   }
 
-  async getSpecialRequestsByDriver(driverId: string): Promise<SpecialRequest[]> {
+  async getSpecialRequestsByDriver(tenantId: string, driverId: string): Promise<SpecialRequest[]> {
     return Array.from(this.specialRequests.values()).filter(
-      (req) => req.driverId === driverId
+      (req) => req.tenantId === tenantId && req.driverId === driverId
     );
   }
 

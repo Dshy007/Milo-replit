@@ -20,7 +20,8 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { formSpecialRequestSchema } from "@shared/schema";
 import { format, parseISO, isSameDay } from "date-fns";
-import { CalendarIcon, CheckCircle2, XCircle, Clock, AlertCircle, User, Calendar as CalendarCheck, Repeat, Trash2 } from "lucide-react";
+import { CalendarIcon, CheckCircle2, XCircle, Clock, AlertCircle, User, Calendar as CalendarCheck, Repeat, Trash2, HelpCircle, ChevronRight, ChevronLeft } from "lucide-react";
+import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import type { z } from "zod";
@@ -51,6 +52,8 @@ export default function SpecialRequests() {
   const [selectedRequest, setSelectedRequest] = useState<SpecialRequest | null>(null);
   const [showSwapCandidates, setShowSwapCandidates] = useState(false);
   const [showSubmitForm, setShowSubmitForm] = useState(false);
+  const [showWizard, setShowWizard] = useState(false);
+  const [wizardStep, setWizardStep] = useState(1);
   const [requestType, setRequestType] = useState<RequestType>("full_day");
   const [selectedContractTime, setSelectedContractTime] = useState<string>("");
   const [useMilitaryTime, setUseMilitaryTime] = useState(true);
@@ -179,6 +182,8 @@ export default function SpecialRequests() {
       queryClient.invalidateQueries({ queryKey: ["/api/special-requests"] });
       toast({ title: "Request submitted successfully" });
       setShowSubmitForm(false);
+      setShowWizard(false);
+      setWizardStep(1);
       form.reset();
     },
     onError: (error: any) => {
@@ -378,9 +383,24 @@ export default function SpecialRequests() {
           <h1 className="text-3xl font-bold" data-testid="text-page-title">Special Requests</h1>
           <p className="text-muted-foreground">Manage time-off requests, shift swaps, and schedule changes</p>
         </div>
-        <Button onClick={() => setShowSubmitForm(true)} data-testid="button-new-request">
-          Submit New Request
-        </Button>
+        <div className="flex items-center gap-3">
+          <Button 
+            variant="ghost" 
+            size="sm"
+            onClick={() => {
+              setWizardStep(1);
+              setShowWizard(true);
+            }} 
+            data-testid="button-wizard-mode"
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <HelpCircle className="w-4 h-4 mr-2" />
+            Need help? Try Step-by-Step mode
+          </Button>
+          <Button onClick={() => setShowSubmitForm(true)} data-testid="button-new-request">
+            Submit New Request
+          </Button>
+        </div>
       </div>
 
       <Tabs defaultValue="pending" className="w-full">
@@ -1099,6 +1119,570 @@ export default function SpecialRequests() {
                 <Button type="submit" disabled={createMutation.isPending} data-testid="button-submit">
                   {createMutation.isPending ? "Submitting..." : "Submit"}
                 </Button>
+              </div>
+            </form>
+          </Form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Step-by-Step Wizard Dialog */}
+      <Dialog open={showWizard} onOpenChange={setShowWizard}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" data-testid="dialog-wizard">
+          <DialogHeader>
+            <DialogTitle>Step-by-Step Request Creator</DialogTitle>
+            <DialogDescription>
+              Step {wizardStep} of 5 - We'll guide you through creating your request
+            </DialogDescription>
+          </DialogHeader>
+
+          {/* Progress Indicator */}
+          <div className="space-y-2">
+            <Progress value={(wizardStep / 5) * 100} className="h-2" data-testid="progress-wizard" />
+            <p className="text-sm text-muted-foreground text-center">
+              {wizardStep === 1 && "Choose your request type"}
+              {wizardStep === 2 && "Select the driver"}
+              {wizardStep === 3 && "Pick dates and times"}
+              {wizardStep === 4 && "Add any additional details"}
+              {wizardStep === 5 && "Review and submit"}
+            </p>
+          </div>
+
+          <Separator />
+
+          <Form {...form}>
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+              
+              {/* Step 1: Request Type */}
+              {wizardStep === 1 && (
+                <div className="space-y-4">
+                  <FormLabel>What type of request would you like to make?</FormLabel>
+                  <ToggleGroup
+                    type="single"
+                    value={requestType}
+                    onValueChange={(value) => {
+                      if (value) {
+                        setRequestType(value as RequestType);
+                        setSelectedContractTime("");
+                        
+                        if (value === "full_day") {
+                          form.setValue("startTime", undefined);
+                          form.setValue("endTime", undefined);
+                          form.setValue("blockType", undefined);
+                          form.setValue("contractId", undefined);
+                          form.setValue("isRecurring", false);
+                          form.setValue("recurringDays", []);
+                          form.setValue("recurringPattern", undefined);
+                        } else if (value === "recurring_days") {
+                          form.setValue("isRecurring", true);
+                          form.setValue("endTime", undefined);
+                          form.setValue("recurringPattern", "custom");
+                        } else if (value === "time_window") {
+                          form.setValue("isRecurring", false);
+                          form.setValue("recurringDays", []);
+                          form.setValue("recurringPattern", undefined);
+                        }
+                      }
+                    }}
+                    className="grid grid-cols-1 gap-3"
+                    data-testid="wizard-toggle-request-type"
+                  >
+                    <ToggleGroupItem 
+                      value="full_day" 
+                      className="flex items-start gap-3 h-auto py-4 px-4 justify-start text-left"
+                      data-testid="wizard-toggle-full-day"
+                    >
+                      <CalendarCheck className="w-6 h-6 mt-0.5" />
+                      <div>
+                        <div className="font-semibold">Full Day Off</div>
+                        <div className="text-sm text-muted-foreground">Request a complete day off from work</div>
+                      </div>
+                    </ToggleGroupItem>
+                    <ToggleGroupItem 
+                      value="recurring_days" 
+                      className="flex items-start gap-3 h-auto py-4 px-4 justify-start text-left"
+                      data-testid="wizard-toggle-recurring-days"
+                    >
+                      <Repeat className="w-6 h-6 mt-0.5" />
+                      <div>
+                        <div className="font-semibold">Recurring Days Off</div>
+                        <div className="text-sm text-muted-foreground">Set specific days you're unavailable each week</div>
+                      </div>
+                    </ToggleGroupItem>
+                    <ToggleGroupItem 
+                      value="time_window" 
+                      className="flex items-start gap-3 h-auto py-4 px-4 justify-start text-left"
+                      data-testid="wizard-toggle-time-window"
+                    >
+                      <Clock className="w-6 h-6 mt-0.5" />
+                      <div>
+                        <div className="font-semibold">Specific Time Window</div>
+                        <div className="text-sm text-muted-foreground">Block out specific hours during a day</div>
+                      </div>
+                    </ToggleGroupItem>
+                  </ToggleGroup>
+                </div>
+              )}
+
+              {/* Step 2: Driver Selection */}
+              {wizardStep === 2 && (
+                <FormField
+                  control={form.control}
+                  name="driverId"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Which driver is this request for?</FormLabel>
+                      <Select onValueChange={field.onChange} value={field.value}>
+                        <FormControl>
+                          <SelectTrigger data-testid="wizard-select-driver">
+                            <SelectValue placeholder="Select driver" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          {drivers?.map((driver) => (
+                            <SelectItem key={driver.id} value={driver.id}>
+                              {driver.firstName} {driver.lastName}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FormDescription>
+                        Choose the driver who needs time off or has a scheduling request
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              )}
+
+              {/* Step 3: Date/Time Selection */}
+              {wizardStep === 3 && (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <FormField
+                      control={form.control}
+                      name="startDate"
+                      render={({ field }) => (
+                        <FormItem className="flex flex-col">
+                          <FormLabel>Start Date</FormLabel>
+                          <Popover>
+                            <PopoverTrigger asChild>
+                              <FormControl>
+                                <Button
+                                  variant="outline"
+                                  className={cn(
+                                    "pl-3 text-left font-normal",
+                                    !field.value && "text-muted-foreground"
+                                  )}
+                                  data-testid="wizard-button-start-date"
+                                >
+                                  {field.value ? format(field.value, "PPP") : <span>Pick start date</span>}
+                                  <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
+                                </Button>
+                              </FormControl>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-auto p-0" align="start">
+                              <Calendar
+                                mode="single"
+                                selected={field.value ? new Date(field.value) : undefined}
+                                onSelect={(date) => {
+                                  if (date) {
+                                    const isoString = date.toISOString();
+                                    field.onChange(isoString);
+                                    const endDate = form.getValues("endDate");
+                                    if (!endDate || new Date(isoString) > new Date(endDate)) {
+                                      form.setValue("endDate", isoString as any);
+                                    }
+                                  }
+                                }}
+                                initialFocus
+                              />
+                            </PopoverContent>
+                          </Popover>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="endDate"
+                      render={({ field }) => (
+                        <FormItem className="flex flex-col">
+                          <FormLabel>End Date</FormLabel>
+                          <Popover>
+                            <PopoverTrigger asChild>
+                              <FormControl>
+                                <Button
+                                  variant="outline"
+                                  className={cn(
+                                    "pl-3 text-left font-normal",
+                                    !field.value && "text-muted-foreground"
+                                  )}
+                                  data-testid="wizard-button-end-date"
+                                >
+                                  {field.value ? format(field.value, "PPP") : <span>Pick end date</span>}
+                                  <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
+                                </Button>
+                              </FormControl>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-auto p-0" align="start">
+                              <Calendar
+                                mode="single"
+                                selected={field.value ? new Date(field.value) : undefined}
+                                onSelect={(date) => {
+                                  if (date) {
+                                    field.onChange(date.toISOString());
+                                  }
+                                }}
+                                disabled={(date) => {
+                                  const startDate = form.getValues("startDate");
+                                  return startDate ? date < new Date(startDate) : false;
+                                }}
+                                initialFocus
+                              />
+                            </PopoverContent>
+                          </Popover>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+
+                  {(requestType === "recurring_days" || requestType === "time_window") && (
+                    <>
+                      <FormLabel>Contract Start Time</FormLabel>
+                      <Select
+                        value={selectedContractTime}
+                        onValueChange={(value) => {
+                          setSelectedContractTime(value);
+                          const option = contractTimeOptions.find(opt => `${opt.startTime}-${opt.blockType}` === value);
+                          if (option) {
+                            form.setValue("startTime", option.startTime);
+                            form.setValue("blockType", option.blockType);
+                            form.setValue("contractId", undefined);
+                          }
+                        }}
+                      >
+                        <SelectTrigger data-testid="wizard-select-contract-time">
+                          <SelectValue placeholder="Select contract start time" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {contractTimeOptions.map((option) => {
+                            const displayTime = useMilitaryTime 
+                              ? option.startTime 
+                              : convertTo12Hour(option.startTime);
+                            return (
+                              <SelectItem 
+                                key={`${option.startTime}-${option.blockType}`} 
+                                value={`${option.startTime}-${option.blockType}`}
+                              >
+                                {displayTime} • Any tractor ({option.blockTypeLabel})
+                              </SelectItem>
+                            );
+                          })}
+                        </SelectContent>
+                      </Select>
+                    </>
+                  )}
+
+                  {requestType === "time_window" && form.watch("startTime") && (
+                    <FormField
+                      control={form.control}
+                      name="endTime"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>End Time</FormLabel>
+                          <Select onValueChange={field.onChange} value={field.value || ""}>
+                            <FormControl>
+                              <SelectTrigger data-testid="wizard-select-end-time">
+                                <SelectValue placeholder="Select end time" />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              {contractTimeOptions.map((option) => {
+                                const displayTime = useMilitaryTime 
+                                  ? option.startTime 
+                                  : convertTo12Hour(option.startTime);
+                                return (
+                                  <SelectItem key={option.startTime} value={option.startTime}>
+                                    {displayTime}
+                                  </SelectItem>
+                                );
+                              })}
+                            </SelectContent>
+                          </Select>
+                          <FormDescription>
+                            Select when this time window ends
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  )}
+                </div>
+              )}
+
+              {/* Step 4: Additional Details */}
+              {wizardStep === 4 && (
+                <div className="space-y-4">
+                  {requestType === "recurring_days" && (
+                    <div className="space-y-3">
+                      <FormLabel>Which days of the week?</FormLabel>
+                      <div className="flex flex-wrap gap-2">
+                        {["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map((day) => (
+                          <FormField
+                            key={day}
+                            control={form.control}
+                            name="recurringDays"
+                            render={({ field }) => {
+                              const dayValue = day.toLowerCase();
+                              return (
+                                <FormItem key={day} className="flex items-center space-x-2">
+                                  <FormControl>
+                                    <Checkbox
+                                      checked={field.value?.includes(dayValue)}
+                                      onCheckedChange={(checked) => {
+                                        const currentDays = field.value || [];
+                                        const newDays = checked
+                                          ? [...currentDays, dayValue]
+                                          : currentDays.filter((d) => d !== dayValue);
+                                        field.onChange(newDays);
+                                      }}
+                                      data-testid={`wizard-checkbox-${dayValue}`}
+                                    />
+                                  </FormControl>
+                                  <FormLabel className="cursor-pointer font-normal">{day.slice(0, 3)}</FormLabel>
+                                </FormItem>
+                              );
+                            }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <FormField
+                    control={form.control}
+                    name="reason"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Reason (Optional)</FormLabel>
+                        <Select onValueChange={field.onChange} value={field.value || ""}>
+                          <FormControl>
+                            <SelectTrigger data-testid="wizard-select-reason">
+                              <SelectValue placeholder="Select reason" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            <SelectItem value="vacation">Vacation</SelectItem>
+                            <SelectItem value="sick_leave">Sick Leave</SelectItem>
+                            <SelectItem value="personal">Personal</SelectItem>
+                            <SelectItem value="medical_appointment">Medical Appointment</SelectItem>
+                            <SelectItem value="family_emergency">Family Emergency</SelectItem>
+                            <SelectItem value="other">Other</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name="notes"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Additional Notes (Optional)</FormLabel>
+                        <FormControl>
+                          <Textarea
+                            placeholder="Any additional information..."
+                            value={field.value || ""}
+                            onChange={field.onChange}
+                            data-testid="wizard-textarea-notes"
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+              )}
+
+              {/* Step 5: Review */}
+              {wizardStep === 5 && (
+                <div className="space-y-4">
+                  <div className="rounded-lg border p-4 space-y-3">
+                    <div>
+                      <p className="text-sm text-muted-foreground">Request Type</p>
+                      <p className="font-medium">
+                        {requestType === "full_day" && "Full Day Off"}
+                        {requestType === "recurring_days" && "Recurring Days Off"}
+                        {requestType === "time_window" && "Specific Time Window"}
+                      </p>
+                    </div>
+                    <Separator />
+                    <div>
+                      <p className="text-sm text-muted-foreground">Driver</p>
+                      <p className="font-medium">{getDriverName(form.watch("driverId"))}</p>
+                    </div>
+                    <Separator />
+                    <div>
+                      <p className="text-sm text-muted-foreground">Dates</p>
+                      <p className="font-medium">
+                        {form.watch("startDate") && format(new Date(form.watch("startDate")), "PPP")}
+                        {form.watch("endDate") && form.watch("startDate") !== form.watch("endDate") && 
+                          ` - ${format(new Date(form.watch("endDate")!), "PPP")}`}
+                      </p>
+                    </div>
+                    {form.watch("startTime") && (
+                      <>
+                        <Separator />
+                        <div>
+                          <p className="text-sm text-muted-foreground">Time</p>
+                          <p className="font-medium">
+                            {useMilitaryTime ? form.watch("startTime") : convertTo12Hour(form.watch("startTime") || "")}
+                            {form.watch("endTime") && ` - ${useMilitaryTime ? form.watch("endTime") : convertTo12Hour(form.watch("endTime") || "")}`}
+                          </p>
+                        </div>
+                      </>
+                    )}
+                    {requestType === "recurring_days" && (form.watch("recurringDays")?.length ?? 0) > 0 && (
+                      <>
+                        <Separator />
+                        <div>
+                          <p className="text-sm text-muted-foreground">Recurring Days</p>
+                          <p className="font-medium">
+                            {form.watch("recurringDays")?.map(d => d.charAt(0).toUpperCase() + d.slice(1)).join(", ") ?? ""}
+                          </p>
+                        </div>
+                      </>
+                    )}
+                    {form.watch("reason") && (
+                      <>
+                        <Separator />
+                        <div>
+                          <p className="text-sm text-muted-foreground">Reason</p>
+                          <p className="font-medium">{form.watch("reason")?.replace(/_/g, " ")}</p>
+                        </div>
+                      </>
+                    )}
+                    {form.watch("notes") && (
+                      <>
+                        <Separator />
+                        <div>
+                          <p className="text-sm text-muted-foreground">Notes</p>
+                          <p className="font-medium">{form.watch("notes")}</p>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Navigation Buttons */}
+              <div className="flex justify-between gap-2">
+                <div>
+                  {wizardStep > 1 && (
+                    <Button 
+                      type="button" 
+                      variant="outline" 
+                      onClick={() => setWizardStep(wizardStep - 1)}
+                      data-testid="wizard-button-previous"
+                    >
+                      <ChevronLeft className="w-4 h-4 mr-1" />
+                      Previous
+                    </Button>
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <Button 
+                    type="button" 
+                    variant="outline" 
+                    onClick={() => {
+                      setShowWizard(false);
+                      setWizardStep(1);
+                    }}
+                    data-testid="wizard-button-cancel"
+                  >
+                    Cancel
+                  </Button>
+                  {wizardStep < 5 ? (
+                    <Button
+                      type="button"
+                      onClick={async () => {
+                        // Validate current step before proceeding
+                        let isValid = true;
+                        
+                        if (wizardStep === 1 && !requestType) {
+                          isValid = false;
+                          toast({ title: "Please select a request type", variant: "destructive" });
+                        }
+                        
+                        if (wizardStep === 2) {
+                          isValid = await form.trigger("driverId");
+                        }
+                        
+                        if (wizardStep === 3) {
+                          const fieldsToValidate: ("startDate" | "endDate" | "startTime" | "blockType")[] = ["startDate", "endDate"];
+                          
+                          // For recurring_days and time_window, contract time is required
+                          if (requestType === "recurring_days" || requestType === "time_window") {
+                            const startTime = form.getValues("startTime");
+                            const blockType = form.getValues("blockType");
+                            
+                            if (!startTime || !blockType) {
+                              isValid = false;
+                              toast({ 
+                                title: "Contract time required", 
+                                description: "Please select a contract start time for this request type",
+                                variant: "destructive" 
+                              });
+                            } else {
+                              fieldsToValidate.push("startTime", "blockType");
+                              isValid = await form.trigger(fieldsToValidate);
+                            }
+                          } else {
+                            isValid = await form.trigger(fieldsToValidate);
+                          }
+                          
+                          // Additional validation for time window
+                          if (isValid && requestType === "time_window" && !form.getValues("endTime")) {
+                            isValid = false;
+                            toast({ 
+                              title: "End time required", 
+                              description: "Please select an end time for the time window",
+                              variant: "destructive" 
+                            });
+                          }
+                        }
+                        
+                        if (wizardStep === 4 && requestType === "recurring_days") {
+                          const recurringDays = form.getValues("recurringDays");
+                          if (!recurringDays || recurringDays.length === 0) {
+                            isValid = false;
+                            toast({ title: "Please select at least one day", variant: "destructive" });
+                          }
+                        }
+                        
+                        if (isValid) {
+                          setWizardStep(wizardStep + 1);
+                        }
+                      }}
+                      data-testid="wizard-button-next"
+                    >
+                      Next
+                      <ChevronRight className="w-4 h-4 ml-1" />
+                    </Button>
+                  ) : (
+                    <Button 
+                      type="submit" 
+                      disabled={createMutation.isPending}
+                      data-testid="wizard-button-submit"
+                    >
+                      {createMutation.isPending ? "Submitting..." : "Submit Request"}
+                    </Button>
+                  )}
+                </div>
               </div>
             </form>
           </Form>
