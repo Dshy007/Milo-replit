@@ -18,7 +18,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { formSpecialRequestSchema } from "@shared/schema";
 import { format, parseISO, isSameDay } from "date-fns";
-import { CalendarIcon, CheckCircle2, XCircle, Clock, AlertCircle, User, Calendar as CalendarCheck, Repeat } from "lucide-react";
+import { CalendarIcon, CheckCircle2, XCircle, Clock, AlertCircle, User, Calendar as CalendarCheck, Repeat, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import type { z } from "zod";
@@ -123,6 +123,23 @@ export default function SpecialRequests() {
     },
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      return await apiRequest("DELETE", `/api/special-requests/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/special-requests"] });
+      toast({ title: "Request cancelled successfully" });
+    },
+    onError: (error: any) => {
+      toast({ 
+        title: "Failed to cancel request", 
+        description: error.message,
+        variant: "destructive" 
+      });
+    },
+  });
+
   const onSubmit = (data: FormValues) => {
     createMutation.mutate(data);
   };
@@ -131,7 +148,8 @@ export default function SpecialRequests() {
   const approvedRequests = requests?.filter(r => r.status === "approved") || [];
   const rejectedRequests = requests?.filter(r => r.status === "rejected") || [];
 
-  const getStatusBadge = (status: string) => {
+  const getStatusBadge = (status: string | null) => {
+    if (!status) return <Badge variant="secondary">Unknown</Badge>;
     switch (status) {
       case "pending":
         return <Badge variant="secondary" data-testid={`badge-status-pending`}><Clock className="w-3 h-3 mr-1" />Pending</Badge>;
@@ -183,7 +201,8 @@ export default function SpecialRequests() {
     return `${format(start, "PPP")} - ${format(end, "PPP")}`;
   };
 
-  const getDriverName = (driverId: string) => {
+  const getDriverName = (driverId: string | null) => {
+    if (!driverId) return "Unknown Driver";
     const driver = drivers?.find(d => d.id === driverId);
     return driver ? `${driver.firstName} ${driver.lastName}` : "Unknown Driver";
   };
@@ -309,6 +328,15 @@ export default function SpecialRequests() {
                         Approved on {request.reviewedAt ? format(new Date(request.reviewedAt), "PPP") : "N/A"}
                       </CardDescription>
                     </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => deleteMutation.mutate(request.id)}
+                      data-testid={`button-cancel-${request.id}`}
+                    >
+                      <Trash2 className="w-4 h-4 mr-1" />
+                      Cancel
+                    </Button>
                   </div>
                 </CardHeader>
                 <CardContent>
@@ -359,6 +387,15 @@ export default function SpecialRequests() {
                         Rejected on {request.reviewedAt ? format(new Date(request.reviewedAt), "PPP") : "N/A"}
                       </CardDescription>
                     </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => deleteMutation.mutate(request.id)}
+                      data-testid={`button-delete-${request.id}`}
+                    >
+                      <Trash2 className="w-4 h-4 mr-1" />
+                      Delete
+                    </Button>
                   </div>
                 </CardHeader>
                 <CardContent>

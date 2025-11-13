@@ -2850,6 +2850,30 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
     }
   });
 
+  // DELETE /api/special-requests/:id - Delete/cancel special request
+  app.delete("/api/special-requests/:id", requireAuth, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const tenantId = req.session.tenantId!;
+      
+      const request = await dbStorage.getSpecialRequest(id);
+      if (!request) {
+        return res.status(404).json({ message: "Special request not found" });
+      }
+      
+      if (request.tenantId !== tenantId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      
+      await dbStorage.deleteSpecialRequest(id);
+      
+      res.json({ message: "Special request deleted successfully" });
+    } catch (error: any) {
+      console.error("Delete special request error:", error);
+      res.status(500).json({ message: "Failed to delete special request", error: error.message });
+    }
+  });
+
   // GET /api/swap-candidates/:blockId - Find eligible swap candidates for a block
   app.get("/api/swap-candidates/:blockId", requireAuth, async (req, res) => {
     try {
