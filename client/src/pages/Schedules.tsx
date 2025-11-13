@@ -1,7 +1,7 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, eachDayOfInterval, addWeeks, addMonths, subWeeks, subMonths, isSameDay, isToday, parseISO, isSameMonth } from "date-fns";
-import { Calendar, ChevronLeft, ChevronRight, Filter, User, AlertTriangle, CheckCircle2, AlertCircle, GripVertical, X, Search } from "lucide-react";
+import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, eachDayOfInterval, addWeeks, addMonths, subWeeks, subMonths, isSameDay, isToday, parseISO, isSameMonth, differenceInHours, differenceInMinutes } from "date-fns";
+import { Calendar, ChevronLeft, ChevronRight, Filter, User, AlertTriangle, CheckCircle2, AlertCircle, GripVertical, X, Search, LayoutGrid, List } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -21,6 +21,7 @@ type BlockWithAssignment = Block & {
 };
 
 type ViewMode = "week" | "month" | "tally";
+type DisplayMode = "calendar" | "list";
 type SoloTypeFilter = "all" | "solo1" | "solo2" | "team";
 type StatusFilter = "all" | "valid" | "warning" | "violation" | "unassigned";
 
@@ -57,9 +58,203 @@ function useCalendarData(startDate: Date, endDate: Date, enabled: boolean = true
   });
 }
 
+// Hook for countdown timer that updates every minute
+function useCountdown(targetDate: Date) {
+  const [countdown, setCountdown] = useState("");
+  
+  useEffect(() => {
+    const updateCountdown = () => {
+      const now = new Date();
+      const diffMs = targetDate.getTime() - now.getTime();
+      
+      if (diffMs < 0) {
+        setCountdown("Started");
+        return;
+      }
+      
+      const totalMinutes = Math.floor(diffMs / (1000 * 60));
+      const hours = Math.floor(totalMinutes / 60);
+      const minutes = totalMinutes % 60;
+      
+      if (hours > 24) {
+        const days = Math.floor(hours / 24);
+        const remainingHours = hours % 24;
+        setCountdown(`Starts in ${days}d ${remainingHours}h`);
+      } else if (hours > 0) {
+        setCountdown(`Starts in ${hours}h ${minutes}m`);
+      } else {
+        setCountdown(`Starts in ${minutes}m`);
+      }
+    };
+    
+    updateCountdown();
+    const interval = setInterval(updateCountdown, 60000); // Update every minute
+    
+    return () => clearInterval(interval);
+  }, [targetDate]);
+  
+  return countdown;
+}
+
+// Block List View Component
+function BlockListView({ 
+  blocks, 
+  drivers,
+  onBlockSelect,
+  getBlockCompliance
+}: { 
+  blocks: BlockWithAssignment[],
+  drivers: Driver[],
+  onBlockSelect: (block: BlockWithAssignment) => void,
+  getBlockCompliance: (block: BlockWithAssignment) => { status: string; hoursRemaining: number } | null
+}) {
+  // Sort blocks chronologically
+  const sortedBlocks = useMemo(() => {
+    return [...blocks].sort((a, b) => 
+      new Date(a.startTimestamp).getTime() - new Date(b.startTimestamp).getTime()
+    );
+  }, [blocks]);
+
+  if (sortedBlocks.length === 0) {
+    return (
+      <Card className="flex items-center justify-center py-12">
+        <CardContent>
+          <p className="text-muted-foreground">No blocks found for the selected filters.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {sortedBlocks.map(block => (
+        <BlockListItem 
+          key={block.id} 
+          block={block} 
+          drivers={drivers}
+          onSelect={() => onBlockSelect(block)}
+          compliance={getBlockCompliance(block)}
+        />
+      ))}
+    </div>
+  );
+}
+
+// Individual block list item component
+function BlockListItem({ 
+  block, 
+  drivers,
+  onSelect,
+  compliance
+}: { 
+  block: BlockWithAssignment,
+  drivers: Driver[],
+  onSelect: () => void,
+  compliance: { status: string; hoursRemaining: number } | null
+}) {
+  const countdown = useCountdown(new Date(block.startTimestamp));
+  const startTime = new Date(block.startTimestamp);
+  const endTime = new Date(block.endTimestamp);
+  const durationHours = differenceInHours(endTime, startTime);
+  const durationMinutes = differenceInMinutes(endTime, startTime) % 60;
+  
+  // Determine block type color
+  const getBlockTypeColor = (soloType: string) => {
+    const normalized = soloType.toLowerCase().replace(/\s+/g, "");
+    if (normalized === "solo1") return "bg-blue-500/20 border-blue-500";
+    if (normalized === "solo2") return "bg-purple-500/20 border-purple-500";
+    if (normalized === "team") return "bg-green-500/20 border-green-500";
+    return "bg-gray-500/20 border-gray-500";
+  };
+  
+  // Compliance status icon
+  const ComplianceIcon = () => {
+    if (!compliance) return null;
+    
+    if (compliance.status === "valid") {
+      return <CheckCircle2 className="w-4 h-4 text-green-600" />;
+    } else if (compliance.status === "warning") {
+      return <AlertTriangle className="w-4 h-4 text-yellow-600" />;
+    } else if (compliance.status === "violation") {
+      return <AlertCircle className="w-4 h-4 text-red-600" />;
+    }
+    return null;
+  };
+
+  return (
+    <Card 
+      className="hover-elevate cursor-pointer" 
+      onClick={onSelect}
+      data-testid={`block-list-item-${block.id}`}
+    >
+      <CardContent className="p-4">
+        <div className="flex items-start justify-between gap-4">
+          {/* Left: Block Details */}
+          <div className="flex-1 space-y-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Badge variant="outline" className={`${getBlockTypeColor(block.soloType)} font-medium`}>
+                {block.soloType}
+              </Badge>
+              <Badge variant="outline" className="font-mono text-xs">
+                {block.locationCode}
+              </Badge>
+              {block.assignment?.driver && (
+                <div className="flex items-center gap-1">
+                  <User className="w-3 h-3 text-muted-foreground" />
+                  <span className="text-sm font-medium">
+                    {block.assignment.driver.firstName} {block.assignment.driver.lastName}
+                  </span>
+                  <ComplianceIcon />
+                </div>
+              )}
+              {!block.assignment && (
+                <Badge variant="secondary">Unassigned</Badge>
+              )}
+            </div>
+            
+            <div className="flex items-center gap-4 text-sm text-muted-foreground">
+              <div className="flex items-center gap-1">
+                <Calendar className="w-4 h-4" />
+                <span>{format(startTime, "MMM d, yyyy")}</span>
+              </div>
+              <div>
+                {format(startTime, "h:mm a")} - {format(endTime, "h:mm a")}
+              </div>
+              <div>
+                {durationHours}h {durationMinutes > 0 ? `${durationMinutes}m` : ""}
+              </div>
+            </div>
+            
+            {block.contract && (
+              <p className="text-xs text-muted-foreground">
+                Contract: {block.contract.customerName}
+              </p>
+            )}
+          </div>
+          
+          {/* Right: Countdown */}
+          <div className="text-right">
+            <div className="text-sm font-semibold text-primary">
+              {countdown}
+            </div>
+            <div className="text-xs text-muted-foreground mt-1">
+              Block #{block.id.slice(0, 8)}
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function Schedules() {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [viewMode, setViewMode] = useState<ViewMode>("week");
+  const [displayMode, setDisplayMode] = useState<DisplayMode>(() => {
+    // Load from localStorage
+    const saved = localStorage.getItem("schedules-display-mode");
+    return (saved === "list" || saved === "calendar") ? saved : "calendar";
+  });
   const [selectedBlock, setSelectedBlock] = useState<BlockWithAssignment | null>(null);
   const [soloTypeFilter, setSoloTypeFilter] = useState<SoloTypeFilter>("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -70,6 +265,11 @@ export default function Schedules() {
   const [reassignDriverId, setReassignDriverId] = useState<string>("");
   const [driverSearch, setDriverSearch] = useState<string>("");
   const { toast } = useToast();
+
+  // Save displayMode to localStorage
+  useEffect(() => {
+    localStorage.setItem("schedules-display-mode", displayMode);
+  }, [displayMode]);
 
   // Calculate date range based on view mode (needed early for data fetching)
   const dateRange = useMemo(() => {
@@ -778,6 +978,33 @@ export default function Schedules() {
           </div>
 
           <div className="flex items-center gap-2">
+            {/* Display Mode Toggle (Calendar vs List) - Only show for week/month views */}
+            {(viewMode === "week" || viewMode === "month") && (
+              <div className="flex items-center border rounded-md shadow-md">
+                <Button
+                  variant={displayMode === "calendar" ? "secondary" : "ghost"}
+                  size="sm"
+                  onClick={() => setDisplayMode("calendar")}
+                  className="rounded-none rounded-l-md"
+                  data-testid="button-calendar-display"
+                >
+                  <LayoutGrid className="w-4 h-4 mr-1" />
+                  Grid
+                </Button>
+                <Button
+                  variant={displayMode === "list" ? "secondary" : "ghost"}
+                  size="sm"
+                  onClick={() => setDisplayMode("list")}
+                  className="rounded-none rounded-r-md"
+                  data-testid="button-list-display"
+                >
+                  <List className="w-4 h-4 mr-1" />
+                  List
+                </Button>
+              </div>
+            )}
+            
+            {/* View Mode Toggle (Week/Month/Tally) */}
             <div className="flex items-center border rounded-md shadow-md">
               <Button
                 variant={viewMode === "week" ? "secondary" : "ghost"}
@@ -870,7 +1097,7 @@ export default function Schedules() {
       </div>
 
       {/* Driver-Row Schedule Grid (Week / Month views) */}
-      {(viewMode === "week" || viewMode === "month") && (
+      {(viewMode === "week" || viewMode === "month") && displayMode === "calendar" && (
         <div className="flex-1 overflow-auto">
           <div className="space-y-6">
             {/* Solo 1 Section */}
@@ -1099,6 +1326,18 @@ export default function Schedules() {
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Block List View (Week / Month views) */}
+      {(viewMode === "week" || viewMode === "month") && displayMode === "list" && (
+        <div className="flex-1 overflow-auto">
+          <BlockListView 
+            blocks={filteredBlocks}
+            drivers={drivers}
+            onBlockSelect={setSelectedBlock}
+            getBlockCompliance={getBlockCompliance}
+          />
         </div>
       )}
 
