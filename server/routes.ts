@@ -2222,7 +2222,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       try {
         const parsed = JSON.parse(result.content);
         
-        // Extract from driver lists
+        // Extract from driver lists (most common format)
         if (parsed.drivers && Array.isArray(parsed.drivers)) {
           parsed.drivers.forEach((driver: any) => {
             if (driver.id) validIds.add(driver.id);
@@ -2231,9 +2231,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
         
         // Extract from single driver responses
-        if (parsed.driver && parsed.driver.id) {
-          validIds.add(parsed.driver.id);
+        if (parsed.driver) {
+          if (parsed.driver.id) validIds.add(parsed.driver.id);
           if (parsed.driver.name) validNames.add(parsed.driver.name.toLowerCase());
+        }
+        
+        // Extract from assignments (may include driver info)
+        if (parsed.assignments && Array.isArray(parsed.assignments)) {
+          parsed.assignments.forEach((assignment: any) => {
+            if (assignment.driver && assignment.driver.id) {
+              validIds.add(assignment.driver.id);
+            }
+            if (assignment.driverId) {
+              validIds.add(assignment.driverId);
+            }
+          });
+        }
+        
+        // Extract from workload summaries
+        if (parsed.summary && Array.isArray(parsed.summary)) {
+          parsed.summary.forEach((item: any) => {
+            if (item.driverId) validIds.add(item.driverId);
+            if (item.driver && item.driver.id) validIds.add(item.driver.id);
+          });
+        }
+        
+        // Extract direct ID field (some responses just return an ID)
+        if (parsed.id && typeof parsed.id === 'string') {
+          // Only add if it looks like a UUID
+          if (/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(parsed.id)) {
+            validIds.add(parsed.id);
+          }
         }
       } catch (err) {
         // Ignore parsing errors - tool result may not be JSON
@@ -2344,7 +2372,9 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
             );
             
             // Store for validation
+            console.log(`[AI Chat] Capturing tool result: ${functionName}, length: ${result.length}`);
             allToolResults.push({ name: functionName, content: result });
+            console.log(`[AI Chat] allToolResults now has ${allToolResults.length} items`);
             
             return {
               role: "tool" as const,
@@ -2370,6 +2400,16 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
         
         responseMessage = response.choices[0].message;
         messages.push(responseMessage);
+      }
+
+      // Debug: Log what we captured
+      console.log('[AI Chat] Tool execution loop complete. allToolResults length:', allToolResults.length);
+      if (allToolResults.length > 0) {
+        console.log('[AI Chat] Sample tool result:', {
+          name: allToolResults[0].name,
+          contentLength: allToolResults[0].content.length,
+          contentPreview: allToolResults[0].content.substring(0, 100)
+        });
       }
 
       // PHASE 2: Buffer, validate, then stream final answer
