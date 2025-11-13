@@ -7,6 +7,7 @@ import {
   contracts,
   protectedDriverRules,
   autoBuildRuns,
+  driverAvailabilityPreferences,
   type Block,
   type Driver,
   type InsertAutoBuildRun,
@@ -20,6 +21,7 @@ import {
 } from "./pattern-engine";
 import { getDriverWorkloadForWeek } from "./workload-calculator";
 import { validateBlockAssignment, type AssignmentGuardResult } from "./rolling6-calculator";
+import { getBlockSignature, createBlockSignature } from "@shared/utils";
 
 /**
  * Auto-Build Next Week Engine
@@ -197,6 +199,26 @@ export async function generateAutoBuildPreview(
       )
     );
 
+  // Fetch driver availability preferences for the tenant
+  const allPreferences = await db
+    .select()
+    .from(driverAvailabilityPreferences)
+    .where(eq(driverAvailabilityPreferences.tenantId, tenantId));
+
+  // Build a cache of driver availabilities for efficient lookup
+  // Map<driverId, Set<blockSignature>> where blockSignature is "blockType:startTime:dayOfWeek"
+  const driverAvailabilityCache = new Map<string, Set<string>>();
+  for (const pref of allPreferences) {
+    if (!pref.isAvailable) continue; // Skip unavailable preferences
+    
+    if (!driverAvailabilityCache.has(pref.driverId)) {
+      driverAvailabilityCache.set(pref.driverId, new Set());
+    }
+    
+    const signature = createBlockSignature(pref.blockType, pref.startTime, pref.dayOfWeek);
+    driverAvailabilityCache.get(pref.driverId)!.add(signature);
+  }
+
   // Fetch all block assignments for the week with block data
   const weekAssignments = await db
     .select({
@@ -272,6 +294,12 @@ export async function generateAutoBuildPreview(
       continue;
     }
 
+    // Generate block signature for availability checking
+    const availabilitySignature = getBlockSignature({
+      type: block.soloType,
+      startTimestamp: block.startTimestamp
+    });
+
     // Generate block signature for pattern matching
     const signature = generateBlockSignature(
       block.contractId,
@@ -295,8 +323,24 @@ export async function generateAutoBuildPreview(
       complianceScore: number;
       compositeScore: number;
     }> = [];
+    
+    // Track drivers filtered by availability preferences
+    let availabilityFilteredCount = 0;
 
     for (const driver of allDrivers) {
+      // Check driver availability preferences
+      // If preferences exist for this driver, enforce them
+      const driverPreferences = driverAvailabilityCache.get(driver.id);
+      if (driverPreferences && driverPreferences.size > 0) {
+        // Driver has preferences configured - check if they're available for this block
+        if (!driverPreferences.has(availabilitySignature)) {
+          // Driver is not available for this block type/time/day combination
+          availabilityFilteredCount++;
+          continue;
+        }
+      }
+      // If no preferences exist for this driver, allow all blocks (backward compatible)
+      
       // Find pattern for this driver
       const pattern = patterns.find(p => p.driverId === driver.id);
       const patternScore = pattern ? parseFloat(pattern.confidence as string) : 0;
@@ -345,7 +389,24 @@ export async function generateAutoBuildPreview(
     driverScores.sort((a, b) => b.compositeScore - a.compositeScore);
 
     if (driverScores.length === 0) {
-      // No valid drivers for this block
+      // No valid drivers for this block - build detailed rationale
+      let rationale = "No eligible drivers available";
+      const reasons: string[] = [];
+      
+      if (availabilityFilteredCount > 0) {
+        reasons.push(`${availabilityFilteredCount} filtered by availability preferences`);
+      }
+      
+      const totalDrivers = allDrivers.length;
+      const otherFilteredCount = totalDrivers - availabilityFilteredCount - driverScores.length;
+      if (otherFilteredCount > 0) {
+        reasons.push("others would violate workload or DOT limits");
+      }
+      
+      if (reasons.length > 0) {
+        rationale += ` (${reasons.join(", ")})`;
+      }
+      
       unassignable.push({
         blockId: block.id,
         blockDisplayId: block.blockId,
@@ -356,10 +417,10 @@ export async function generateAutoBuildPreview(
         patternScore: 0,
         workloadScore: 0,
         complianceScore: 0,
-        rationale: "No eligible drivers available (all would violate workload or DOT limits)",
+        rationale,
         isProtectedAssignment: false,
       });
-      warnings.push(`Block ${block.blockId} has no eligible drivers`);
+      warnings.push(`Block ${block.blockId} has no eligible drivers${availabilityFilteredCount > 0 ? ` (${availabilityFilteredCount} filtered by availability preferences)` : ""}`);
       continue;
     }
 
