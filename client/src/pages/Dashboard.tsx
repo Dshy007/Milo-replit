@@ -31,56 +31,62 @@ export default function Dashboard() {
         </div>
 
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4 mb-12">
-          <Card className="hover-elevate transition-all duration-200" data-testid="card-drivers">
-            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Total Drivers</CardTitle>
-              <Users className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold" data-testid="text-driver-count">
-                {isLoading ? "..." : stats?.totalDrivers || 0}
-              </div>
-              <p className="text-xs text-muted-foreground" data-testid="text-driver-status">
-                {isLoading ? "Loading..." : stats?.activeDrivers 
-                  ? `${stats.activeDrivers} active` 
-                  : "No drivers added yet"}
-              </p>
-            </CardContent>
-          </Card>
+          <Link href="/drivers">
+            <Card className="hover-elevate transition-all duration-200 cursor-pointer" data-testid="card-drivers">
+              <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Total Drivers</CardTitle>
+                <Users className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold" data-testid="text-driver-count">
+                  {isLoading ? "..." : stats?.totalDrivers || 0}
+                </div>
+                <p className="text-xs text-muted-foreground" data-testid="text-driver-status">
+                  {isLoading ? "Loading..." : stats?.activeDrivers 
+                    ? `${stats.activeDrivers} active` 
+                    : "No drivers added yet"}
+                </p>
+              </CardContent>
+            </Card>
+          </Link>
 
-          <Card className="hover-elevate transition-all duration-200" data-testid="card-trucks">
-            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Active Trucks</CardTitle>
-              <Truck className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold" data-testid="text-truck-count">
-                {isLoading ? "..." : stats?.activeTrucks || 0}
-              </div>
-              <p className="text-xs text-muted-foreground" data-testid="text-truck-status">
-                {isLoading ? "Loading..." : stats?.activeTrucks 
-                  ? "Fleet operational" 
-                  : "No trucks added yet"}
-              </p>
-            </CardContent>
-          </Card>
+          <Link href="/trucks">
+            <Card className="hover-elevate transition-all duration-200 cursor-pointer" data-testid="card-trucks">
+              <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Active Trucks</CardTitle>
+                <Truck className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold" data-testid="text-truck-count">
+                  {isLoading ? "..." : stats?.activeTrucks || 0}
+                </div>
+                <p className="text-xs text-muted-foreground" data-testid="text-truck-status">
+                  {isLoading ? "Loading..." : stats?.activeTrucks 
+                    ? "Fleet operational" 
+                    : "No trucks added yet"}
+                </p>
+              </CardContent>
+            </Card>
+          </Link>
 
-          <Card className="hover-elevate transition-all duration-200" data-testid="card-schedules">
-            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Assignments</CardTitle>
-              <Calendar className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold" data-testid="text-schedule-count">
-                {isLoading ? "..." : stats?.totalAssignments || 0}
-              </div>
-              <p className="text-xs text-muted-foreground" data-testid="text-schedule-status">
-                {isLoading ? "Loading..." : stats?.unassignedBlocks 
-                  ? `${stats.unassignedBlocks} unassigned blocks` 
-                  : "All blocks assigned"}
-              </p>
-            </CardContent>
-          </Card>
+          <Link href="/schedules">
+            <Card className="hover-elevate transition-all duration-200 cursor-pointer" data-testid="card-schedules">
+              <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Assignments</CardTitle>
+                <Calendar className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold" data-testid="text-schedule-count">
+                  {isLoading ? "..." : stats?.totalAssignments || 0}
+                </div>
+                <p className="text-xs text-muted-foreground" data-testid="text-schedule-status">
+                  {isLoading ? "Loading..." : stats?.unassignedBlocks 
+                    ? `${stats.unassignedBlocks} unassigned blocks` 
+                    : "All blocks assigned"}
+                </p>
+              </CardContent>
+            </Card>
+          </Link>
 
           <Link href="/chat">
             <Card className="hover-elevate transition-all duration-200 cursor-pointer" data-testid="card-ai">
