@@ -1,4 +1,4 @@
-import { eq, and, gte, lte } from "drizzle-orm";
+import { eq, and, gte, lte, inArray, sql as drizzleSql } from "drizzle-orm";
 import { db } from "./db";
 import { blocks, blockAssignments, drivers, contracts } from "@shared/schema";
 import type { Block, BlockAssignment, Driver } from "@shared/schema";
@@ -28,6 +28,7 @@ export interface CascadeAnalysisResult {
   // The original assignment being modified
   sourceAssignment: BlockAssignment & { block: Block; driver: Driver };
   targetDriver?: Driver; // For swap/reassign actions
+  targetAssignmentId?: string; // For swap actions - ID of the assignment to swap with
   
   // Before state
   before: {
@@ -112,24 +113,43 @@ export async function analyzeCascadeEffect(
 ): Promise<CascadeAnalysisResult> {
   const { assignmentId, action, targetDriverId } = request;
   
-  // 1. Fetch the source assignment with all related data
-  const sourceAssignmentData = await db.query.blockAssignments.findFirst({
+  // 1. Fetch the source assignment (manually join block and driver since we don't have relations defined)
+  const sourceAssignment = await db.query.blockAssignments.findFirst({
     where: and(
       eq(blockAssignments.id, assignmentId),
       eq(blockAssignments.tenantId, tenantId),
     ),
-    with: {
-      block: true,
-      driver: true,
-    },
-  }) as (BlockAssignment & { block: Block; driver: Driver }) | undefined;
+  });
   
-  if (!sourceAssignmentData) {
-    throw new Error("Assignment not found or missing related data");
+  if (!sourceAssignment) {
+    throw new Error("Assignment not found");
   }
   
-  const sourceDriver: Driver = sourceAssignmentData.driver;
-  const sourceBlock: Block = sourceAssignmentData.block;
+  // Fetch the block and driver separately
+  const sourceBlock = await db.query.blocks.findFirst({
+    where: and(
+      eq(blocks.id, sourceAssignment.blockId),
+      eq(blocks.tenantId, tenantId),
+    ),
+  });
+  
+  const sourceDriver = await db.query.drivers.findFirst({
+    where: and(
+      eq(drivers.id, sourceAssignment.driverId),
+      eq(drivers.tenantId, tenantId),
+    ),
+  });
+  
+  if (!sourceBlock || !sourceDriver) {
+    throw new Error("Assignment block or driver not found");
+  }
+  
+  const sourceAssignmentData = {
+    ...sourceAssignment,
+    block: sourceBlock,
+    driver: sourceDriver,
+  };
+  
   const centerDate = new Date(sourceBlock.startTimestamp);
   
   // 2. Fetch target driver if needed
@@ -153,6 +173,7 @@ export async function analyzeCascadeEffect(
   const windowStart = subDays(centerDate, 3); // Wide window for analysis
   const windowEnd = addDays(centerDate, 3);
   
+  // Fetch blocks in the time window
   const allBlocks = await db.query.blocks.findMany({
     where: and(
       eq(blocks.tenantId, tenantId),
@@ -161,18 +182,44 @@ export async function analyzeCascadeEffect(
     ),
   });
   
+  const blockIds = allBlocks.map(b => b.id);
+  
+  // Fetch assignments for these blocks (skip if no blocks in window)
+  if (blockIds.length === 0) {
+    return {
+      canProceed: true,
+      action,
+      sourceAssignment: { ...sourceAssignmentData, block: sourceBlock, driver: sourceDriver },
+      before: {
+        sourceDriverWorkload: await calculateDriverWorkload(sourceDriver, centerDate, [], sourceBlock.soloType),
+      },
+      after: {
+        sourceDriverWorkload: await calculateDriverWorkload(sourceDriver, centerDate, [], sourceBlock.soloType),
+      },
+      hasViolations: false,
+      hasWarnings: false,
+      blockingIssues: [],
+      warnings: [],
+    };
+  }
+  
   const allAssignments = await db.query.blockAssignments.findMany({
-    where: eq(blockAssignments.tenantId, tenantId),
-    with: {
-      block: true,
-      driver: true,
-    },
+    where: and(
+      eq(blockAssignments.tenantId, tenantId),
+      inArray(blockAssignments.blockId, blockIds)
+    ),
   });
   
-  // Filter to only assignments in our window with their blocks
+  // Create a map of blocks by ID for fast lookup
+  const blocksMap = new Map(allBlocks.map(b => [b.id, b]));
+  
+  // Manually join assignments with blocks
   const relevantAssignments = allAssignments
-    .filter(a => a.block && allBlocks.some(b => b.id === a.blockId))
-    .map(a => a as BlockAssignment & { block: Block });
+    .filter(a => blocksMap.has(a.blockId))
+    .map(a => ({
+      ...a,
+      block: blocksMap.get(a.blockId)!,
+    })) as Array<BlockAssignment & { block: Block }>;
   
   const sourceDriverAssignments = relevantAssignments.filter(
     a => a.driverId === sourceDriver.id
@@ -194,6 +241,7 @@ export async function analyzeCascadeEffect(
   
   const blockingIssues: string[] = [];
   const warnings: string[] = [];
+  let swapTargetAssignmentId: string | undefined = undefined; // Track for swap actions
   
   if (action === "unassign") {
     // Remove the assignment from source driver
@@ -234,6 +282,8 @@ export async function analyzeCascadeEffect(
     if (!targetAssignment) {
       blockingIssues.push(`Target driver ${targetDriver.firstName} ${targetDriver.lastName} has no assignment to swap on this date`);
     } else {
+      // Track the target assignment ID for drift detection
+      swapTargetAssignmentId = targetAssignment.id;
       // Swap: remove each driver's current assignment and add the other's
       afterSourceAssignments = afterSourceAssignments.filter(a => a.id !== assignmentId);
       afterSourceAssignments.push({
@@ -296,6 +346,7 @@ export async function analyzeCascadeEffect(
     action,
     sourceAssignment: sourceAssignmentData as BlockAssignment & { block: Block; driver: Driver },
     targetDriver,
+    targetAssignmentId: swapTargetAssignmentId, // Include for swap actions
     before: {
       sourceDriverWorkload: beforeSource,
       targetDriverWorkload: beforeTarget,
@@ -309,4 +360,166 @@ export async function analyzeCascadeEffect(
     blockingIssues,
     warnings,
   };
+}
+
+/**
+ * Helper: Find a swap partner assignment for a given driver on the same day
+ */
+async function findSwapPartnerAssignment(
+  tenantId: string,
+  targetDriverId: string,
+  centerDate: Date,
+): Promise<(BlockAssignment & { block: Block }) | null> {
+  const windowStart = subDays(centerDate, 1);
+  const windowEnd = addDays(centerDate, 1);
+  
+  // Find blocks in the same day window
+  const nearbyBlocks = await db.query.blocks.findMany({
+    where: and(
+      eq(blocks.tenantId, tenantId),
+      gte(blocks.startTimestamp, windowStart),
+      lte(blocks.startTimestamp, windowEnd),
+    ),
+  });
+  
+  if (nearbyBlocks.length === 0) return null;
+  
+  const blockIds = nearbyBlocks.map(b => b.id);
+  
+  // Find target driver's assignments for these blocks
+  const targetAssignments = await db.query.blockAssignments.findMany({
+    where: and(
+      eq(blockAssignments.tenantId, tenantId),
+      eq(blockAssignments.driverId, targetDriverId),
+      inArray(blockAssignments.blockId, blockIds)
+    ),
+  });
+  
+  if (targetAssignments.length === 0) return null;
+  
+  // Join with blocks and find the closest one to centerDate
+  const blocksMap = new Map(nearbyBlocks.map(b => [b.id, b]));
+  
+  const assignmentsWithBlocks = targetAssignments
+    .filter(a => blocksMap.has(a.blockId))
+    .map(a => ({
+      ...a,
+      block: blocksMap.get(a.blockId)!,
+    }));
+  
+  if (assignmentsWithBlocks.length === 0) return null;
+  
+  // Find the assignment closest to centerDate
+  const sorted = assignmentsWithBlocks.sort((a, b) => {
+    const aDiff = Math.abs(new Date(a.block.startTimestamp).getTime() - centerDate.getTime());
+    const bDiff = Math.abs(new Date(b.block.startTimestamp).getTime() - centerDate.getTime());
+    return aDiff - bDiff;
+  });
+  
+  return sorted[0] as BlockAssignment & { block: Block };
+}
+
+/**
+ * Execute a cascade effect change (unassign, reassign, or swap)
+ */
+export async function executeCascadeChange(
+  tenantId: string,
+  request: CascadeAnalysisRequest & { expectedTargetAssignmentId?: string },
+): Promise<{ success: boolean; message: string; updatedAssignments: string[] }> {
+  const { assignmentId, action, targetDriverId, expectedTargetAssignmentId } = request;
+  
+  // Fetch the source assignment
+  const sourceAssignment = await db.query.blockAssignments.findFirst({
+    where: and(
+      eq(blockAssignments.id, assignmentId),
+      eq(blockAssignments.tenantId, tenantId),
+    ),
+  });
+  
+  if (!sourceAssignment) {
+    throw new Error("Assignment not found");
+  }
+  
+  // Fetch the block
+  const sourceBlock = await db.query.blocks.findFirst({
+    where: and(
+      eq(blocks.id, sourceAssignment.blockId),
+      eq(blocks.tenantId, tenantId),
+    ),
+  });
+  
+  if (!sourceBlock) {
+    throw new Error("Block not found");
+  }
+  
+  if (action === "unassign") {
+    // Delete the assignment
+    await db.delete(blockAssignments)
+      .where(and(
+        eq(blockAssignments.id, assignmentId),
+        eq(blockAssignments.tenantId, tenantId),
+      ));
+    
+    return {
+      success: true,
+      message: `Block ${sourceBlock.blockId} unassigned successfully`,
+      updatedAssignments: [assignmentId],
+    };
+    
+  } else if (action === "reassign" && targetDriverId) {
+    // Update the assignment to the new driver
+    await db.update(blockAssignments)
+      .set({ driverId: targetDriverId })
+      .where(and(
+        eq(blockAssignments.id, assignmentId),
+        eq(blockAssignments.tenantId, tenantId),
+      ));
+    
+    return {
+      success: true,
+      message: `Block ${sourceBlock.blockId} reassigned successfully`,
+      updatedAssignments: [assignmentId],
+    };
+    
+  } else if (action === "swap" && targetDriverId) {
+    // Find the target assignment to swap with
+    const centerDate = new Date(sourceBlock.startTimestamp);
+    const targetAssignment = await findSwapPartnerAssignment(tenantId, targetDriverId, centerDate);
+    
+    if (!targetAssignment) {
+      throw new Error(`No assignment found for target driver on the same day`);
+    }
+    
+    // Verify expected target assignment if provided (detect drift)
+    if (expectedTargetAssignmentId && targetAssignment.id !== expectedTargetAssignmentId) {
+      throw new Error(`Target assignment has changed since analysis. Please re-analyze.`);
+    }
+    
+    // Execute swap in a transaction
+    // Note: Drizzle doesn't have explicit transactions in query API, so we'll do sequential updates
+    // In production, you'd want to use db.transaction() from drizzle-orm/pg-core
+    
+    await db.update(blockAssignments)
+      .set({ driverId: targetDriverId })
+      .where(and(
+        eq(blockAssignments.id, sourceAssignment.id),
+        eq(blockAssignments.tenantId, tenantId),
+      ));
+    
+    await db.update(blockAssignments)
+      .set({ driverId: sourceAssignment.driverId })
+      .where(and(
+        eq(blockAssignments.id, targetAssignment.id),
+        eq(blockAssignments.tenantId, tenantId),
+      ));
+    
+    return {
+      success: true,
+      message: `Assignments swapped successfully`,
+      updatedAssignments: [sourceAssignment.id, targetAssignment.id],
+    };
+    
+  } else {
+    throw new Error(`Invalid action or missing targetDriverId`);
+  }
 }

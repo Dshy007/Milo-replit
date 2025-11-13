@@ -107,17 +107,9 @@ export default function CascadeEffect() {
 
   // Execute the schedule change
   const executeMutation = useMutation({
-    mutationFn: async (request: { assignmentId: string; action: CascadeAction; targetDriverId?: string }) => {
-      // This would call an endpoint to actually make the change
-      // For now, we'll implement the logic based on action type
-      if (request.action === "unassign") {
-        return await apiRequest("DELETE", `/api/block-assignments/${request.assignmentId}`);
-      } else if (request.action === "reassign" && request.targetDriverId) {
-        return await apiRequest("PATCH", `/api/block-assignments/${request.assignmentId}`, {
-          driverId: request.targetDriverId,
-        });
-      }
-      throw new Error("Invalid action");
+    mutationFn: async (request: { assignmentId: string; action: CascadeAction; targetDriverId?: string; expectedTargetAssignmentId?: string }) => {
+      // Use the dedicated cascade-execute endpoint for all actions (unassign, reassign, swap)
+      return await apiRequest("POST", "/api/schedules/cascade-execute", request);
     },
     onSuccess: () => {
       queryClient.refetchQueries({ queryKey: ["/api/schedules/calendar"] });
@@ -169,6 +161,11 @@ export default function CascadeEffect() {
 
     if ((actionType === "swap" || actionType === "reassign") && targetDriverId) {
       request.targetDriverId = targetDriverId;
+    }
+
+    // Include expected target assignment ID for swap drift detection
+    if (actionType === "swap" && analysisResult.targetAssignmentId) {
+      request.expectedTargetAssignmentId = analysisResult.targetAssignmentId;
     }
 
     executeMutation.mutate(request);
@@ -447,42 +444,44 @@ export default function CascadeEffect() {
                     )}
 
                     {/* Workload Comparison */}
-                    <div className="grid grid-cols-2 gap-4">
-                      {/* Source Driver */}
-                      <Card>
-                        <CardHeader>
-                          <CardTitle className="text-sm">
-                            {analysisResult.before.sourceDriverWorkload.driver.firstName}{" "}
-                            {analysisResult.before.sourceDriverWorkload.driver.lastName}
-                          </CardTitle>
-                          <CardDescription className="text-xs">Source Driver</CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-3">
-                          <WorkloadComparison
-                            before={analysisResult.before.sourceDriverWorkload}
-                            after={analysisResult.after.sourceDriverWorkload}
-                          />
-                        </CardContent>
-                      </Card>
-
-                      {/* Target Driver */}
-                      {analysisResult.targetDriver && analysisResult.before.targetDriverWorkload && analysisResult.after.targetDriverWorkload && (
+                    {analysisResult.before?.sourceDriverWorkload && analysisResult.after?.sourceDriverWorkload && (
+                      <div className="grid grid-cols-2 gap-4">
+                        {/* Source Driver */}
                         <Card>
                           <CardHeader>
                             <CardTitle className="text-sm">
-                              {analysisResult.targetDriver.firstName} {analysisResult.targetDriver.lastName}
+                              {analysisResult.before.sourceDriverWorkload.driver?.firstName}{" "}
+                              {analysisResult.before.sourceDriverWorkload.driver?.lastName}
                             </CardTitle>
-                            <CardDescription className="text-xs">Target Driver</CardDescription>
+                            <CardDescription className="text-xs">Source Driver</CardDescription>
                           </CardHeader>
                           <CardContent className="space-y-3">
                             <WorkloadComparison
-                              before={analysisResult.before.targetDriverWorkload}
-                              after={analysisResult.after.targetDriverWorkload}
+                              before={analysisResult.before.sourceDriverWorkload}
+                              after={analysisResult.after.sourceDriverWorkload}
                             />
                           </CardContent>
                         </Card>
-                      )}
-                    </div>
+
+                        {/* Target Driver */}
+                        {analysisResult.targetDriver && analysisResult.before.targetDriverWorkload && analysisResult.after.targetDriverWorkload && (
+                          <Card>
+                            <CardHeader>
+                              <CardTitle className="text-sm">
+                                {analysisResult.targetDriver.firstName} {analysisResult.targetDriver.lastName}
+                              </CardTitle>
+                              <CardDescription className="text-xs">Target Driver</CardDescription>
+                            </CardHeader>
+                            <CardContent className="space-y-3">
+                              <WorkloadComparison
+                                before={analysisResult.before.targetDriverWorkload}
+                                after={analysisResult.after.targetDriverWorkload}
+                              />
+                            </CardContent>
+                          </Card>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

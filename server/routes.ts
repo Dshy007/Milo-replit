@@ -23,7 +23,7 @@ import multer from "multer";
 import { validateBlockAssignment, normalizeSoloType } from "./rolling6-calculator";
 import { subDays, parseISO, format, startOfWeek, addWeeks } from "date-fns";
 import { findSwapCandidates, getAllDriverWorkloads } from "./workload-calculator";
-import { analyzeCascadeEffect, type CascadeAnalysisRequest } from "./cascade-analyzer";
+import { analyzeCascadeEffect, executeCascadeChange, type CascadeAnalysisRequest } from "./cascade-analyzer";
 
 // Require SESSION_SECRET
 const SESSION_SECRET = process.env.SESSION_SECRET!;
@@ -1250,6 +1250,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error("Cascade analysis error:", error);
       res.status(500).json({ message: "Failed to analyze cascade effect", error: error.message });
+    }
+  });
+
+  // POST /api/schedules/cascade-execute - Execute a cascade effect change
+  app.post("/api/schedules/cascade-execute", requireAuth, async (req, res) => {
+    try {
+      const request: CascadeAnalysisRequest & { expectedTargetAssignmentId?: string } = req.body;
+      
+      // Validate request
+      if (!request.assignmentId || !request.action) {
+        return res.status(400).json({ message: "Missing assignmentId or action" });
+      }
+      
+      if ((request.action === "swap" || request.action === "reassign") && !request.targetDriverId) {
+        return res.status(400).json({ message: "targetDriverId required for swap/reassign actions" });
+      }
+      
+      const result = await executeCascadeChange(req.session.tenantId!, request);
+      res.json(result);
+    } catch (error: any) {
+      console.error("Cascade execution error:", error);
+      res.status(500).json({ message: "Failed to execute cascade change", error: error.message });
     }
   });
 
