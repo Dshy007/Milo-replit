@@ -266,6 +266,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ==================== DASHBOARD ====================
+  
+  // GET /api/dashboard/stats - Get dashboard statistics
+  app.get("/api/dashboard/stats", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      
+      // Fetch all data in parallel for performance
+      const [drivers, trucks, blocks, assignments] = await Promise.all([
+        dbStorage.getDriversByTenant(tenantId),
+        dbStorage.getTrucksByTenant(tenantId),
+        dbStorage.getBlocksByTenant(tenantId),
+        dbStorage.getBlockAssignmentsByTenant(tenantId)
+      ]);
+      
+      // Count active entities
+      const stats = {
+        totalDrivers: drivers.length,
+        activeDrivers: drivers.filter(d => d.status === 'active').length,
+        activeTrucks: trucks.filter(t => t.status === 'active').length,
+        totalBlocks: blocks.length,
+        totalAssignments: assignments.length,
+        unassignedBlocks: blocks.length - assignments.length,
+      };
+      
+      res.json(stats);
+    } catch (error: any) {
+      console.error("Dashboard stats error:", error);
+      res.status(500).json({ 
+        message: "Failed to fetch dashboard stats", 
+        error: error.message 
+      });
+    }
+  });
+
   // ==================== DRIVERS ====================
   
   app.get("/api/drivers", requireAuth, async (req, res) => {

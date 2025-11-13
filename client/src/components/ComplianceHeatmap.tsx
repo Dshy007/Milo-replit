@@ -119,7 +119,7 @@ export function ComplianceHeatmap() {
               DOT Compliance Heatmap
             </CardTitle>
             <CardDescription>
-              Driver workload compliance status per day
+              Shows driver work assignments and compliance status per day. Colored cells indicate days with scheduled blocks.
             </CardDescription>
           </div>
           <div className="flex items-center gap-2">
@@ -155,19 +155,19 @@ export function ComplianceHeatmap() {
         <div className="flex items-center gap-6 mb-4 flex-wrap" data-testid="div-legend">
           <div className="flex items-center gap-2">
             <CheckCircle2 className="w-4 h-4 text-green-500" />
-            <span className="text-sm text-muted-foreground">Safe</span>
+            <span className="text-sm text-muted-foreground">Safe (working, within limits)</span>
           </div>
           <div className="flex items-center gap-2">
             <AlertTriangle className="w-4 h-4 text-yellow-500" />
-            <span className="text-sm text-muted-foreground">Warning</span>
+            <span className="text-sm text-muted-foreground">Warning (approaching limits)</span>
           </div>
           <div className="flex items-center gap-2">
             <XCircle className="w-4 h-4 text-red-500" />
-            <span className="text-sm text-muted-foreground">Violation</span>
+            <span className="text-sm text-muted-foreground">Violation (exceeds DOT limits)</span>
           </div>
           <div className="flex items-center gap-2">
             <div className="w-4 h-4 bg-muted border border-border rounded" />
-            <span className="text-sm text-muted-foreground">No assignments</span>
+            <span className="text-sm text-muted-foreground">No work scheduled</span>
           </div>
         </div>
 

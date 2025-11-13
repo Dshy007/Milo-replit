@@ -7,6 +7,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider, ProtectedRoute } from "@/lib/auth";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
+import { ChatLauncher } from "@/components/ChatLauncher";
 import Landing from "@/pages/Landing";
 import Login from "@/pages/Login";
 import Signup from "@/pages/Signup";
@@ -42,6 +43,7 @@ function ProtectedLayout({ children }: { children: ReactNode }) {
             {children}
           </main>
         </div>
+        <ChatLauncher />
       </div>
     </SidebarProvider>
   );
