@@ -84,11 +84,8 @@ export default function Schedules() {
   };
 
   const formatTime = (timeStr: string) => {
-    const [hours, minutes] = timeStr.split(":");
-    const hour = parseInt(hours);
-    const ampm = hour >= 12 ? "PM" : "AM";
-    const hour12 = hour % 12 || 12;
-    return `${hour12}:${minutes} ${ampm}`;
+    // Return military time (24-hour format) as-is
+    return timeStr;
   };
 
   const getBlockTypeColor = (soloType: string) => {
