@@ -3221,6 +3221,19 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
       const { parseExcelSchedule } = await import("./excel-import");
       const result = await parseExcelSchedule(tenantId, req.file.buffer, userId);
       
+      // Automatically recompute patterns after successful import
+      // This ensures Auto-Build has fresh patterns for next week's suggestions
+      if (result.created > 0) {
+        try {
+          const { recomputePatterns } = await import("./pattern-engine");
+          const patternResult = await recomputePatterns(tenantId);
+          console.log(`Pattern recompute after Excel import: ${patternResult.patternsCreated} patterns created for ${patternResult.totalDrivers} drivers`);
+        } catch (patternError: any) {
+          console.error("Pattern recompute after import failed:", patternError);
+          // Don't fail the import, just log the error
+        }
+      }
+      
       res.json({
         success: true,
         message: `Successfully imported ${result.created} assignments${result.failed > 0 ? `, ${result.failed} failed` : ''}`,
