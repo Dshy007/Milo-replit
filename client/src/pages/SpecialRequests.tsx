@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Calendar } from "@/components/ui/calendar";
+import { TimePicker } from "@/components/TimePicker";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -26,6 +27,15 @@ import type { z } from "zod";
 import type { SpecialRequest, Driver, Block } from "@shared/schema";
 
 type FormValues = z.infer<typeof formSpecialRequestSchema>;
+
+// Helper function to convert military time to AM/PM
+function convertTo12Hour(time24: string): string {
+  const [hours, minutes] = time24.split(':');
+  const hour = parseInt(hours);
+  const ampm = hour >= 12 ? 'PM' : 'AM';
+  const hour12 = hour % 12 || 12;
+  return `${hour12}:${minutes} ${ampm}`;
+}
 
 export default function SpecialRequests() {
   const [selectedRequest, setSelectedRequest] = useState<SpecialRequest | null>(null);
@@ -197,23 +207,27 @@ export default function SpecialRequests() {
     const start = new Date(startDate);
     const end = endDate ? new Date(endDate) : null;
     
+    // Convert times to 12-hour format for display
+    const formattedStartTime = startTime ? convertTo12Hour(startTime) : null;
+    const formattedEndTime = endTime ? convertTo12Hour(endTime) : null;
+    
     // Same day or single day
     if (!end || isSameDay(start, end)) {
       // If we have time information
-      if (startTime) {
-        if (endTime && endTime !== startTime) {
-          return `${format(start, "PPP")} at ${startTime} - ${endTime}`;
+      if (formattedStartTime) {
+        if (formattedEndTime && formattedEndTime !== formattedStartTime) {
+          return `${format(start, "PPP")} at ${formattedStartTime} - ${formattedEndTime}`;
         }
-        return `${format(start, "PPP")} at ${startTime}`;
+        return `${format(start, "PPP")} at ${formattedStartTime}`;
       }
       // Legacy: date only
       return format(start, "PPP");
     }
     
     // Multi-day range
-    if (startTime) {
-      const startDisplay = `${format(start, "PPP")} at ${startTime}`;
-      const endDisplay = endTime ? `${format(end, "PPP")} at ${endTime}` : format(end, "PPP");
+    if (formattedStartTime) {
+      const startDisplay = `${format(start, "PPP")} at ${formattedStartTime}`;
+      const endDisplay = formattedEndTime ? `${format(end, "PPP")} at ${formattedEndTime}` : format(end, "PPP");
       return `${startDisplay} - ${endDisplay}`;
     }
     
@@ -623,14 +637,16 @@ export default function SpecialRequests() {
                       <FormItem>
                         <FormLabel>Start Time</FormLabel>
                         <FormControl>
-                          <Input
-                            type="time"
-                            placeholder="00:00"
-                            {...field}
+                          <TimePicker
                             value={field.value || "00:00"}
-                            data-testid="input-start-time"
+                            onChange={field.onChange}
+                            placeholder="Select time"
+                            testId="input-start-time"
                           />
                         </FormControl>
+                        <FormDescription>
+                          Select time with AM/PM or 24h format
+                        </FormDescription>
                         <FormMessage />
                       </FormItem>
                     )}
@@ -643,22 +659,21 @@ export default function SpecialRequests() {
                       <FormItem>
                         <FormLabel>End Time (Optional)</FormLabel>
                         <FormControl>
-                          <Input
-                            type="time"
-                            placeholder="23:59"
-                            {...field}
+                          <TimePicker
                             value={field.value || ""}
-                            data-testid="input-end-time"
+                            onChange={field.onChange}
+                            placeholder="Select time"
+                            testId="input-end-time"
                           />
                         </FormControl>
+                        <FormDescription>
+                          For time-specific restrictions (e.g., unavailable 4:30 PM - 9:30 PM)
+                        </FormDescription>
                         <FormMessage />
                       </FormItem>
                     )}
                   />
                 </div>
-                <FormDescription>
-                  Specify time windows (e.g., "16:30" to "21:30"). Leave end time blank for all-day.
-                </FormDescription>
               </div>
 
               <Separator />
