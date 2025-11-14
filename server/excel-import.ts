@@ -1382,6 +1382,7 @@ export async function parseExcelScheduleShiftBased(
             scheduledEnd: sql`excluded.scheduled_end`,
             tractorId: sql`excluded.tractor_id`,
             externalBlockId: sql`excluded.external_block_id`,
+            importBatchId: sql`excluded.import_batch_id`, // Update batch ID for re-imports
             patternGroup: sql`excluded.pattern_group`,
             cycleId: sql`excluded.cycle_id`,
           }

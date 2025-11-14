@@ -3282,6 +3282,7 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
 
   // POST /api/schedules/excel-import - Import schedule from Excel file
   // Uses existing multer upload configuration
+  // Supports importMode parameter: 'block' (legacy) or 'shift' (Contract Slot approach)
   app.post("/api/schedules/excel-import", requireAuth, upload.single('file'), async (req: any, res: any) => {
     try {
       const tenantId = req.session.tenantId!;
@@ -3291,8 +3292,18 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
         return res.status(400).json({ message: "No file uploaded" });
       }
 
-      const { parseExcelSchedule } = await import("./excel-import");
-      const result = await parseExcelSchedule(tenantId, req.file.buffer, userId);
+      // Validate importMode parameter (defaults to 'block' for backward compatibility)
+      const importMode = req.body.importMode || 'block';
+      if (importMode !== 'block' && importMode !== 'shift') {
+        return res.status(400).json({ 
+          message: "Invalid importMode. Must be 'block' or 'shift'." 
+        });
+      }
+
+      // Dispatch to appropriate parser based on mode
+      const { parseExcelSchedule, parseExcelScheduleShiftBased } = await import("./excel-import");
+      const importFn = importMode === 'shift' ? parseExcelScheduleShiftBased : parseExcelSchedule;
+      const result = await importFn(tenantId, req.file.buffer, userId);
       
       // Automatically recompute patterns after successful import (async, non-blocking)
       // This ensures Auto-Build has fresh patterns for next week's suggestions

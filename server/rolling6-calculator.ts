@@ -74,13 +74,15 @@ export function shiftOccurrenceToAssignmentSubject(
   occurrence: ShiftOccurrence,
   template: ShiftTemplate
 ): AssignmentSubject {
+  const durationHours = (new Date(occurrence.scheduledEnd).getTime() - new Date(occurrence.scheduledStart).getTime()) / 
+    (1000 * 60 * 60);
+  
   return {
     startTimestamp: new Date(occurrence.scheduledStart),
     endTimestamp: new Date(occurrence.scheduledEnd),
-    duration: Math.round(
-      (new Date(occurrence.scheduledEnd).getTime() - new Date(occurrence.scheduledStart).getTime()) / 
-      (1000 * 60 * 60)
-    ),
+    // Normalize to 4 decimal places to eliminate floating-point residue
+    // Prevents false DOT violations from accumulated precision errors
+    duration: Number.parseFloat(durationHours.toFixed(4)),
     soloType: template.soloType,
     cycleId: occurrence.cycleId || "",
     patternGroup: (occurrence.patternGroup || template.patternGroup) as "sunWed" | "wedSat",
