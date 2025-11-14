@@ -58,7 +58,8 @@ export function blockToAssignmentSubject(block: Block): AssignmentSubject {
   return {
     startTimestamp: new Date(block.startTimestamp),
     endTimestamp: new Date(block.endTimestamp),
-    duration: block.duration,
+    // Normalize to 4 decimal places to eliminate floating-point residue
+    duration: Number.parseFloat(block.duration.toFixed(4)),
     soloType: block.soloType,
     cycleId: block.cycleId || "",
     patternGroup: block.patternGroup as "sunWed" | "wedSat",

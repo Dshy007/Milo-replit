@@ -4,7 +4,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Upload, FileSpreadsheet, CheckCircle2, XCircle, AlertTriangle } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { Upload, FileSpreadsheet, CheckCircle2, XCircle, AlertTriangle, Info } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 
 interface ImportResult {
@@ -22,6 +24,7 @@ export default function ScheduleImport() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [importing, setImporting] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
+  const [importMode, setImportMode] = useState<'block' | 'shift'>('shift'); // Default to new shift-based mode
   const { toast } = useToast();
 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -56,6 +59,7 @@ export default function ScheduleImport() {
     try {
       const formData = new FormData();
       formData.append('file', selectedFile);
+      formData.append('importMode', importMode);
 
       const response = await fetch('/api/schedules/excel-import', {
         method: 'POST',
@@ -163,6 +167,45 @@ export default function ScheduleImport() {
               </label>
             </div>
 
+            {/* Import Mode Toggle */}
+            <div className="border rounded-lg p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label htmlFor="import-mode" className="text-base font-medium">
+                    Import Mode
+                  </Label>
+                  <p className="text-sm text-muted-foreground">
+                    {importMode === 'shift' 
+                      ? 'Contract Slot Mode (Recommended): Uses stable operator IDs for weekly re-imports'
+                      : 'Legacy Block Mode: Uses transient block IDs (for backward compatibility)'}
+                  </p>
+                </div>
+                <Switch
+                  id="import-mode"
+                  checked={importMode === 'shift'}
+                  onCheckedChange={(checked) => setImportMode(checked ? 'shift' : 'block')}
+                  disabled={importing}
+                  data-testid="switch-import-mode"
+                />
+              </div>
+              <Alert>
+                <Info className="h-4 w-4" />
+                <AlertDescription className="text-sm">
+                  {importMode === 'shift' ? (
+                    <>
+                      <strong>Contract Slot Mode:</strong> Creates shift templates and occurrences based on operator IDs. 
+                      Supports weekly re-imports while preserving historical data for rolling 6-day DOT compliance.
+                    </>
+                  ) : (
+                    <>
+                      <strong>Legacy Block Mode:</strong> Creates assignments using Amazon's block IDs. 
+                      Compatible with older imports but requires manual cleanup for weekly re-imports.
+                    </>
+                  )}
+                </AlertDescription>
+              </Alert>
+            </div>
+
             {/* Action Buttons */}
             <div className="flex gap-3">
               <Button
@@ -176,7 +219,7 @@ export default function ScheduleImport() {
                 ) : (
                   <>
                     <Upload className="w-4 h-4 mr-2" />
-                    Import Schedule
+                    Import Schedule ({importMode === 'shift' ? 'Contract Slot' : 'Legacy'})
                   </>
                 )}
               </Button>
