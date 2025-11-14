@@ -1483,7 +1483,7 @@ export async function parseExcelScheduleShiftBased(
           scheduledStart: startTimestamp,
           scheduledEnd: endTimestamp,
           tractorId: parsedOperator.tractorId,
-          externalBlockId: row.blockId,
+          externalBlockId: row.blockId?.trim() || null,
           status: "unassigned",
           isCarryover: false,
           importBatchId,
