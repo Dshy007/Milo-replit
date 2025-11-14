@@ -1,8 +1,11 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, timestamp, integer, boolean, decimal, uniqueIndex, index, check } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, timestamp, integer, boolean, decimal, uniqueIndex, index, check, pgEnum } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { addYears, isAfter } from "date-fns";
+
+// Enums
+export const patternGroupEnum = pgEnum("pattern_group", ["sunWed", "wedSat"]);
 
 // Tenants (Organizations)
 export const tenants = pgTable("tenants", {
@@ -491,6 +494,10 @@ export const blocks = pgTable("blocks", {
   isCarryover: boolean("is_carryover").notNull().default(false), // True for Fri/Sat from previous week
   onBenchStatus: text("on_bench_status").notNull().default("on_bench"), // on_bench, off_bench
   offBenchReason: text("off_bench_reason"), // non_contract_time, wrong_tractor_for_contract
+  // Pattern-aware fields for Amazon's dynamic shift assignments
+  patternGroup: patternGroupEnum("pattern_group"), // 'sunWed' or 'wedSat' - Amazon's rotating duty cycles
+  canonicalStart: timestamp("canonical_start"), // UTC timestamp of contract's canonical start time (immutable per cycle, basis for bump calculations)
+  cycleId: text("cycle_id"), // Pattern-aware cycle identifier format: "${patternGroup}:${cycleStartDateISO}" (e.g., "sunWed:2025-11-09")
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({
@@ -498,11 +505,14 @@ export const blocks = pgTable("blocks", {
   uniqueBlockId: uniqueIndex("blocks_tenant_block_idx").on(table.tenantId, table.blockId),
   // Index for time range queries
   timeRangeIdx: index("blocks_time_range_idx").on(table.startTimestamp, table.endTimestamp),
+  // Index for pattern-based queries
+  patternIdx: index("blocks_pattern_idx").on(table.patternGroup, table.cycleId),
 }));
 
 export const insertBlockSchema = createInsertSchema(blocks, {
   startTimestamp: z.coerce.date(),
   endTimestamp: z.coerce.date(),
+  canonicalStart: z.coerce.date().optional().nullable(),
 }).omit({ id: true, createdAt: true, updatedAt: true });
 export const updateBlockSchema = insertBlockSchema.omit({ tenantId: true }).partial();
 export type InsertBlock = z.infer<typeof insertBlockSchema>;
@@ -537,6 +547,72 @@ export const updateBlockAssignmentSchema = insertBlockAssignmentSchema.omit({ te
 export type InsertBlockAssignment = z.infer<typeof insertBlockAssignmentSchema>;
 export type UpdateBlockAssignment = z.infer<typeof updateBlockAssignmentSchema>;
 export type BlockAssignment = typeof blockAssignments.$inferSelect;
+
+// Assignment History (Track all driver assignments with pattern-aware bump calculations)
+export const assignmentHistory = pgTable("assignment_history", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+  blockId: varchar("block_id").notNull().references(() => blocks.id),
+  driverId: varchar("driver_id").notNull().references(() => drivers.id),
+  contractId: varchar("contract_id").notNull().references(() => contracts.id),
+  startTimestamp: timestamp("start_timestamp").notNull(), // Actual block start time
+  canonicalStart: timestamp("canonical_start").notNull(), // Contract's canonical start time for this cycle (snapshot)
+  patternGroup: patternGroupEnum("pattern_group").notNull(), // sunWed or wedSat - required for pattern-aware validation
+  cycleId: text("cycle_id").notNull(), // Pattern-aware cycle identifier
+  bumpMinutes: integer("bump_minutes").notNull().default(0), // Time difference from canonical start in minutes (can be negative)
+  isAutoAssigned: boolean("is_auto_assigned").notNull().default(false), // True if auto-assigned by engine
+  confidenceScore: integer("confidence_score"), // 0-100 confidence level if auto-assigned
+  assignmentSource: text("assignment_source").notNull().default("manual"), // auto, manual, suggested
+  assignedAt: timestamp("assigned_at").defaultNow().notNull(),
+  assignedBy: varchar("assigned_by").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  // Index for driver pattern lookups
+  driverPatternIdx: index("assignment_history_driver_pattern_idx").on(table.tenantId, table.driverId, table.patternGroup, table.cycleId),
+  // Index for contract lookups
+  contractIdx: index("assignment_history_contract_idx").on(table.contractId, table.patternGroup),
+  // Index for time-based queries
+  timeIdx: index("assignment_history_time_idx").on(table.assignedAt),
+}));
+
+export const insertAssignmentHistorySchema = createInsertSchema(assignmentHistory, {
+  startTimestamp: z.coerce.date(),
+  canonicalStart: z.coerce.date(),
+  assignedAt: z.coerce.date().optional(),
+}).omit({ id: true, createdAt: true });
+export type InsertAssignmentHistory = z.infer<typeof insertAssignmentHistorySchema>;
+export type AssignmentHistory = typeof assignmentHistory.$inferSelect;
+
+// Driver Contract Stats (Aggregated driver performance per contract and pattern)
+export const driverContractStats = pgTable("driver_contract_stats", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+  driverId: varchar("driver_id").notNull().references(() => drivers.id),
+  contractId: varchar("contract_id").notNull().references(() => contracts.id),
+  patternGroup: patternGroupEnum("pattern_group").notNull(), // sunWed or wedSat - required for pattern-aware aggregation
+  lastWorked: timestamp("last_worked"), // Most recent assignment for this driver+contract+pattern
+  totalAssignments: integer("total_assignments").notNull().default(0), // Count of assignments
+  streakCount: integer("streak_count").notNull().default(0), // Consecutive weeks worked on same contract+pattern
+  avgBumpMinutes: integer("avg_bump_minutes").notNull().default(0), // Average bump from canonical time
+  lastCycleId: text("last_cycle_id"), // Most recent cycle worked
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  // Unique constraint: one stat record per driver+contract+pattern
+  uniqueDriverContractPattern: uniqueIndex("driver_contract_stats_unique_idx").on(table.tenantId, table.driverId, table.contractId, table.patternGroup),
+  // Index for driver lookups
+  driverIdx: index("driver_contract_stats_driver_idx").on(table.driverId),
+  // Index for contract+pattern queries
+  contractPatternIdx: index("driver_contract_stats_contract_pattern_idx").on(table.contractId, table.patternGroup),
+}));
+
+export const insertDriverContractStatsSchema = createInsertSchema(driverContractStats, {
+  lastWorked: z.coerce.date().optional().nullable(),
+}).omit({ id: true, createdAt: true, updatedAt: true });
+export const updateDriverContractStatsSchema = insertDriverContractStatsSchema.omit({ tenantId: true }).partial();
+export type InsertDriverContractStats = z.infer<typeof insertDriverContractStatsSchema>;
+export type UpdateDriverContractStats = z.infer<typeof updateDriverContractStatsSchema>;
+export type DriverContractStats = typeof driverContractStats.$inferSelect;
 
 // Protected Driver Rules (Special scheduling constraints for specific drivers)
 export const protectedDriverRules = pgTable("protected_driver_rules", {

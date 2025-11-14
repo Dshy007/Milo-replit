@@ -3,7 +3,7 @@ import { drivers, blocks, blockAssignments, protectedDriverRules, contracts } fr
 import { eq, and, inArray } from "drizzle-orm";
 import { validateBlockAssignment } from "./rolling6-calculator";
 import * as XLSX from "xlsx";
-import { startOfWeek, parseISO } from "date-fns";
+import { startOfWeek, parseISO, getDay, startOfDay, format } from "date-fns";
 
 interface ExcelRow {
   "Block ID": string;
@@ -24,6 +24,115 @@ interface ImportResult {
   errors: string[];
   warnings: string[];
   committedWithWarnings: number;
+}
+
+/**
+ * Detect Amazon pattern group by finding closest canonical anchor
+ * 
+ * Amazon's rotating duty cycles:
+ * - sunWed: Sunday-Wednesday (4 days starting Sunday at contract time)
+ * - wedSat: Wednesday-Saturday (4 days starting Wednesday at contract time)
+ * 
+ * CRITICAL: Determines pattern by finding which canonical anchor (Sunday or Wednesday
+ * at contract time) the actual start is closest to. This correctly handles edge cases
+ * like Tuesday 11 PM shifts that cross midnight into Wednesday UTC.
+ * 
+ * Example: Tuesday 11 PM shift is closer to "Sunday at 16:30" than "Wednesday at 16:30",
+ * so it's classified as sunWed pattern.
+ * 
+ * @param startDate - Actual block start timestamp
+ * @param contractStartTime - Contract base time (HH:MM format like "16:30")
+ * @returns Pattern group (sunWed or wedSat)
+ */
+function detectPatternGroup(startDate: Date, contractStartTime: string): "sunWed" | "wedSat" {
+  const [hours, minutes] = contractStartTime.split(":").map(Number);
+  
+  // Amazon's 4-day cycle windows (contract-local time):
+  // - sunWed: Sunday, Monday, Tuesday (all day) + Wednesday before contract time
+  // - wedSat: Wednesday (at/after contract time), Thursday, Friday, Saturday
+  
+  const localDayOfWeek = startDate.getDay(); // 0=Sunday, 1=Monday, ..., 6=Saturday
+  
+  // Sunday (0), Monday (1), Tuesday (2) → sunWed
+  if (localDayOfWeek >= 0 && localDayOfWeek <= 2) {
+    return "sunWed";
+  }
+  
+  // Thursday (4), Friday (5), Saturday (6) → wedSat
+  if (localDayOfWeek >= 4 && localDayOfWeek <= 6) {
+    return "wedSat";
+  }
+  
+  // Wednesday (3) - special case: check if before or after contract time
+  // If before contract time → sunWed (end of Sun-Wed cycle)
+  // If at/after contract time → wedSat (start of Wed-Sat cycle)
+  const contractHour = hours + minutes / 60;
+  const actualHour = startDate.getHours() + startDate.getMinutes() / 60;
+  
+  return actualHour < contractHour ? "sunWed" : "wedSat";
+}
+
+/**
+ * Calculate canonical start time for a block
+ * 
+ * The canonical start is the contract's base start time anchored to the pattern's start day:
+ * - sunWed: Contract time on Sunday of that week
+ * - wedSat: Contract time on Wednesday of that week
+ * 
+ * This provides a stable reference point for bump calculations (±2h tolerance)
+ * 
+ * CRITICAL: Immutable calculation using UTC to prevent drift and ensure consistency
+ * 
+ * @param startTimestamp - Actual block start time
+ * @param contractStartTime - Contract base time (HH:MM format like "16:30")
+ * @param patternGroup - sunWed or wedSat
+ * @returns Canonical start timestamp (immutable per cycle)
+ */
+function calculateCanonicalStart(
+  startTimestamp: Date,
+  contractStartTime: string,
+  patternGroup: "sunWed" | "wedSat"
+): Date {
+  // Use UTC day-of-week for timezone-independent calculation
+  const utcDayOfWeek = startTimestamp.getUTCDay(); // 0=Sunday, 1=Monday, ..., 6=Saturday
+  
+  // Parse contract time (HH:MM format)
+  const [hours, minutes] = contractStartTime.split(":").map(Number);
+  
+  // Calculate days offset to reach pattern start day
+  let daysOffset: number;
+  if (patternGroup === "sunWed") {
+    // Find the Sunday of this week (or previous week if we're before Sunday)
+    daysOffset = -utcDayOfWeek; // 0=Sunday, so -0=0, -1=-1, etc.
+  } else {
+    // Find the Wednesday of this week (or previous week if before Wednesday)
+    if (utcDayOfWeek >= 3) {
+      daysOffset = 3 - utcDayOfWeek; // Wednesday (3) - current day
+    } else {
+      daysOffset = -(utcDayOfWeek + 4); // Go back to previous Wednesday
+    }
+  }
+  
+  // Create canonical start date with contract time (IMMUTABLE - use UTC methods)
+  // Clone the date to avoid mutation, then use UTC setters
+  const canonicalDate = new Date(startTimestamp.getTime()); // Clone via timestamp
+  canonicalDate.setUTCDate(canonicalDate.getUTCDate() + daysOffset);
+  canonicalDate.setUTCHours(hours, minutes, 0, 0);
+  
+  return canonicalDate;
+}
+
+/**
+ * Generate pattern-aware cycle identifier
+ * 
+ * Format: "${patternGroup}:${cycleStartDateISO}"
+ * Examples: "sunWed:2025-11-09", "wedSat:2025-11-13"
+ * 
+ * The cycle start date is the Sunday (for sunWed) or Wednesday (for wedSat) when the pattern begins
+ */
+function generateCycleId(patternGroup: "sunWed" | "wedSat", canonicalStart: Date): string {
+  const dateStr = format(canonicalStart, "yyyy-MM-dd");
+  return `${patternGroup}:${dateStr}`;
 }
 
 /**
@@ -172,10 +281,25 @@ export async function parseExcelSchedule(
         .where(and(eq(blocks.tenantId, tenantId), eq(blocks.blockId, blockId)))
         .limit(1);
 
+      // Calculate pattern-aware metadata (for both new and existing blocks)
+      const duration = Math.round((endTimestamp.getTime() - startTimestamp.getTime()) / (1000 * 60 * 60));
+      
+      // Detect Amazon pattern group by finding closest canonical anchor
+      // This correctly handles edge cases like Tuesday 11 PM shifts crossing into Wednesday UTC
+      const patternGroup = detectPatternGroup(startTimestamp, existingContracts[0].startTime);
+      
+      // Calculate canonical start time for bump calculations
+      const canonicalStart = calculateCanonicalStart(
+        startTimestamp,
+        existingContracts[0].startTime, // Contract's base start time (e.g., "16:30")
+        patternGroup
+      );
+      
+      // Generate cycle identifier for pattern grouping
+      const cycleId = generateCycleId(patternGroup, canonicalStart);
+      
       if (existingBlock.length === 0) {
-        // Create new block
-        const duration = Math.round((endTimestamp.getTime() - startTimestamp.getTime()) / (1000 * 60 * 60));
-        
+        // Create new block with pattern-aware metadata
         await db.insert(blocks).values({
           tenantId,
           blockId,
@@ -185,7 +309,23 @@ export async function parseExcelSchedule(
           endTimestamp,
           tractorId: parsedOperator.tractorId, // From Operator ID: "Tractor_1", "Tractor_2", etc.
           duration,
+          patternGroup, // sunWed or wedSat
+          canonicalStart, // Canonical contract start time for this cycle
+          cycleId, // Pattern-aware cycle identifier (e.g., "sunWed:2025-11-09")
         });
+      } else {
+        // Backfill pattern metadata for existing blocks
+        await db
+          .update(blocks)
+          .set({
+            patternGroup,
+            canonicalStart,
+            cycleId,
+          })
+          .where(and(
+            eq(blocks.tenantId, tenantId),
+            eq(blocks.blockId, blockId)
+          ));
       }
     }
 

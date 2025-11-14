@@ -1,6 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { dbStorage } from "./db-storage";
+import { db } from "./db";
 import { 
   insertUserSchema, insertTenantSchema, 
   insertDriverSchema, updateDriverSchema,
@@ -13,8 +14,10 @@ import {
   insertBlockAssignmentSchema,
   insertProtectedDriverRuleSchema, updateProtectedDriverRuleSchema,
   insertSpecialRequestSchema, updateSpecialRequestSchema,
-  insertDriverAvailabilityPreferenceSchema, updateDriverAvailabilityPreferenceSchema
+  insertDriverAvailabilityPreferenceSchema, updateDriverAvailabilityPreferenceSchema,
+  blocks, blockAssignments, assignmentHistory, driverContractStats, drivers, protectedDriverRules
 } from "@shared/schema";
+import { eq, and, inArray } from "drizzle-orm";
 import session from "express-session";
 import { fromZodError } from "zod-validation-error";
 import bcrypt from "bcryptjs";
@@ -3314,6 +3317,221 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
     } catch (error: any) {
       console.error("Excel import error:", error);
       res.status(500).json({ message: "Failed to import Excel file", error: error.message });
+    }
+  });
+
+  // ==================== PATTERN-AWARE AUTO-ASSIGNMENT ====================
+
+  // GET /api/schedules/assignment-suggestions/:blockId - Get driver suggestions for a block
+  app.get("/api/schedules/assignment-suggestions/:blockId", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { blockId } = req.params;
+
+      const { getAssignmentSuggestions } = await import("./auto-assignment");
+      const suggestions = await getAssignmentSuggestions(tenantId, blockId);
+
+      res.json({ suggestions });
+    } catch (error: any) {
+      console.error("Assignment suggestions error:", error);
+      res.status(500).json({ message: "Failed to get assignment suggestions", error: error.message });
+    }
+  });
+
+  // POST /api/schedules/assign-driver - Assign a driver to a block with pattern tracking
+  app.post("/api/schedules/assign-driver", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const userId = req.session.userId!;
+      const { blockId, driverId, isAutoAssigned = false, confidenceScore } = req.body;
+
+      if (!blockId || !driverId) {
+        return res.status(400).json({ message: "Missing required fields: blockId, driverId" });
+      }
+
+      // Fetch block and driver
+      const block = await db
+        .select()
+        .from(blocks)
+        .where(and(eq(blocks.tenantId, tenantId), eq(blocks.id, blockId)))
+        .limit(1);
+
+      if (!block[0]) {
+        return res.status(404).json({ message: "Block not found" });
+      }
+
+      const driver = await db
+        .select()
+        .from(drivers)
+        .where(and(eq(drivers.tenantId, tenantId), eq(drivers.id, driverId)))
+        .limit(1);
+
+      if (!driver[0]) {
+        return res.status(404).json({ message: "Driver not found" });
+      }
+
+      const targetBlock = block[0];
+      const targetDriver = driver[0];
+
+      // Check if block already assigned
+      const existingAssignment = await db
+        .select()
+        .from(blockAssignments)
+        .where(and(eq(blockAssignments.tenantId, tenantId), eq(blockAssignments.blockId, blockId)))
+        .limit(1);
+
+      if (existingAssignment.length > 0) {
+        return res.status(400).json({ message: "Block is already assigned to another driver" });
+      }
+
+      // Validate assignment using existing validation logic
+      const driverExistingAssignments = await db
+        .select()
+        .from(blockAssignments)
+        .where(and(eq(blockAssignments.tenantId, tenantId), eq(blockAssignments.driverId, driverId)));
+
+      const assignmentBlockIds = driverExistingAssignments.map((a) => a.blockId);
+      const assignmentBlocks = assignmentBlockIds.length > 0
+        ? await db.select().from(blocks).where(inArray(blocks.id, assignmentBlockIds))
+        : [];
+
+      const blockMap = new Map(assignmentBlocks.map((b) => [b.id, b]));
+
+      const driverAssignmentsWithBlocks = driverExistingAssignments.map((assignment) => ({
+        ...assignment,
+        block: blockMap.get(assignment.blockId) || targetBlock,
+      }));
+
+      const protectedRules = await db
+        .select()
+        .from(protectedDriverRules)
+        .where(eq(protectedDriverRules.tenantId, tenantId));
+
+      const allExistingAssignments = await db
+        .select()
+        .from(blockAssignments)
+        .where(eq(blockAssignments.tenantId, tenantId));
+
+      const validation = await validateBlockAssignment(
+        targetDriver,
+        targetBlock,
+        driverAssignmentsWithBlocks,
+        protectedRules,
+        allExistingAssignments
+      );
+
+      if (!validation.canAssign) {
+        return res.status(400).json({
+          message: "Assignment violates protected driver rules or conflicts",
+          violations: validation.protectedRuleViolations,
+          conflicts: validation.conflictingAssignments,
+        });
+      }
+
+      if (validation.validationResult.validationStatus === "violation") {
+        return res.status(400).json({
+          message: "Assignment violates DOT compliance",
+          validationMessages: validation.validationResult.messages,
+        });
+      }
+
+      // Calculate bump minutes for history tracking
+      const { calculateBumpMinutes } = await import("./bump-validation");
+      const bumpMinutes = targetBlock.canonicalStart
+        ? calculateBumpMinutes(new Date(targetBlock.startTimestamp), new Date(targetBlock.canonicalStart))
+        : 0;
+
+      // Create block assignment
+      await db.insert(blockAssignments).values({
+        tenantId,
+        blockId,
+        driverId,
+        assignedBy: userId,
+        validationStatus: validation.validationResult.validationStatus,
+        validationSummary: validation.validationResult.metrics
+          ? JSON.stringify(validation.validationResult.metrics)
+          : null,
+        notes: isAutoAssigned ? `Auto-assigned (confidence: ${confidenceScore}%)` : "Manual assignment",
+      });
+
+      // Update block status
+      await db.update(blocks).set({ status: "assigned" }).where(eq(blocks.id, blockId));
+
+      // Create assignment history record (if pattern metadata exists)
+      if (targetBlock.patternGroup && targetBlock.canonicalStart && targetBlock.cycleId) {
+        await db.insert(assignmentHistory).values({
+          tenantId,
+          blockId,
+          driverId,
+          contractId: targetBlock.contractId,
+          startTimestamp: targetBlock.startTimestamp,
+          canonicalStart: targetBlock.canonicalStart,
+          patternGroup: targetBlock.patternGroup,
+          cycleId: targetBlock.cycleId,
+          bumpMinutes,
+          isAutoAssigned,
+          confidenceScore: confidenceScore || null,
+          assignmentSource: isAutoAssigned ? "auto" : "manual",
+          assignedBy: userId,
+        });
+
+        // Update driver contract stats (upsert logic)
+        const existingStats = await db
+          .select()
+          .from(driverContractStats)
+          .where(
+            and(
+              eq(driverContractStats.tenantId, tenantId),
+              eq(driverContractStats.driverId, driverId),
+              eq(driverContractStats.contractId, targetBlock.contractId),
+              eq(driverContractStats.patternGroup, targetBlock.patternGroup)
+            )
+          )
+          .limit(1);
+
+        if (existingStats.length > 0) {
+          // Update existing stats
+          const stats = existingStats[0];
+          const newTotalAssignments = stats.totalAssignments + 1;
+          const newAvgBumpMinutes = Math.round(
+            (stats.avgBumpMinutes * stats.totalAssignments + bumpMinutes) / newTotalAssignments
+          );
+
+          await db
+            .update(driverContractStats)
+            .set({
+              totalAssignments: newTotalAssignments,
+              streakCount: stats.lastCycleId === targetBlock.cycleId ? stats.streakCount : stats.streakCount + 1,
+              avgBumpMinutes: newAvgBumpMinutes,
+              lastWorked: targetBlock.startTimestamp,
+              lastCycleId: targetBlock.cycleId,
+            })
+            .where(eq(driverContractStats.id, stats.id));
+        } else {
+          // Create new stats record
+          await db.insert(driverContractStats).values({
+            tenantId,
+            driverId,
+            contractId: targetBlock.contractId,
+            patternGroup: targetBlock.patternGroup,
+            totalAssignments: 1,
+            streakCount: 1,
+            avgBumpMinutes: bumpMinutes,
+            lastWorked: targetBlock.startTimestamp,
+            lastCycleId: targetBlock.cycleId,
+          });
+        }
+      }
+
+      res.json({
+        success: true,
+        message: `Successfully assigned ${targetDriver.firstName} ${targetDriver.lastName} to block ${targetBlock.blockId}`,
+        validationStatus: validation.validationResult.validationStatus,
+        validationMessages: validation.validationResult.messages,
+      });
+    } catch (error: any) {
+      console.error("Driver assignment error:", error);
+      res.status(500).json({ message: "Failed to assign driver", error: error.message });
     }
   });
 
