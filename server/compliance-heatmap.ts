@@ -2,6 +2,7 @@ import { db } from "./db";
 import { drivers, blocks, blockAssignments } from "@shared/schema";
 import { eq, and, gte, lte, sql } from "drizzle-orm";
 import { startOfDay, endOfDay, eachDayOfInterval, format, parseISO } from "date-fns";
+import { safeDivide } from "./data-cleaner";
 
 export interface HeatmapCell {
   driverId: string;
