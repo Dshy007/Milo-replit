@@ -524,7 +524,7 @@ export async function parseExcelSchedule(
       if (existingAssignment) {
         result.failed++;
         result.errors.push(
-          `Row ${rowNum}: Block ${row.blockId} is already assigned to another driver`
+          `Row ${rowNum}: Block ${row.blockId} is already assigned. Please delete existing assignments for this week before re-importing.`
         );
         continue;
       }
