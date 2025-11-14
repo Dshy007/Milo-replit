@@ -4,6 +4,14 @@ import { eq, and, inArray, sql } from "drizzle-orm";
 import { validateBlockAssignment, shiftOccurrenceToAssignmentSubject, blockToAssignmentSubject } from "./rolling6-calculator";
 import * as XLSX from "xlsx";
 import { startOfWeek, parseISO, getDay, startOfDay, format } from "date-fns";
+import {
+  convertValue,
+  cleanNumericArray,
+  detectType,
+} from "./data-cleaner";
+import {
+  assessDataQuality,
+} from "./statistical-analyzer";
 
 interface ExcelRow {
   blockId: string;
