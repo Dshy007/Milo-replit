@@ -530,10 +530,13 @@ export const blockAssignments = pgTable("block_assignments", {
   notes: text("notes"),
   validationStatus: text("validation_status").notNull().default("valid"), // valid, warning, violation
   validationSummary: text("validation_summary"), // JSONB string with rolling-6 metrics, warnings, reasons
+  isActive: boolean("is_active").notNull().default(true), // Soft-delete: false when archived
+  archivedAt: timestamp("archived_at"), // When assignment was archived (null if active)
+  importBatchId: text("import_batch_id"), // Track which Excel import created this assignment
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
-  // Unique constraint: one driver per block
-  uniqueBlockAssignment: uniqueIndex("block_assignments_tenant_block_idx").on(table.tenantId, table.blockId),
+  // Unique constraint: one active driver per block
+  uniqueBlockAssignment: uniqueIndex("block_assignments_tenant_block_idx").on(table.tenantId, table.blockId).where(sql`${table.isActive} = true`),
   // Index for driver lookups
   driverIdIdx: index("block_assignments_driver_id_idx").on(table.driverId),
   // Index for tenant+driver+time queries

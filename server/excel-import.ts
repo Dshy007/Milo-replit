@@ -271,6 +271,9 @@ export async function parseExcelSchedule(
     committedWithWarnings: 0,
   };
 
+  // Generate unique import batch ID for tracking this import
+  const importBatchId = `import_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
   try {
     // Parse Excel file
     const workbook = XLSX.read(fileBuffer, { type: "buffer" });
@@ -390,6 +393,7 @@ export async function parseExcelSchedule(
       }
 
       const contractId = existingContracts[0].id;
+      const contract = existingContracts[0];
 
       // Upsert block (update if exists, insert if new)
       const existingBlock = await db
@@ -400,6 +404,18 @@ export async function parseExcelSchedule(
 
       // Calculate pattern-aware metadata (for both new and existing blocks)
       const duration = Math.round((endTimestamp.getTime() - startTimestamp.getTime()) / (1000 * 60 * 60));
+      
+      // CONTRACT-TIME VALIDATION: Verify block duration matches contract expectations
+      // Allow ±2 hour tolerance for Amazon's bump variations
+      const expectedDuration = contract.duration;
+      const durationDiff = Math.abs(duration - expectedDuration);
+      
+      if (durationDiff > 2) {
+        result.warnings.push(
+          `Block ${blockId}: Duration mismatch - Expected ${expectedDuration}h (${contract.type.toUpperCase()}), got ${duration}h. ` +
+          `Difference: ${durationDiff}h exceeds ±2h tolerance. Check Excel data for accuracy.`
+        );
+      }
       
       // Detect Amazon pattern group by finding closest canonical anchor
       // This correctly handles edge cases like Tuesday 11 PM shifts crossing into Wednesday UTC
@@ -457,10 +473,16 @@ export async function parseExcelSchedule(
       .from(blocks)
       .where(eq(blocks.tenantId, tenantId));
 
-    const existingAssignments = await db
+    // Fetch ALL assignments (active + archived) for rolling-6 compliance calculations
+    // Rolling-6 needs historical data to calculate duty hours correctly
+    // We'll filter to active-only for conflict detection later
+    const allAssignments = await db
       .select()
       .from(blockAssignments)
       .where(eq(blockAssignments.tenantId, tenantId));
+    
+    // Separate active assignments for conflict detection
+    const existingAssignments = allAssignments.filter(a => a.isActive);
 
     const protectedRules = await db
       .select()
@@ -480,6 +502,7 @@ export async function parseExcelSchedule(
       validationStatus: string;
       validationSummary: string | null;
       operatorId: string;
+      existingAssignmentId?: string; // Track old assignment to archive (if replacing)
     }> = [];
 
     // Phase 1: Validate all rows
@@ -516,17 +539,24 @@ export async function parseExcelSchedule(
         continue;
       }
 
-      // Check if block is already assigned in DB
+      // Check if block is already assigned in DB (active assignments only)
       const existingAssignment = existingAssignments.find(
         (a) => a.blockId === block.id
       );
 
+      // If block already assigned, we'll archive it AFTER validation passes (in Phase 2)
+      // For now, just remove from in-memory array so validation doesn't see conflicts
       if (existingAssignment) {
-        result.failed++;
-        result.errors.push(
-          `Row ${rowNum}: Block ${row.blockId} is already assigned. Please delete existing assignments for this week before re-importing.`
+        // CRITICAL: Remove existing assignment from in-memory array to prevent validation conflicts
+        // Archive will happen in Phase 2 (commit) only if new assignment passes validation
+        const assignmentIndex = existingAssignments.findIndex(a => a.id === existingAssignment.id);
+        if (assignmentIndex !== -1) {
+          existingAssignments.splice(assignmentIndex, 1);
+        }
+        
+        result.warnings.push(
+          `Row ${rowNum}: Block ${row.blockId} was already assigned - will replace after validation`
         );
-        continue;
       }
 
       if (assignedBlocksInImport.has(block.id)) {
@@ -646,17 +676,28 @@ export async function parseExcelSchedule(
       }
 
       // Run full validation (DOT compliance, rolling-6, protected rules)
-      const driverExistingAssignments = driverExistingAssignmentRows.map((assignment) => ({
+      // IMPORTANT: Include archived assignments for rolling-6 compliance calculations
+      // Rolling-6 needs historical duty hours to validate DOT compliance correctly
+      // CRITICAL: Exclude the soon-to-be-archived assignment to prevent double-counting
+      const driverAllAssignmentRows = allAssignments.filter(
+        (a) => a.driverId === driver.id && a.id !== existingAssignment?.id
+      );
+      const driverAllAssignments = driverAllAssignmentRows.map((assignment) => ({
         ...assignment,
         block: blockMap.get(assignment.blockId) || block,
       }));
 
+      // TODO: Refactor validateBlockAssignment to accept explicit activeAssignments and historicalAssignments
+      // parameters instead of relying on single existingAssignments array. This will make the distinction
+      // clear for all callers and prevent confusion. Update all 7 callers: excel-import, auto-assignment,
+      // routes, auto-build-engine, csv-import, workload-calculator, rolling6-calculator itself.
+      
       const validation = await validateBlockAssignment(
         driver,
         block,
-        driverExistingAssignments,
+        driverAllAssignments, // Historical (active + archived) for rolling-6, excluding soon-to-be-archived
         protectedRules,
-        existingAssignments
+        existingAssignments // Active-only for conflict detection
       );
 
       // Check for hard-stop issues: protected rules, conflicts, or DOT violations
@@ -675,6 +716,13 @@ export async function parseExcelSchedule(
         }
 
         result.errors.push(`Row ${rowNum}: ${errorMessages.join("; ")}`);
+        
+        // CRITICAL: Restore existing assignment to array if validation fails
+        // This ensures later rows in the same import can still see this active assignment
+        if (existingAssignment) {
+          existingAssignments.push(existingAssignment);
+        }
+        
         continue;
       }
 
@@ -695,6 +743,7 @@ export async function parseExcelSchedule(
           ? JSON.stringify(validation.validationResult.metrics)
           : null,
         operatorId: row.operatorId,
+        existingAssignmentId: existingAssignment?.id, // Track old assignment to archive after validation
       });
 
       // Track this assignment
@@ -706,33 +755,50 @@ export async function parseExcelSchedule(
     }
 
     // Phase 2: Atomically commit all valid assignments
+    // CRITICAL: Wrap in transaction to prevent data loss if insert fails after archive
     try {
-      for (const assignment of assignmentsToCommit) {
-        await db.insert(blockAssignments).values({
-          tenantId,
-          blockId: assignment.blockId,
-          driverId: assignment.driverId,
-          assignedBy: userId,
-          validationStatus: assignment.validationStatus,
-          validationSummary: assignment.validationSummary,
-          notes: `Imported from Excel: ${assignment.operatorId}`,
-        });
+      await db.transaction(async (tx) => {
+        for (const assignment of assignmentsToCommit) {
+          // Archive old assignment AFTER validation but BEFORE inserting new one
+          // Transaction ensures all-or-nothing: if insert fails, archive rolls back
+          if (assignment.existingAssignmentId) {
+            await tx
+              .update(blockAssignments)
+              .set({
+                isActive: false,
+                archivedAt: new Date(),
+              })
+              .where(eq(blockAssignments.id, assignment.existingAssignmentId));
+          }
+          
+          await tx.insert(blockAssignments).values({
+            tenantId,
+            blockId: assignment.blockId,
+            driverId: assignment.driverId,
+            assignedBy: userId,
+            validationStatus: assignment.validationStatus,
+            validationSummary: assignment.validationSummary,
+            notes: `Imported from Excel: ${assignment.operatorId}`,
+            importBatchId: importBatchId, // Track which import created this assignment
+            isActive: true, // Explicitly mark as active (new import)
+          });
 
-        // Update block status to assigned
-        await db
-          .update(blocks)
-          .set({ status: "assigned" })
-          .where(eq(blocks.id, assignment.blockId));
+          // Update block status to assigned
+          await tx
+            .update(blocks)
+            .set({ status: "assigned" })
+            .where(eq(blocks.id, assignment.blockId));
 
-        result.created++;
-        
-        if (assignment.validationStatus === "warning") {
-          result.committedWithWarnings++;
+          result.created++;
+          
+          if (assignment.validationStatus === "warning") {
+            result.committedWithWarnings++;
+          }
         }
-      }
+      });
     } catch (error: any) {
-      // If any assignment fails, report error
-      result.errors.push(`Database commit failed: ${error.message}`);
+      // Transaction rolled back - no data loss
+      result.errors.push(`Database commit failed (transaction rolled back): ${error.message}`);
       result.failed = assignmentsToCommit.length - result.created;
     }
 
