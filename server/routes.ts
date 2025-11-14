@@ -1233,42 +1233,62 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const contractsMap = new Map(fetchedContracts.filter(c => c).map(c => [c!.id, c!]));
       const driversMap = new Map(fetchedDrivers.filter(d => d).map(d => [d!.id, d!]));
       
-      // Transform shift occurrences to look like blocks for frontend compatibility
-      const enrichedBlocks = occurrences.map(occ => {
+      // Transform to simplified occurrence structure for calendar display
+      const simplifiedOccurrences = occurrences.map(occ => {
         const template = templatesMap.get(occ.templateId);
         const contract = template ? contractsMap.get(template.contractId) || null : null;
         const assignment = assignmentsByOccurrenceId.get(occ.id) || null;
         const driver = assignment ? driversMap.get(assignment.driverId) || null : null;
         
-        // Transform shift occurrence to block-like structure
+        // Use template's canonical start time (e.g., "00:30") - falls back to formatted scheduled time if missing
+        const startTime = template?.canonicalStartTime || 
+          occ.scheduledStart.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+        
+        // Calculate bump minutes (difference between actual and canonical start)
+        // Handles cross-midnight occurrences correctly
+        let bumpMinutes = 0;
+        if (template?.canonicalStartTime) {
+          const [canonicalHour, canonicalMin] = template.canonicalStartTime.split(':').map(Number);
+          const canonicalMinutesOfDay = canonicalHour * 60 + canonicalMin;
+          const scheduledMinutesOfDay = occ.scheduledStart.getHours() * 60 + occ.scheduledStart.getMinutes();
+          
+          // Calculate raw difference
+          let diff = scheduledMinutesOfDay - canonicalMinutesOfDay;
+          
+          // Adjust for cross-midnight: if diff is very negative, assume it's a next-day occurrence
+          // Example: canonical=23:30 (1410 min), scheduled=00:06 (6 min) → diff=-1404
+          // Should be +36 minutes (crossed midnight)
+          if (diff < -720) { // If more than 12 hours negative
+            diff += 1440; // Add 24 hours
+          } else if (diff > 720) { // If more than 12 hours positive
+            diff -= 1440; // Subtract 24 hours
+          }
+          
+          bumpMinutes = diff;
+        }
+        
+        // Provide stable block identifier with fallback
+        const blockId = occ.externalBlockId || `SO-${occ.id.slice(0, 8)}`;
+        
         return {
-          id: occ.id, // Shift occurrence ID
-          blockId: occ.externalBlockId || `SO-${occ.id.slice(0, 8)}`, // Use Amazon Block ID or fallback
-          serviceDate: occ.serviceDate,
-          contractId: contract?.id || '',
-          startTimestamp: occ.scheduledStart,
-          endTimestamp: occ.scheduledEnd,
-          tractorId: occ.tractorId || '',
-          soloType: contract?.type || 'solo1',
-          duration: contract?.duration || 0,
+          occurrenceId: occ.id,
+          serviceDate: occ.serviceDate, // YYYY-MM-DD
+          startTime, // HH:mm from template canonical time
+          blockId,
+          driverName: driver ? `${driver.firstName} ${driver.lastName}` : null,
+          contractType: contract?.type || null,
           status: occ.status,
+          tractorId: occ.tractorId || null,
+          assignmentId: assignment?.id || null,
+          bumpMinutes,
           isCarryover: occ.isCarryover,
-          patternGroup: occ.patternGroup,
-          canonicalStart: template?.canonicalStart || null,
-          contract,
-          assignment: assignment ? {
-            ...assignment,
-            driver,
-          } : null,
         };
       });
       
-      // Return calendar-ready data
+      // Return simplified calendar data
       res.json({
-        dateRange: { start: startDate, end: endDate },
-        blocks: enrichedBlocks,
-        drivers: Object.fromEntries(driversMap),
-        contracts: Object.fromEntries(contractsMap),
+        range: { start: startDate, end: endDate },
+        occurrences: simplifiedOccurrences,
       });
     } catch (error: any) {
       res.status(500).json({ message: "Failed to fetch calendar data", error: error.message });

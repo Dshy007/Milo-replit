@@ -1502,6 +1502,8 @@ export async function parseExcelScheduleShiftBased(
           }
         });
       }
+      
+      console.log(`📦 Operator ${operatorId}: Created ${sortedRows.length} shift occurrences`);
     }
 
     // ========== PHASE 2: ASSIGN DRIVERS TO SHIFT OCCURRENCES ==========
@@ -1522,6 +1524,9 @@ export async function parseExcelScheduleShiftBased(
           eq(shiftOccurrences.importBatchId, importBatchId)
         )
       );
+    
+    console.log(`📋 Phase 2: Found ${allOccurrences.length} shift occurrences for assignment (import batch: ${importBatchId})`);
+    console.log(`📋 Block IDs in occurrences: ${allOccurrences.map(o => o.externalBlockId).filter(Boolean).join(', ')}`);
 
     // Fetch ALL assignments (active + archived) for rolling-6 compliance
     const allAssignments = await db
