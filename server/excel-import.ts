@@ -133,10 +133,8 @@ export async function parseExcelSchedule(
       const startTimestamp = excelDateToJSDate(startDate, startTime);
       const endTimestamp = excelDateToJSDate(endDate, endTime);
 
-      // Extract start time in HH:MM format for contract matching
-      const startTimeStr = startTimestamp.toTimeString().slice(0, 5); // "HH:MM"
-
-      // Find or create contract
+      // Find existing contract using ONLY Operator ID (type + tractorId)
+      // Contract times are fixed benchmark times, not imported from Excel
       const existingContracts = await db
         .select()
         .from(contracts)
@@ -144,33 +142,28 @@ export async function parseExcelSchedule(
           and(
             eq(contracts.tenantId, tenantId),
             eq(contracts.type, parsedOperator.type),
-            eq(contracts.startTime, startTimeStr),
             eq(contracts.tractorId, parsedOperator.tractorId)
           )
         );
 
-      let contractId: string;
-      if (existingContracts.length > 0) {
-        contractId = existingContracts[0].id;
-      } else {
-        // Create new contract
-        const duration = Math.round((endTimestamp.getTime() - startTimestamp.getTime()) / (1000 * 60 * 60));
-        const [newContract] = await db
-          .insert(contracts)
-          .values({
-            tenantId,
-            name: `${parsedOperator.type.toUpperCase()} ${startTimeStr} ${parsedOperator.tractorId}`,
-            type: parsedOperator.type,
-            startTime: startTimeStr,
-            tractorId: parsedOperator.tractorId,
-            duration,
-            baseRoutes: parsedOperator.type === "solo1" ? 10 : 7,
-            daysPerWeek: 6,
-            status: "active",
-          })
-          .returning();
-        contractId = newContract.id;
+      if (existingContracts.length === 0) {
+        // Contract not found - skip this block
+        result.warnings.push(
+          `Block ${blockId}: No contract found for ${parsedOperator.type.toUpperCase()} ${parsedOperator.tractorId}. ` +
+          `Please ensure the 17 benchmark contracts are seeded before importing.`
+        );
+        continue;
       }
+
+      if (existingContracts.length > 1) {
+        // Multiple contracts found - data corruption, use first but warn
+        result.warnings.push(
+          `Block ${blockId}: Found ${existingContracts.length} contracts for ${parsedOperator.type.toUpperCase()} ${parsedOperator.tractorId}. ` +
+          `This indicates data corruption. Using first match but database should be cleaned.`
+        );
+      }
+
+      const contractId = existingContracts[0].id;
 
       // Upsert block (update if exists, insert if new)
       const existingBlock = await db

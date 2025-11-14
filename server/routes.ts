@@ -1622,7 +1622,71 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Admin endpoint: Seed bench contracts
+  // Admin endpoint: Reset contracts - DELETE ALL and re-seed benchmark contracts
+  app.post("/api/admin/reset-contracts", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const results = {
+        assignmentsDeleted: 0,
+        blocksDeleted: 0,
+        contractsDeleted: 0,
+        contractsCreated: 0,
+        errors: [] as string[],
+      };
+
+      // Step 1: Delete all block assignments for this tenant (must delete assignments before blocks)
+      const existingAssignments = await dbStorage.getBlockAssignmentsByTenant(tenantId);
+      for (const assignment of existingAssignments) {
+        await dbStorage.deleteBlockAssignment(assignment.id);
+        results.assignmentsDeleted++;
+      }
+
+      // Step 2: Delete all blocks for this tenant (must delete blocks before contracts due to FK)
+      const existingBlocks = await dbStorage.getBlocksByTenant(tenantId);
+      for (const block of existingBlocks) {
+        await dbStorage.deleteBlock(block.id);
+        results.blocksDeleted++;
+      }
+
+      // Step 3: Delete all contracts for this tenant
+      const existingContracts = await dbStorage.getContractsByTenant(tenantId);
+      for (const contract of existingContracts) {
+        await dbStorage.deleteContract(contract.id);
+        results.contractsDeleted++;
+      }
+
+      // Step 4: Create the 17 benchmark contracts
+      for (const benchContract of benchContracts) {
+        try {
+          const contractData = insertContractSchema.parse({
+            tenantId,
+            name: `${benchContract.type.toUpperCase()} ${benchContract.startTime} ${benchContract.tractorId}`,
+            type: benchContract.type,
+            startTime: benchContract.startTime,
+            tractorId: benchContract.tractorId,
+            domicile: benchContract.domicile,
+            duration: benchContract.duration,
+            baseRoutes: benchContract.baseRoutes,
+            daysPerWeek: 6,
+            protectedDrivers: false,
+          });
+          await dbStorage.createContract(contractData);
+          results.contractsCreated++;
+        } catch (error: any) {
+          results.errors.push(`${benchContract.type}-${benchContract.startTime}-${benchContract.tractorId}: ${error.message}`);
+        }
+      }
+
+      res.json({
+        message: "Contracts reset complete - all old contracts deleted and 17 benchmark contracts created",
+        ...results,
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: "Failed to reset contracts", error: error.message });
+    }
+  });
+
+  // Admin endpoint: Seed bench contracts (upsert - updates existing or creates new)
   app.post("/api/admin/seed-contracts", requireAuth, async (req, res) => {
     try {
       const tenantId = req.session.tenantId!;

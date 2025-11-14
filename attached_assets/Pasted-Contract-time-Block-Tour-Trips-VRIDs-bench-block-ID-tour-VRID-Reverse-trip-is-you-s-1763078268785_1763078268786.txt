@@ -1,0 +1,192 @@
+Contract time ➜ Block ➜ Tour ➜ Trips (VRIDs)
+(bench → block ID → tour → VRID)
+
+Reverse trip is you starting from what you see on an open day:
+
+Trip (VRID) ➜ Tour ➜ Block ➜ Contract time
+
+You’re basically asking:
+
+“I see this VRID/Tour on the screen… what block does it belong to, and which contract time is that?”
+
+That’s how we track rolling-6 and fatigue correctly even when we’re only seeing trip data.
+
+1️⃣ Start at the Trip (VRID level)
+
+You’re looking at something like:
+
+VRID: 115LCKYQ8
+
+Lane: MKC40 → MKC6
+
+Driver: John Doe
+
+Scheduled Depart: Thu Nov 13, 18:40
+
+Operator ID: FTIM_MKC_Solo1_Tractor_1_d2
+
+From just this VRID we can already grab:
+
+Time: first departure (18:40)
+
+Operator ID → gives us:
+
+Solo1 or Solo2
+
+Tractor_1, Tractor_7, etc.
+
+That operator ID is your breadcrumb back to the contract.
+
+2️⃣ Group VRIDs into Their Tour
+
+Amazon groups VRIDs into a Tour:
+
+Tour ID: T-########
+
+VRIDs in order: 115LCKYQ8, 114PB7NGG, 11559G1YF, …
+
+All of these VRIDs:
+
+Share the same Block
+
+Have times that sit inside the Block window (e.g. 16:30–06:30 or 08:30–22:30, etc.)
+
+To reverse:
+
+Take all VRIDs with the same Tour ID
+
+Find the earliest timestamp in that tour (first departure)
+
+That first tour departure must sit inside the Block’s duty window.
+
+Example:
+
+Earliest VRID depart: Thu Nov 13, 16:46
+
+That’s inside a Solo1 16:30–06:30 block window
+
+So we now know:
+
+“This tour lives inside a 16:30 Solo1 block.”
+
+3️⃣ From Tour → Block (time container)
+
+Each Tour belongs to exactly one Block ID:
+
+Block ID: B-V05GK3HS2
+
+Block Start: Thu Nov 13, 16:30
+
+Solo Type: Solo1 (14h)
+
+Domicile: MKC40 → MKC40
+
+Driver: (who you assigned)
+
+When you reverse from trips:
+
+Take earliest VRID time in the tour — say Thu 16:46.
+
+Look up the Block ID whose window covers that time for that driver/tractor:
+
+Start around 16:30
+
+End = start + 14h (Solo1) or 38h (Solo2)
+
+Logic in plain English:
+
+“Find the block for this driver/tractor where
+block.start ≤ first_VRID_time ≤ block.end.”
+
+Now you have the Block ID for that tour.
+
+4️⃣ From Block → Contract Time (bench)
+
+Once you know which Block it is, you jump up one more level to the Contract (bench) time.
+
+From the Block row we have:
+
+Block ID: B-V05GK3HS2
+
+Solo Type: Solo1
+
+Block Start: Thu Nov 13, 16:30
+
+Operator ID: FTIM_MKC_Solo1_Tractor_1_d2 → Tractor_1
+
+Now the mapping is easy:
+
+Solo1 + 16:30 + Tractor_1
+→ matches your bench slot:
+
+16:30 → Tractor_1 (Solo1 contract)
+
+So reverse logic is:
+
+VRID ➜ Tour ➜ find matching Block window ➜ read Block start time + tractor ➜ map to fixed contract time.
+
+5️⃣ How to Do It When You Don’t See Block ID (open trip-only view)
+
+Sometimes Amazon’s UI shows you:
+
+Tour + VRIDs
+
+Operator ID
+
+Times
+
+…but you don’t have the block ID in that particular exported file.
+
+In that case you infer the Block and contract like this:
+
+Get earliest VRID start time in the tour → call it t_first.
+
+Parse operator ID → Solo1/Solo2 and Tractor_X.
+
+Look at your bench times for that Solo & tractor:
+
+For that tractor, what’s the standard start time?
+e.g., Tractor_1 Solo1 = 16:30
+
+Check that bench start is close and before t_first:
+
+bench_start ≤ t_first ≤ bench_start + duty_duration
+
+For Solo1: bench_start + 14h
+
+For Solo2: bench_start + 38h
+
+If that’s true → you assign that Tour (and its trips) to the Block that starts at that bench time.
+
+So in dispatcher language:
+
+“Look at the truck and the first trip time.
+Match it to the contract start that driver/truck always uses,
+as long as that time sits inside the 14h/38h duty window.
+That is the Block. That Block sits on that contract.”
+
+6️⃣ Why This Matters (Rolling-6 / Fatigue)
+
+Once you can reverse from trip back up to contract:
+
+You can still track how many days that driver has been on duty, even if:
+
+Amazon rearranged VRIDs inside the Block
+
+A load cancelled early
+
+You’re only seeing trip-level exports
+
+The driver’s fatigue & rolling-6 exposure is based on:
+
+Days they were on a Block, not just how many VRIDs they ran.
+
+Reverse trip logic gives you that linkage back to:
+
+“This Wednesday DOM2 round-trip” → actually part of the 16:30 Solo2 block → counts as Wed+Thu duty days.
+
+7️⃣ In One Sentence
+
+Reverse trip logic =
+
+Start from the trip (VRID) → find its tour → find the block window that contains that tour → use that block’s start time + tractor to map back to the fixed contract time (bench).
