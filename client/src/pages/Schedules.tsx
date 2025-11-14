@@ -59,6 +59,8 @@ export default function Schedules() {
   const [importFile, setImportFile] = useState<File | null>(null);
   const [shiftToDelete, setShiftToDelete] = useState<string | null>(null);
   const [importStartDate, setImportStartDate] = useState<string>("2025-11-03"); // Sunday, Nov 3, 2024
+  const [sortBy, setSortBy] = useState<"time" | "type">("time");
+  const [filterType, setFilterType] = useState<"all" | "solo1" | "solo2" | "team">("all");
 
   // Fetch contracts to get static start times
   const { data: contracts = [] } = useQuery<Contract[]>({
@@ -251,17 +253,35 @@ export default function Schedules() {
     return grouped;
   }, [calendarData]);
 
-  // Get sorted contracts for bench display (sorted by start time, then tractor)
+  // Get sorted and filtered contracts for bench display
   const sortedContracts = useMemo(() => {
-    return [...contracts].sort((a, b) => {
-      // First sort by start time
-      if (a.startTime !== b.startTime) {
-        return a.startTime.localeCompare(b.startTime);
+    let filtered = [...contracts];
+    
+    // Apply type filter
+    if (filterType !== "all") {
+      filtered = filtered.filter(c => c.type.toLowerCase() === filterType);
+    }
+    
+    // Apply sort
+    return filtered.sort((a, b) => {
+      if (sortBy === "time") {
+        // Sort by start time first, then tractor
+        if (a.startTime !== b.startTime) {
+          return a.startTime.localeCompare(b.startTime);
+        }
+        return a.tractorId.localeCompare(b.tractorId);
+      } else {
+        // Sort by type first, then start time, then tractor
+        if (a.type !== b.type) {
+          return a.type.localeCompare(b.type);
+        }
+        if (a.startTime !== b.startTime) {
+          return a.startTime.localeCompare(b.startTime);
+        }
+        return a.tractorId.localeCompare(b.tractorId);
       }
-      // Then by tractor
-      return a.tractorId.localeCompare(b.tractorId);
     });
-  }, [contracts]);
+  }, [contracts, sortBy, filterType]);
 
   // Navigation handlers
   const handlePreviousWeek = () => {
@@ -326,30 +346,29 @@ export default function Schedules() {
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col p-6 gap-6 overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center justify-center w-10 h-10 rounded-full bg-primary/10">
-            <Calendar className="w-5 h-5 text-primary" data-testid="schedules-icon" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-foreground" data-testid="page-title">
-              Schedules
-            </h1>
-            <p className="text-sm text-muted-foreground" data-testid="page-subtitle">
-              Week of {format(weekRange.weekStart, "MMM d")} - {format(addDays(weekRange.weekStart, 6), "MMM d, yyyy")}
-            </p>
-          </div>
-        </div>
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center justify-center w-10 h-10 rounded-full bg-primary/10">
+              <Calendar className="w-5 h-5 text-primary" data-testid="schedules-icon" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-foreground" data-testid="page-title">
+                Schedules
+              </h1>
+              <p className="text-sm text-muted-foreground" data-testid="page-subtitle">
+                Week of {format(weekRange.weekStart, "MMM d")} - {format(addDays(weekRange.weekStart, 6), "MMM d, yyyy")}
+              </p>
+            </div>
 
-        {/* Actions */}
-        <div className="flex items-center gap-2">
-          <Dialog open={isImportDialogOpen} onOpenChange={setIsImportDialogOpen}>
-            <DialogTrigger asChild>
-              <Button variant="default" size="sm" data-testid="button-import-schedule">
-                <Upload className="w-4 h-4 mr-2" />
-                Import Schedule
-              </Button>
-            </DialogTrigger>
+            {/* Navigation & Import - Moved to left */}
+            <div className="flex items-center gap-2 ml-4">
+              <Dialog open={isImportDialogOpen} onOpenChange={setIsImportDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button variant="default" size="sm" data-testid="button-import-schedule">
+                    <Upload className="w-4 h-4 mr-2" />
+                    Import Schedule
+                  </Button>
+                </DialogTrigger>
             <DialogContent>
               <DialogHeader>
                 <DialogTitle>Import Schedule from Excel</DialogTitle>
@@ -422,40 +441,104 @@ export default function Schedules() {
             </DialogContent>
           </Dialog>
 
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handlePreviousWeek}
-            data-testid="button-previous-week"
-          >
-            <ChevronLeft className="w-4 h-4" />
-            Previous Week
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleNextWeek}
-            data-testid="button-next-week"
-          >
-            Next Week
-            <ChevronRight className="w-4 h-4" />
-          </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handlePreviousWeek}
+                data-testid="button-previous-week"
+              >
+                <ChevronLeft className="w-4 h-4" />
+                Previous Week
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleNextWeek}
+                data-testid="button-next-week"
+              >
+                Next Week
+                <ChevronRight className="w-4 h-4" />
+              </Button>
+            </div>
+          </div>
+
+          {/* Sort & Filter Controls - Right side */}
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-medium text-muted-foreground">Sort by:</label>
+              <div className="flex gap-1">
+                <Button
+                  variant={sortBy === "time" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setSortBy("time")}
+                  data-testid="button-sort-time"
+                >
+                  Time
+                </Button>
+                <Button
+                  variant={sortBy === "type" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setSortBy("type")}
+                  data-testid="button-sort-type"
+                >
+                  Type
+                </Button>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-medium text-muted-foreground">Filter:</label>
+              <div className="flex gap-1">
+                <Button
+                  variant={filterType === "all" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setFilterType("all")}
+                  data-testid="button-filter-all"
+                >
+                  All
+                </Button>
+                <Button
+                  variant={filterType === "solo1" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setFilterType("solo1")}
+                  data-testid="button-filter-solo1"
+                >
+                  Solo1
+                </Button>
+                <Button
+                  variant={filterType === "solo2" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setFilterType("solo2")}
+                  data-testid="button-filter-solo2"
+                >
+                  Solo2
+                </Button>
+                <Button
+                  variant={filterType === "team" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setFilterType("team")}
+                  data-testid="button-filter-team"
+                >
+                  Team
+                </Button>
+              </div>
+            </div>
+          </div>
         </div>
-      </div>
 
       {/* Contract Grid Table */}
       <Card className="flex-1 overflow-hidden">
         <CardContent className="p-0 h-full overflow-auto">
           <table className="w-full border-collapse text-sm">
-            <thead className="sticky top-0 z-10 bg-card border-b">
+            <thead className="sticky top-0 z-10 bg-card border-b shadow-md">
               <tr>
-                <th className="text-left p-3 font-semibold min-w-[240px] border-r">
-                  Bench Slot
+                <th className="text-left p-3 font-semibold min-w-[220px] border-r shadow-sm">
+                  Start Times
                 </th>
                 {weekRange.weekDays.map((day) => (
                   <th
                     key={day.toISOString()}
-                    className="text-center p-2 font-semibold min-w-[120px] border-r last:border-r-0"
+                    className="text-center p-2 font-semibold min-w-[100px] border-r last:border-r-0 shadow-sm"
                   >
                     <div className="text-sm">{format(day, "EEE")}</div>
                     <div className="text-xs font-normal text-muted-foreground">
@@ -528,7 +611,7 @@ export default function Schedules() {
                                 <div key={occ.occurrenceId} className="relative group">
                                   <button
                                     onClick={() => handleOccurrenceClick(occ)}
-                                    className="w-full p-1.5 rounded-md bg-muted/50 text-xs space-y-1 text-left hover-elevate active-elevate-2 transition-colors"
+                                    className="w-full p-1 rounded-md bg-muted/50 text-xs space-y-0.5 text-left hover-elevate active-elevate-2 transition-colors"
                                     data-testid={`occurrence-${occ.occurrenceId}`}
                                   >
                                     {/* Block ID (Prominent) */}
