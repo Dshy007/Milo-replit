@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { drivers, blocks, blockAssignments, protectedDriverRules, contracts } from "@shared/schema";
+import { drivers, blocks, blockAssignments, protectedDriverRules, contracts, shiftTemplates, shiftOccurrences } from "@shared/schema";
 import { eq, and, inArray } from "drizzle-orm";
 import { validateBlockAssignment } from "./rolling6-calculator";
 import * as XLSX from "xlsx";
@@ -1064,6 +1064,611 @@ export async function parseExcelSchedule(
   } catch (error: any) {
     // Return error details instead of throwing
     result.errors.push(`Import failed: ${error.message}`);
+    return result;
+  }
+}
+
+/**
+ * NEW SHIFT-BASED EXCEL IMPORT
+ * 
+ * Key differences from legacy import:
+ * - Groups by operatorId (stable) instead of blockId (transient)
+ * - Creates shift_templates keyed by operatorId
+ * - Creates shift_occurrences for each service date
+ * - Assigns drivers to shift_occurrences instead of blocks
+ * 
+ * This allows weekly re-imports without breaking driver assignments,
+ * since operatorId stays constant even when Amazon changes block IDs.
+ */
+export async function parseExcelScheduleShiftBased(
+  tenantId: string,
+  fileBuffer: Buffer,
+  userId: string
+): Promise<ImportResult> {
+  const result: ImportResult = {
+    created: 0,
+    failed: 0,
+    skipped: 0,
+    errors: [],
+    warnings: [],
+    committedWithWarnings: 0,
+  };
+
+  const importBatchId = `import_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+  try {
+    // Parse Excel file (same as before)
+    const workbook = XLSX.read(fileBuffer, { type: "buffer" });
+    const sheetName = workbook.SheetNames[0];
+    if (!sheetName) {
+      throw new Error("Excel file has no sheets");
+    }
+
+    const worksheet = workbook.Sheets[sheetName];
+    const allRows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+    
+    if (allRows.length < 2) {
+      throw new Error("Excel file is empty or has no data rows");
+    }
+    
+    const rawHeaders: string[] = allRows[0] as string[];
+    const rawRows: any[] = XLSX.utils.sheet_to_json(worksheet);
+
+    // Column normalization
+    const columnMap = createColumnMap(rawHeaders);
+    const requiredCanonicalKeys = [
+      "blockId", // Still needed for reference/debugging
+      "driverName",
+      "operatorId", // PRIMARY KEY for shift templates
+      "stop1PlannedStartDate",
+      "stop1PlannedStartTime",
+      "stop2PlannedArrivalDate",
+      "stop2PlannedArrivalTime",
+    ];
+    
+    const validation = validateRequiredColumns(columnMap, requiredCanonicalKeys);
+    if (!validation.valid) {
+      const friendlyNames = validation.missing.map(key => {
+        return Object.entries(CANONICAL_COLUMN_MAP).find(([_, v]) => v === key)?.[0] || key;
+      });
+      throw new Error(
+        `Missing required columns in Excel file. Could not find columns for: ${friendlyNames.join(", ")}.`
+      );
+    }
+    
+    const rows: ExcelRow[] = normalizeRows(rawRows, columnMap);
+
+    // ========== GROUP BY OPERATOR ID (NEW APPROACH) ==========
+    // operatorId is stable across weekly imports, blockId changes weekly
+    const shiftGroups = new Map<string, ExcelRow[]>();
+    for (const row of rows) {
+      const operatorId = row.operatorId?.trim();
+      if (!operatorId) continue;
+      
+      if (!shiftGroups.has(operatorId)) {
+        shiftGroups.set(operatorId, []);
+      }
+      shiftGroups.get(operatorId)!.push(row);
+    }
+
+    const contractCache = new Map<string, typeof contracts.$inferSelect>();
+    const templateCache = new Map<string, typeof shiftTemplates.$inferSelect>();
+
+    // Process each shift tour (by operatorId)
+    for (const [operatorId, shiftRows] of Array.from(shiftGroups.entries())) {
+      const firstRow = shiftRows[0];
+      
+      // Parse Operator ID to extract contract info
+      const parsedOperator = parseOperatorId(operatorId);
+      if (!parsedOperator) {
+        result.warnings.push(`Operator ${operatorId}: Could not parse operator ID format`);
+        continue;
+      }
+
+      // Find or create contract (same as before)
+      const contractKey = `${parsedOperator.type}:${parsedOperator.tractorId}`;
+      let contract = contractCache.get(contractKey);
+      
+      if (!contract) {
+        const existingContracts = await db
+          .select()
+          .from(contracts)
+          .where(
+            and(
+              eq(contracts.tenantId, tenantId),
+              eq(contracts.type, parsedOperator.type),
+              eq(contracts.tractorId, parsedOperator.tractorId)
+            )
+          );
+
+        if (existingContracts.length === 0) {
+          // Auto-create contract from timing data
+          const startDate = firstRow.stop1PlannedStartDate;
+          const startTime = firstRow.stop1PlannedStartTime;
+          const endDate = firstRow.stop2PlannedArrivalDate;
+          const endTime = firstRow.stop2PlannedArrivalTime;
+
+          if (!startDate || !endDate || startTime === undefined || endTime === undefined) {
+            result.warnings.push(`Operator ${operatorId}: Cannot auto-create contract - missing timing data`);
+            continue;
+          }
+
+          const startTimestamp = excelDateToJSDate(startDate, startTime);
+          const endTimestamp = excelDateToJSDate(endDate, endTime);
+          const duration = Math.round((endTimestamp.getTime() - startTimestamp.getTime()) / (1000 * 60 * 60));
+          const startHour = startTimestamp.getHours();
+          const startMinute = startTimestamp.getMinutes();
+          const startTimeStr = `${String(startHour).padStart(2, '0')}:${String(startMinute).padStart(2, '0')}`;
+          const baseRoutes = parsedOperator.type === "solo1" ? 10 : parsedOperator.type === "solo2" ? 7 : 5;
+          const contractName = `${parsedOperator.type.toUpperCase()} ${startTimeStr} ${parsedOperator.tractorId}`;
+          
+          const [newContract] = await db.insert(contracts).values({
+            tenantId,
+            name: contractName,
+            type: parsedOperator.type,
+            tractorId: parsedOperator.tractorId,
+            startTime: startTimeStr,
+            duration,
+            baseRoutes,
+            status: "active",
+            domicile: "MKC",
+            daysPerWeek: 6,
+            protectedDrivers: false,
+          }).returning();
+          
+          result.warnings.push(
+            `Operator ${operatorId}: Auto-created contract ${contractName} from Excel timing data`
+          );
+          
+          contract = newContract;
+        } else {
+          if (existingContracts.length > 1) {
+            result.warnings.push(
+              `Operator ${operatorId}: Found ${existingContracts.length} contracts - using first match`
+            );
+          }
+          contract = existingContracts[0];
+        }
+
+        contractCache.set(contractKey, contract);
+      }
+
+      // ========== FIND OR CREATE SHIFT TEMPLATE ==========
+      // This is the NEW approach: templates are keyed by operatorId (stable)
+      let template = templateCache.get(operatorId);
+      
+      if (!template) {
+        const existingTemplates = await db
+          .select()
+          .from(shiftTemplates)
+          .where(
+            and(
+              eq(shiftTemplates.tenantId, tenantId),
+              eq(shiftTemplates.operatorId, operatorId)
+            )
+          );
+
+        if (existingTemplates.length === 0) {
+          // Create new shift template
+          if (!contract.duration || !contract.startTime) {
+            result.warnings.push(`Operator ${operatorId}: Contract missing duration or startTime - cannot create template`);
+            continue;
+          }
+
+          const firstRowWithTiming = shiftRows.find(
+            r => r.stop1PlannedStartDate && r.stop1PlannedStartTime !== undefined
+          );
+
+          if (!firstRowWithTiming) {
+            result.warnings.push(`Operator ${operatorId}: No timing data found - cannot determine pattern group`);
+            continue;
+          }
+
+          const sampleStart = excelDateToJSDate(
+            firstRowWithTiming.stop1PlannedStartDate!,
+            firstRowWithTiming.stop1PlannedStartTime!
+          );
+          const patternGroup = detectPatternGroup(sampleStart, contract.startTime);
+
+          const [newTemplate] = await db.insert(shiftTemplates).values({
+            tenantId,
+            operatorId,
+            contractId: contract.id,
+            canonicalStartTime: contract.startTime,
+            defaultDuration: contract.duration,
+            defaultTractorId: parsedOperator.tractorId,
+            soloType: parsedOperator.type,
+            patternGroup,
+            status: "active",
+            metadata: sql`'{}'::jsonb`,
+          }).returning();
+
+          result.warnings.push(`Operator ${operatorId}: Created new shift template`);
+          template = newTemplate;
+        } else {
+          if (existingTemplates.length > 1) {
+            result.warnings.push(`Operator ${operatorId}: Found ${existingTemplates.length} templates - using first match`);
+          }
+          template = existingTemplates[0];
+          
+          // Update template metadata if needed
+          if (template.contractId !== contract.id) {
+            await db
+              .update(shiftTemplates)
+              .set({ contractId: contract.id })
+              .where(eq(shiftTemplates.id, template.id));
+            
+            result.warnings.push(`Operator ${operatorId}: Updated template contract reference`);
+          }
+        }
+
+        templateCache.set(operatorId, template);
+      }
+
+      // ========== CREATE SHIFT OCCURRENCES FOR EACH SERVICE DATE ==========
+      // Build canonical timeline (same logic as before)
+      if (!contract.duration || !contract.startTime) {
+        result.warnings.push(`Operator ${operatorId}: Contract missing metadata - skipping occurrences`);
+        continue;
+      }
+
+      const sortedRows = shiftRows.slice().sort((a, b) => {
+        const dateA = a.stop1PlannedStartDate;
+        const dateB = b.stop1PlannedStartDate;
+        if (dateA && dateB) return dateA - dateB;
+        return 0;
+      });
+
+      const baselineIndex = sortedRows.findIndex(
+        r => r.stop1PlannedStartDate && r.stop1PlannedStartTime !== undefined && 
+             r.stop2PlannedArrivalDate && r.stop2PlannedArrivalTime !== undefined
+      );
+
+      if (baselineIndex === -1) {
+        result.warnings.push(`Operator ${operatorId}: No valid timing data - skipping occurrences`);
+        continue;
+      }
+
+      const baselineRow = sortedRows[baselineIndex];
+      const baselineActualStart = excelDateToJSDate(
+        baselineRow.stop1PlannedStartDate!,
+        baselineRow.stop1PlannedStartTime!
+      );
+      const baselinePatternGroup = detectPatternGroup(baselineActualStart, contract.startTime);
+      const baselineCanonicalStart = calculateCanonicalStart(
+        baselineActualStart,
+        contract.startTime,
+        baselinePatternGroup
+      );
+
+      // Build canonical timeline
+      const canonicalStarts: Date[] = sortedRows.map((_, i) => {
+        const dayCanonicalStart = new Date(baselineCanonicalStart);
+        dayCanonicalStart.setDate(dayCanonicalStart.getDate() + (i - baselineIndex));
+        return dayCanonicalStart;
+      });
+
+      // Create shift occurrences for each day
+      for (let i = 0; i < sortedRows.length; i++) {
+        const row = sortedRows[i];
+        const canonicalStart = canonicalStarts[i];
+        
+        // Service date is start of canonical day (date type, not timestamp)
+        const serviceDate = new Date(canonicalStart);
+        serviceDate.setHours(0, 0, 0, 0);
+
+        const hasActualTiming =
+          row.stop1PlannedStartDate && row.stop1PlannedStartTime !== undefined &&
+          row.stop2PlannedArrivalDate && row.stop2PlannedArrivalTime !== undefined;
+
+        let startTimestamp: Date;
+        let endTimestamp: Date;
+
+        if (hasActualTiming) {
+          startTimestamp = excelDateToJSDate(row.stop1PlannedStartDate!, row.stop1PlannedStartTime!);
+          endTimestamp = excelDateToJSDate(row.stop2PlannedArrivalDate!, row.stop2PlannedArrivalTime!);
+        } else {
+          result.warnings.push(`Operator ${operatorId}, day ${i + 1}: Synthesizing times from canonical`);
+          startTimestamp = canonicalStart;
+          endTimestamp = new Date(startTimestamp.getTime() + contract.duration * 60 * 60 * 1000);
+        }
+
+        const patternGroup = detectPatternGroup(canonicalStart, contract.startTime);
+        const cycleId = generateCycleId(patternGroup, canonicalStart);
+
+        // Upsert shift occurrence (unique by template + serviceDate)
+        const existingOccurrence = await db
+          .select()
+          .from(shiftOccurrences)
+          .where(
+            and(
+              eq(shiftOccurrences.tenantId, tenantId),
+              eq(shiftOccurrences.templateId, template.id),
+              eq(shiftOccurrences.serviceDate, serviceDate)
+            )
+          )
+          .limit(1);
+
+        if (existingOccurrence.length === 0) {
+          // Create new occurrence
+          await db.insert(shiftOccurrences).values({
+            tenantId,
+            templateId: template.id,
+            serviceDate,
+            scheduledStart: startTimestamp,
+            scheduledEnd: endTimestamp,
+            tractorId: parsedOperator.tractorId,
+            externalBlockId: row.blockId, // Store Amazon's block ID for reference
+            status: "unassigned",
+            isCarryover: false,
+            importBatchId,
+            patternGroup,
+            cycleId,
+          });
+        } else {
+          // Update existing occurrence
+          await db
+            .update(shiftOccurrences)
+            .set({
+              scheduledStart: startTimestamp,
+              scheduledEnd: endTimestamp,
+              tractorId: parsedOperator.tractorId,
+              externalBlockId: row.blockId,
+              patternGroup,
+              cycleId,
+            })
+            .where(eq(shiftOccurrences.id, existingOccurrence[0].id));
+        }
+      }
+    }
+
+    // ========== PHASE 2: ASSIGN DRIVERS TO SHIFT OCCURRENCES ==========
+    
+    // Fetch all drivers for driver name matching
+    const allDrivers = await db
+      .select()
+      .from(drivers)
+      .where(eq(drivers.tenantId, tenantId));
+
+    // Fetch all shift occurrences for this import batch
+    const allOccurrences = await db
+      .select()
+      .from(shiftOccurrences)
+      .where(
+        and(
+          eq(shiftOccurrences.tenantId, tenantId),
+          eq(shiftOccurrences.importBatchId, importBatchId)
+        )
+      );
+
+    // Fetch ALL assignments (active + archived) for rolling-6 compliance
+    const allAssignments = await db
+      .select()
+      .from(blockAssignments)
+      .where(eq(blockAssignments.tenantId, tenantId));
+    
+    const existingAssignments = allAssignments.filter(a => a.isActive);
+
+    const protectedRules = await db
+      .select()
+      .from(protectedDriverRules)
+      .where(eq(protectedDriverRules.tenantId, tenantId));
+
+    // Track assignments to commit
+    const assignmentsToCommit: Array<{
+      rowNum: number;
+      occurrenceId: string;
+      driverId: string;
+      validationStatus: string;
+      validationSummary: string | null;
+      operatorId: string;
+      existingAssignmentId?: string;
+    }> = [];
+
+    const processedOccurrences = new Set<string>();
+    const assignedOccurrencesInImport = new Set<string>();
+
+    // Validate and stage assignments
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const rowNum = i + 2;
+
+      if (!row.blockId || !row.driverName || !row.operatorId) {
+        result.failed++;
+        result.errors.push(`Row ${rowNum}: Missing required fields`);
+        continue;
+      }
+
+      // Find shift occurrence by externalBlockId (Amazon's block ID)
+      const occurrence = allOccurrences.find(
+        o => o.externalBlockId === row.blockId.trim()
+      );
+
+      if (!occurrence) {
+        result.failed++;
+        result.errors.push(`Row ${rowNum}: Shift occurrence not found for block ${row.blockId}`);
+        continue;
+      }
+
+      // Skip duplicates within this import
+      if (processedOccurrences.has(occurrence.id)) {
+        continue;
+      }
+      processedOccurrences.add(occurrence.id);
+
+      // Check if occurrence already assigned
+      const existingAssignment = existingAssignments.find(
+        a => a.shiftOccurrenceId === occurrence.id
+      );
+
+      if (existingAssignment) {
+        const assignmentIndex = existingAssignments.findIndex(a => a.id === existingAssignment.id);
+        if (assignmentIndex !== -1) {
+          existingAssignments.splice(assignmentIndex, 1);
+        }
+        result.warnings.push(`Row ${rowNum}: Shift ${row.blockId} was already assigned - will replace`);
+      }
+
+      if (assignedOccurrencesInImport.has(occurrence.id)) {
+        result.failed++;
+        result.errors.push(`Row ${rowNum}: Shift ${row.blockId} assigned multiple times in import`);
+        continue;
+      }
+
+      // Find driver by name (same matching logic as legacy)
+      const excelNameNormalized = normalizeDriverName(row.driverName);
+      const excelNameLower = row.driverName.trim().toLowerCase().replace(/\s+/g, " ");
+      
+      const driver = allDrivers.find((d) => {
+        const first = d.firstName.toLowerCase();
+        const last = d.lastName.toLowerCase();
+        const dbNameNormalized = normalizeDriverName(`${d.firstName} ${d.lastName}`);
+        
+        if (dbNameNormalized === excelNameNormalized) return true;
+        if (`${first} ${last}` === excelNameLower) return true;
+        if (`${last}, ${first}` === excelNameLower) return true;
+        if (`${last},${first}` === excelNameLower) return true;
+        
+        const hasFirst = excelNameNormalized.includes(first);
+        const hasLast = excelNameNormalized.includes(last);
+        if (!hasFirst || !hasLast) return false;
+        
+        const firstIndex = excelNameNormalized.indexOf(first);
+        const lastIndex = excelNameNormalized.indexOf(last);
+        return (firstIndex < lastIndex) || (excelNameNormalized.startsWith(last));
+      });
+
+      if (!driver) {
+        result.failed++;
+        result.errors.push(`Row ${rowNum}: Driver not found: "${row.driverName}"`);
+        continue;
+      }
+
+      // Get driver's existing assignments for validation
+      const driverExistingAssignments = existingAssignments.filter(
+        a => a.driverId === driver.id
+      );
+
+      // Fetch all driver blocks for rolling-6 validation
+      const allDriverAssignmentIds = allAssignments
+        .filter(a => a.driverId === driver.id && a.blockId !== null)
+        .map(a => a.blockId as string);
+
+      // Get all blocks for this driver (for validation)
+      const allDriverBlocks = await db
+        .select()
+        .from(blocks)
+        .where(
+          and(
+            eq(blocks.tenantId, tenantId),
+            inArray(blocks.id, allDriverAssignmentIds.length > 0 ? allDriverAssignmentIds : ["__none__"])
+          )
+        );
+
+      // Convert shift occurrence to block-like object for validation
+      const occurrenceAsBlock = {
+        id: occurrence.id,
+        tenantId: occurrence.tenantId,
+        blockId: occurrence.externalBlockId || `shift_${occurrence.id}`,
+        serviceDate: occurrence.serviceDate,
+        contractId: "", // Will be fetched from template
+        soloType: "", // Will be fetched from template
+        startTimestamp: occurrence.scheduledStart,
+        endTimestamp: occurrence.scheduledEnd,
+        tractorId: occurrence.tractorId,
+        duration: Math.round((occurrence.scheduledEnd.getTime() - occurrence.scheduledStart.getTime()) / (1000 * 60 * 60)),
+        patternGroup: occurrence.patternGroup || "sunWed",
+        canonicalStart: occurrence.scheduledStart, // Use scheduledStart as proxy
+        cycleId: occurrence.cycleId || "",
+        status: occurrence.status,
+        createdAt: occurrence.createdAt,
+        updatedAt: occurrence.updatedAt,
+      };
+
+      // Validate assignment using rolling-6 calculator
+      const validation = await validateBlockAssignment(
+        tenantId,
+        driver,
+        occurrenceAsBlock,
+        [...allDriverBlocks],
+        driverExistingAssignments,
+        protectedRules
+      );
+
+      if (validation.status === "error") {
+        result.failed++;
+        result.errors.push(`Row ${rowNum}: ${validation.summary}`);
+        continue;
+      }
+
+      // Stage for commit
+      assignmentsToCommit.push({
+        rowNum,
+        occurrenceId: occurrence.id,
+        driverId: driver.id,
+        validationStatus: validation.status,
+        validationSummary: validation.summary,
+        operatorId: row.operatorId,
+        existingAssignmentId: existingAssignment?.id,
+      });
+
+      assignedOccurrencesInImport.add(occurrence.id);
+
+      if (validation.status === "warning") {
+        result.warnings.push(`Row ${rowNum}: ${validation.summary}`);
+      }
+    }
+
+    // Commit all valid assignments in transaction
+    try {
+      await db.transaction(async (tx) => {
+        for (const assignment of assignmentsToCommit) {
+          // Archive old assignment if exists
+          if (assignment.existingAssignmentId) {
+            await tx
+              .update(blockAssignments)
+              .set({
+                isActive: false,
+                archivedAt: new Date(),
+              })
+              .where(eq(blockAssignments.id, assignment.existingAssignmentId));
+          }
+          
+          // Create new assignment with shiftOccurrenceId
+          await tx.insert(blockAssignments).values({
+            tenantId,
+            shiftOccurrenceId: assignment.occurrenceId, // NEW: use shiftOccurrenceId
+            blockId: null, // Legacy field, not used
+            driverId: assignment.driverId,
+            assignedBy: userId,
+            validationStatus: assignment.validationStatus,
+            validationSummary: assignment.validationSummary,
+            notes: `Shift-based import: ${assignment.operatorId}`,
+            importBatchId,
+            isActive: true,
+          });
+
+          // Update occurrence status to assigned
+          await tx
+            .update(shiftOccurrences)
+            .set({ status: "assigned" })
+            .where(eq(shiftOccurrences.id, assignment.occurrenceId));
+
+          result.created++;
+          
+          if (assignment.validationStatus === "warning") {
+            result.committedWithWarnings++;
+          }
+        }
+      });
+    } catch (error: any) {
+      result.errors.push(`Database commit failed (transaction rolled back): ${error.message}`);
+      result.failed = assignmentsToCommit.length - result.created;
+    }
+
+    return result;
+  } catch (error: any) {
+    result.errors.push(`Shift-based import failed: ${error.message}`);
     return result;
   }
 }
