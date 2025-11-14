@@ -121,6 +121,7 @@ export default function Schedules() {
     mutationFn: async ({ file, startDate }: { file: File; startDate: string }) => {
       const formData = new FormData();
       formData.append("file", file);
+      formData.append("importMode", "shift"); // Use shift-based import (Operator ID mapping)
       
       const url = `/api/schedules/excel-import?startDate=${encodeURIComponent(startDate)}`;
       const response = await fetch(url, {
