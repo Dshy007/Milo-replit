@@ -60,6 +60,11 @@ export default function Schedules() {
   const [shiftToDelete, setShiftToDelete] = useState<string | null>(null);
   const [importStartDate, setImportStartDate] = useState<string>("2025-11-03"); // Sunday, Nov 3, 2024
 
+  // Fetch contracts to get static start times
+  const { data: contracts = [] } = useQuery<Contract[]>({
+    queryKey: ["/api/contracts"],
+  });
+
   const handleOccurrenceClick = (occurrence: ShiftOccurrence) => {
     setSelectedOccurrence(occurrence);
     setIsAssignmentModalOpen(true);
@@ -250,6 +255,12 @@ export default function Schedules() {
     return Object.keys(occurrencesByStart).sort();
   }, [occurrencesByStart]);
 
+  // Get all unique start times from contracts (static reference)
+  const staticStartTimes = useMemo(() => {
+    const times = new Set(contracts.map(c => c.startTime));
+    return Array.from(times).sort();
+  }, [contracts]);
+
   // Navigation handlers
   const handlePreviousWeek = () => {
     setCurrentDate(subWeeks(currentDate, 1));
@@ -309,9 +320,43 @@ export default function Schedules() {
   }
 
   return (
-    <div className="flex flex-col h-full bg-background p-6 gap-6">
-      {/* Header */}
-      <div className="flex items-center justify-between gap-4">
+    <div className="flex h-full bg-background">
+      {/* Left Sidebar - Static Start Times */}
+      <div className="w-64 border-r bg-muted/30 p-4 overflow-y-auto">
+        <div className="space-y-4">
+          <div>
+            <h2 className="text-sm font-semibold text-foreground mb-3" data-testid="sidebar-start-times-title">
+              Start Times
+            </h2>
+            <p className="text-xs text-muted-foreground mb-4">
+              All contract start times
+            </p>
+          </div>
+          
+          <div className="space-y-1.5">
+            {staticStartTimes.length === 0 ? (
+              <div className="text-xs text-muted-foreground py-2">
+                No start times defined
+              </div>
+            ) : (
+              staticStartTimes.map((time) => (
+                <div
+                  key={time}
+                  className="px-3 py-2 rounded-md bg-card text-sm font-mono hover-elevate"
+                  data-testid={`static-time-${time}`}
+                >
+                  {formatTime(time)}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col p-6 gap-6 overflow-hidden">
+        {/* Header */}
+        <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="flex items-center justify-center w-10 h-10 rounded-full bg-primary/10">
             <Calendar className="w-5 h-5 text-primary" data-testid="schedules-icon" />
@@ -573,38 +618,39 @@ export default function Schedules() {
         </CardContent>
       </Card>
 
-      {/* Driver Assignment Modal - Temporarily disabled until modal is updated for occurrences */}
-      {/* TODO: Update DriverAssignmentModal to work with occurrenceId instead of blockId */}
-      {selectedOccurrence && false && (
-        <DriverAssignmentModal
-          block={null}
-          isOpen={isAssignmentModalOpen}
-          onClose={handleCloseModal}
-        />
-      )}
+        {/* Driver Assignment Modal - Temporarily disabled until modal is updated for occurrences */}
+        {/* TODO: Update DriverAssignmentModal to work with occurrenceId instead of blockId */}
+        {selectedOccurrence && false && (
+          <DriverAssignmentModal
+            block={null}
+            isOpen={isAssignmentModalOpen}
+            onClose={handleCloseModal}
+          />
+        )}
 
-      {/* Delete Confirmation Dialog */}
-      <AlertDialog open={!!shiftToDelete} onOpenChange={(open) => !open && setShiftToDelete(null)}>
-        <AlertDialogContent data-testid="dialog-confirm-delete">
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete Shift?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This will permanently remove this shift occurrence from the calendar. This action cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel data-testid="button-cancel-delete">Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={confirmDelete}
-              disabled={deleteMutation.isPending}
-              data-testid="button-confirm-delete"
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              {deleteMutation.isPending ? "Deleting..." : "Delete"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        {/* Delete Confirmation Dialog */}
+        <AlertDialog open={!!shiftToDelete} onOpenChange={(open) => !open && setShiftToDelete(null)}>
+          <AlertDialogContent data-testid="dialog-confirm-delete">
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete Shift?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This will permanently remove this shift occurrence from the calendar. This action cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel data-testid="button-cancel-delete">Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={confirmDelete}
+                disabled={deleteMutation.isPending}
+                data-testid="button-confirm-delete"
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                {deleteMutation.isPending ? "Deleting..." : "Delete"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </div>
     </div>
   );
 }
