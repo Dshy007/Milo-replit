@@ -271,7 +271,10 @@ export function validateProtectedDriverRules(
 
   const driverName = `${driver.firstName} ${driver.lastName}`;
 
-  for (const rule of protectedRules) {
+  // Filter rules to only those that apply to this specific driver
+  const driverRules = protectedRules.filter(rule => rule.driverId === driver.id);
+
+  for (const rule of driverRules) {
     // Check if rule is currently active (effective date range)
     if (rule.effectiveFrom && blockStart < new Date(rule.effectiveFrom)) {
       continue; // Rule not yet active
