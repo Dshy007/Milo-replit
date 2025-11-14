@@ -228,32 +228,28 @@ export default function Schedules() {
     },
   });
 
-  // Group occurrences by time slot, then by date: { "00:30": { "2025-11-03": [occ1, occ2], ... }, ... }
-  const occurrencesByStart = useMemo(() => {
+  // Group occurrences by contract (tractor), then by date
+  // This allows each row to show one tractor's schedule across the week
+  const occurrencesByContract = useMemo(() => {
     if (!calendarData) return {};
 
     const grouped: Record<string, Record<string, ShiftOccurrence[]>> = {};
 
     calendarData.occurrences.forEach((occ) => {
-      const timeSlot = occ.startTime; // canonical time (e.g., "00:30")
+      const tractorId = occ.tractorId || "unassigned";
       const date = occ.serviceDate; // YYYY-MM-DD
 
-      if (!grouped[timeSlot]) {
-        grouped[timeSlot] = {};
+      if (!grouped[tractorId]) {
+        grouped[tractorId] = {};
       }
-      if (!grouped[timeSlot][date]) {
-        grouped[timeSlot][date] = [];
+      if (!grouped[tractorId][date]) {
+        grouped[tractorId][date] = [];
       }
-      grouped[timeSlot][date].push(occ);
+      grouped[tractorId][date].push(occ);
     });
 
     return grouped;
   }, [calendarData]);
-
-  // Get sorted time slots for deterministic row order
-  const timeSlots = useMemo(() => {
-    return Object.keys(occurrencesByStart).sort();
-  }, [occurrencesByStart]);
 
   // Get sorted contracts for bench display (sorted by start time, then tractor)
   const sortedContracts = useMemo(() => {
@@ -326,71 +322,7 @@ export default function Schedules() {
   }
 
   return (
-    <div className="flex h-full bg-background">
-      {/* Left Sidebar - Bench Slots */}
-      <div className="w-80 border-r bg-muted/30 p-4 overflow-y-auto">
-        <div className="space-y-4">
-          <div>
-            <h2 className="text-sm font-semibold text-foreground mb-3" data-testid="sidebar-bench-title">
-              Bench Slots
-            </h2>
-            <p className="text-xs text-muted-foreground mb-4">
-              Static tractor assignments
-            </p>
-          </div>
-          
-          <div className="space-y-2">
-            {sortedContracts.length === 0 ? (
-              <div className="text-xs text-muted-foreground py-2">
-                No bench slots defined
-              </div>
-            ) : (
-              sortedContracts.map((contract) => (
-                <Card
-                  key={contract.id}
-                  className="hover-elevate"
-                  data-testid={`bench-slot-${contract.id}`}
-                >
-                  <CardContent className="p-3 space-y-1.5">
-                    {/* Start Time */}
-                    <div className="flex items-center justify-between">
-                      <span className="text-base font-mono font-semibold text-foreground">
-                        {formatTime(contract.startTime)} CT
-                      </span>
-                      <Badge 
-                        variant={contract.status === "active" ? "default" : "secondary"}
-                        className="text-xs"
-                        data-testid={`bench-status-${contract.id}`}
-                      >
-                        {contract.status}
-                      </Badge>
-                    </div>
-                    
-                    {/* Tractor */}
-                    <div className="text-sm text-foreground font-medium">
-                      {contract.tractorId}
-                    </div>
-                    
-                    {/* Contract Type & Site */}
-                    <div className="flex items-center gap-2 text-xs">
-                      <Badge 
-                        className={getBlockTypeColor(contract.type)}
-                        data-testid={`bench-type-${contract.id}`}
-                      >
-                        {contract.type}
-                      </Badge>
-                      <span className="text-muted-foreground">
-                        {contract.domicile || "MKC"}
-                      </span>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))
-            )}
-          </div>
-        </div>
-      </div>
-
+    <div className="flex flex-col h-full bg-background">
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col p-6 gap-6 overflow-hidden">
         {/* Header */}
@@ -517,8 +449,8 @@ export default function Schedules() {
           <table className="w-full border-collapse text-sm">
             <thead className="sticky top-0 z-10 bg-card border-b">
               <tr>
-                <th className="text-left p-2 font-semibold min-w-[140px] border-r">
-                  Start Time
+                <th className="text-left p-3 font-semibold min-w-[240px] border-r">
+                  Bench Slot
                 </th>
                 {weekRange.weekDays.map((day) => (
                   <th
@@ -534,28 +466,56 @@ export default function Schedules() {
               </tr>
             </thead>
             <tbody>
-              {timeSlots.length === 0 ? (
+              {sortedContracts.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="text-center py-12 text-muted-foreground">
-                    No shifts scheduled. Import schedule from Excel to get started.
+                    No bench slots defined. Set up contracts to get started.
                   </td>
                 </tr>
               ) : (
-                timeSlots.map((timeSlot) => (
-                  <tr key={timeSlot} className="border-b hover:bg-muted/30">
-                    {/* Time Slot Cell */}
-                    <td className="p-2 border-r align-top">
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-medium text-sm">
-                          {formatTime(timeSlot)}
-                        </span>
+                sortedContracts.map((contract) => (
+                  <tr key={contract.id} className="border-b hover:bg-muted/30">
+                    {/* Bench Slot Cell */}
+                    <td className="p-3 border-r align-top bg-muted/20">
+                      <div className="space-y-1.5">
+                        {/* Start Time & Status */}
+                        <div className="flex items-center justify-between">
+                          <span className="text-base font-mono font-semibold text-foreground">
+                            {formatTime(contract.startTime)} CT
+                          </span>
+                          <Badge 
+                            variant={contract.status === "active" ? "default" : "secondary"}
+                            className="text-xs"
+                            data-testid={`bench-status-${contract.id}`}
+                          >
+                            {contract.status}
+                          </Badge>
+                        </div>
+                        
+                        {/* Tractor */}
+                        <div className="text-sm text-foreground font-medium">
+                          {contract.tractorId}
+                        </div>
+                        
+                        {/* Contract Type & Site */}
+                        <div className="flex items-center gap-2 text-xs">
+                          <Badge 
+                            className={getBlockTypeColor(contract.type)}
+                            data-testid={`bench-type-${contract.id}`}
+                          >
+                            {contract.type}
+                          </Badge>
+                          <span className="text-muted-foreground">
+                            {contract.domicile || "MKC"}
+                          </span>
+                        </div>
                       </div>
                     </td>
 
                     {/* Day Cells */}
                     {weekRange.weekDays.map((day) => {
                       const dayISO = format(day, "yyyy-MM-dd");
-                      const dayOccurrences = occurrencesByStart[timeSlot]?.[dayISO] || [];
+                      const dayOccurrences = occurrencesByContract[contract.tractorId]?.[dayISO] || [];
 
                       return (
                         <td
