@@ -470,6 +470,7 @@ export async function parseExcelSchedule(
     // Track blocks assigned in this import to prevent duplicates
     const assignedBlocksInImport = new Set<string>();
     const driverBlocksInImport = new Map<string, string[]>(); // driverId -> blockIds
+    const processedBlockIds = new Set<string>(); // Track which block IDs we've seen in this import
     
     // Collect all valid assignments to commit atomically
     const assignmentsToCommit: Array<{
@@ -495,6 +496,13 @@ export async function parseExcelSchedule(
         continue;
       }
 
+      // Skip duplicate block IDs within this import (Amazon Excel has multiple rows per block for different stops)
+      if (processedBlockIds.has(row.blockId.trim())) {
+        continue; // Silently skip - not an error, just multiple stops for same block
+      }
+      
+      processedBlockIds.add(row.blockId.trim());
+
       // Find block by Block ID
       const block = allBlocks.find(
         (b) => b.blockId.trim() === row.blockId.trim()
@@ -508,7 +516,7 @@ export async function parseExcelSchedule(
         continue;
       }
 
-      // Check if block is already assigned (either in DB or in this import)
+      // Check if block is already assigned in DB
       const existingAssignment = existingAssignments.find(
         (a) => a.blockId === block.id
       );
