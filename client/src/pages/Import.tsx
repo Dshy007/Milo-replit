@@ -25,7 +25,7 @@ import { Upload, FileText, AlertCircle, CheckCircle2, Download } from "lucide-re
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
 
-type EntityType = "drivers" | "routes" | "trucks" | "loads" | "blocks" | "assignments";
+type EntityType = "schedules" | "drivers" | "trucks" | "startTimes";
 
 interface PreviewRow {
   data: Record<string, any>;
@@ -45,14 +45,15 @@ export default function Import() {
 
   const importMutation = useMutation({
     mutationFn: async (data: { entityType: EntityType; rows: any[]; file?: File }) => {
-      // For blocks, use specialized Excel import endpoint
-      if (data.entityType === "blocks" && data.file) {
+      // For schedules, use specialized Excel import endpoint
+      if (data.entityType === "schedules" && data.file) {
         const formData = new FormData();
         formData.append("file", data.file);
         
         const response = await fetch("/api/schedules/excel-import", {
           method: "POST",
           body: formData,
+          credentials: "include",
         });
         
         if (!response.ok) {
@@ -63,8 +64,11 @@ export default function Import() {
         return response.json();
       }
       
+      // Map startTimes to contracts endpoint
+      const endpoint = data.entityType === "startTimes" ? "contracts" : data.entityType;
+      
       // For other entity types, use generic import endpoint
-      const response = await apiRequest("POST", `/api/import/${data.entityType}`, {
+      const response = await apiRequest("POST", `/api/import/${endpoint}`, {
         rows: data.rows,
       });
       return response.json();
@@ -273,8 +277,8 @@ export default function Import() {
   };
 
   const validateData = (data: any[], headers: string[]) => {
-    // Skip validation for blocks - specialized endpoint handles it
-    if (entityType === "blocks") {
+    // Skip validation for schedules - specialized endpoint handles it
+    if (entityType === "schedules") {
       setValidationErrors([]);
       return;
     }
@@ -313,18 +317,14 @@ export default function Import() {
 
   const getRequiredFields = (type: EntityType): string[] => {
     switch (type) {
+      case "schedules":
+        return []; // Specialized endpoint handles validation
       case "drivers":
         return ["firstName", "lastName"];
-      case "routes":
-        return ["name", "origin", "destination"];
       case "trucks":
         return ["truckNumber", "make", "model"];
-      case "loads":
-        return ["loadNumber", "pickupLocation", "deliveryLocation", "pickupTime", "deliveryTime"];
-      case "blocks":
-        return ["contractId", "soloType", "startTimestamp", "duration"];
-      case "assignments":
-        return ["blockId", "driverId"];
+      case "startTimes":
+        return ["operatorId", "soloType", "domicile", "startTime"];
       default:
         return [];
     }
@@ -340,8 +340,8 @@ export default function Import() {
       return;
     }
 
-    // Skip validation for blocks - specialized endpoint handles it
-    if (entityType !== "blocks" && validationErrors.length > 0) {
+    // Skip validation for schedules - specialized endpoint handles it
+    if (entityType !== "schedules" && validationErrors.length > 0) {
       toast({
         variant: "destructive",
         title: "Validation Errors",
@@ -354,18 +354,16 @@ export default function Import() {
     importMutation.mutate({
       entityType,
       rows: fullData,
-      file: entityType === "blocks" ? file : undefined,
+      file: entityType === "schedules" ? file : undefined,
     });
   };
 
   const downloadTemplate = () => {
     const templates = {
+      schedules: "Block ID,Driver Name,Operator ID,Stop 1 Planned Arrival Date,Stop 1 Planned Arrival Time,Stop 2 Planned Arrival Date,Stop 2 Planned Arrival Time\nB-ABC123,John Doe,FTIM_MKC_Solo1_Tractor_1_d1,2025-11-10,08:00,2025-11-10,22:00\n",
       drivers: "firstName,lastName,email,phoneNumber,licenseNumber,licenseExpiry\nJohn,Doe,john@example.com,555-1234,DL123456,2025-12-31\n",
-      routes: "name,origin,destination,distance,estimatedDuration,notes\nRoute 1,Chicago IL,New York NY,790.5,720,Main interstate route\n",
       trucks: "truckNumber,make,model,year,vin,licensePlate,status,lastInspection\nTRK-001,Freightliner,Cascadia,2022,1FUJGHDV8MLJA1234,IL-ABC123,active,2024-01-15\n",
-      loads: "loadNumber,pickupLocation,deliveryLocation,pickupTime,deliveryTime,weight,status,description\nLD-001,123 Main St Chicago,456 Oak Ave NYC,2024-12-01 08:00,2024-12-01 17:00,5000,pending,Test shipment\n",
-      blocks: "contractId,blockId,soloType,startTimestamp,endTimestamp,duration,tractorId\ncontract-uuid-1,BLOCK-001,Solo1,2024-12-01 08:00,2024-12-01 22:00,14,Tractor_1\n",
-      assignments: "blockId,driverId\nblock-uuid-1,driver-uuid-1\n",
+      startTimes: "operatorId,soloType,domicile,startTime,tractorId\nFTIM_MKC_Solo1_Tractor_1_d1,Solo1,MKC,08:00,Tractor_1\n",
     };
 
     const csvContent = templates[entityType];
@@ -427,12 +425,10 @@ export default function Import() {
               <SelectValue placeholder="Select entity type" />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value="schedules">Schedules (Amazon Excel)</SelectItem>
               <SelectItem value="drivers">Drivers</SelectItem>
               <SelectItem value="trucks">Trucks</SelectItem>
-              <SelectItem value="blocks">Blocks</SelectItem>
-              <SelectItem value="assignments">Block Assignments</SelectItem>
-              <SelectItem value="routes">Routes</SelectItem>
-              <SelectItem value="loads">Loads</SelectItem>
+              <SelectItem value="startTimes">Start Times (Contracts)</SelectItem>
             </SelectContent>
           </Select>
         </CardContent>

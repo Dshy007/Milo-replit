@@ -1,10 +1,21 @@
 import { useState, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { format, startOfWeek, addWeeks, subWeeks, eachDayOfInterval, addDays } from "date-fns";
-import { ChevronLeft, ChevronRight, Calendar, User } from "lucide-react";
+import { ChevronLeft, ChevronRight, Calendar, User, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { useToast } from "@/hooks/use-toast";
+import { queryClient } from "@/lib/queryClient";
 import { DriverAssignmentModal } from "@/components/DriverAssignmentModal";
 import type { Block, BlockAssignment, Driver, Contract } from "@shared/schema";
 
@@ -20,9 +31,12 @@ type CalendarResponse = {
 };
 
 export default function Schedules() {
+  const { toast } = useToast();
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedBlock, setSelectedBlock] = useState<(Block & { contract: Contract | null }) | null>(null);
   const [isAssignmentModalOpen, setIsAssignmentModalOpen] = useState(false);
+  const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
 
   const handleBlockClick = (block: Block & { contract: Contract | null }) => {
     setSelectedBlock(block);
@@ -32,6 +46,64 @@ export default function Schedules() {
   const handleCloseModal = () => {
     setIsAssignmentModalOpen(false);
     setSelectedBlock(null);
+  };
+
+  const importMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      
+      const response = await fetch("/api/schedules/excel-import", {
+        method: "POST",
+        body: formData,
+        credentials: "include",
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || "Failed to import schedule");
+      }
+      
+      return response.json();
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
+      
+      toast({
+        title: "Import Successful",
+        description: result.message || `Imported ${result.summary?.imported || 0} blocks successfully`,
+      });
+      
+      setIsImportDialogOpen(false);
+      setImportFile(null);
+    },
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Import Failed",
+        description: error.message || "Failed to import schedule",
+      });
+    },
+  });
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      setImportFile(files[0]);
+    }
+  };
+
+  const handleImport = () => {
+    if (!importFile) {
+      toast({
+        variant: "destructive",
+        title: "No File Selected",
+        description: "Please select an Excel file to import",
+      });
+      return;
+    }
+
+    importMutation.mutate(importFile);
   };
 
   // Calculate week range (Sunday to Saturday)
@@ -178,8 +250,69 @@ export default function Schedules() {
           </div>
         </div>
 
-        {/* Week Navigation */}
+        {/* Actions */}
         <div className="flex items-center gap-2">
+          <Dialog open={isImportDialogOpen} onOpenChange={setIsImportDialogOpen}>
+            <DialogTrigger asChild>
+              <Button variant="default" size="sm" data-testid="button-import-schedule">
+                <Upload className="w-4 h-4 mr-2" />
+                Import Schedule
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Import Schedule from Excel</DialogTitle>
+                <DialogDescription>
+                  Upload Amazon roster Excel file to import blocks and driver assignments
+                </DialogDescription>
+              </DialogHeader>
+              
+              <div className="space-y-4">
+                <Alert>
+                  <AlertDescription>
+                    <strong>Expected format:</strong> Amazon Excel with columns Block ID, Driver Name, Operator ID, Stop 1/2 Planned Arrival Date/Time
+                  </AlertDescription>
+                </Alert>
+
+                <div className="flex items-center gap-4">
+                  <input
+                    type="file"
+                    accept=".xlsx,.xls"
+                    onChange={handleFileSelect}
+                    className="flex-1 text-sm"
+                    data-testid="input-import-file"
+                  />
+                </div>
+
+                {importFile && (
+                  <div className="text-sm text-muted-foreground">
+                    Selected: {importFile.name}
+                  </div>
+                )}
+
+                <div className="flex justify-end gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setIsImportDialogOpen(false);
+                      setImportFile(null);
+                    }}
+                    data-testid="button-cancel-import"
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handleImport}
+                    disabled={!importFile || importMutation.isPending}
+                    data-testid="button-confirm-import"
+                  >
+                    {importMutation.isPending ? "Importing..." : "Import"}
+                  </Button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
+
           <Button
             variant="outline"
             size="sm"
