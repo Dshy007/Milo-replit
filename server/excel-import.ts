@@ -218,16 +218,97 @@ function generateCycleId(patternGroup: "sunWed" | "wedSat", canonicalStart: Date
 }
 
 /**
+ * Normalize driver name by removing trailing suffixes and punctuation
+ * Preserves legitimate names like "Junior Alvarez" and "Maria Senior"
+ * 
+ * Strategy:
+ * - ALWAYS remove abbreviated suffixes (Jr, Sr, II, III, IV, V, 2nd, 3rd, 4th)
+ * - ONLY remove full words (Junior, Senior) if they came after punctuation in original
+ * 
+ * Examples:
+ * - "John Smith Jr" → "john smith"
+ * - "Robert Dixon, Jr." → "robert dixon"
+ * - "Mary Johnson III" → "mary johnson"
+ * - "Junior Alvarez" → "junior alvarez" (preserved - no punctuation cue)
+ * - "Maria Senior" → "maria senior" (preserved - Senior is surname)
+ * - "Robert Charles, Senior" → "robert charles" (removed - came after comma)
+ */
+function normalizeDriverName(name: string): string {
+  const original = name.trim().toLowerCase();
+  
+  // Check if original had punctuation before/after full-word suffixes
+  // Only needed for "junior" and "senior" which could be legitimate names
+  const hasFullWordSuffixWithPunctuation = /[,;:.][\s]*(junior|senior)[,;:.]?$/i.test(original);
+  
+  // Remove common punctuation (commas, periods, semicolons, colons)
+  let normalized = original.replace(/[,;:.]/g, " ");
+  
+  // Collapse multiple spaces
+  normalized = normalized.replace(/\s+/g, " ").trim();
+  
+  const words = normalized.split(" ");
+  
+  if (words.length > 1) {
+    // Abbreviated suffixes - ALWAYS remove (almost never legitimate surnames)
+    const abbreviatedSuffixes = ["jr", "sr", "ii", "iii", "iv", "v", "2nd", "3rd", "4th"];
+    
+    // Full-word suffixes - ONLY remove if punctuation detected (could be real names)
+    const fullWordSuffixes = hasFullWordSuffixWithPunctuation ? ["junior", "senior"] : [];
+    
+    const allSuffixes = [...abbreviatedSuffixes, ...fullWordSuffixes];
+    
+    // Remove trailing suffixes
+    while (words.length > 1 && allSuffixes.includes(words[words.length - 1])) {
+      words.pop();
+    }
+  }
+  
+  return words.join(" ").trim();
+}
+
+/**
  * Parse Operator ID to extract contract type and tractor
- * Format: "FTIM_MKC_Solo1_Tractor_2_d2" → { type: "solo1", tractorId: "Tractor_2" }
+ * 
+ * Handles Amazon's format variations:
+ * - "FTIM_MKC_Solo1_Tractor_2_d2" (standard)
+ * - "FTIM_MKC_Solo 1_TRACTOR-02_d2" (space in type, dash in tractor)
+ * - "FTIM_MKC_solo2_Tractor_5_d2" (lowercase)
+ * 
+ * Returns: { type: "solo1", tractorId: "Tractor_2" } or null if parsing fails
  */
 function parseOperatorId(operatorId: string): { type: string; tractorId: string } | null {
-  const match = operatorId.match(/_(Solo1|Solo2|Team)_Tractor_(\d+)/i);
-  if (!match) return null;
+  // Normalize: collapse multiple spaces to single space for consistent matching
+  const normalized = operatorId.replace(/\s+/g, " ").trim();
+  
+  // Comprehensive pattern that handles Amazon variations:
+  // - Contract type: Solo1, Solo 1, SOLO1, Solo2, Solo 2, SOLO2, Team, TEAM
+  // - Tractor delimiter: _, -, or space
+  // - Tractor format: Tractor_2, TRACTOR-02, Tractor 2, tractor02
+  const pattern = /_(Solo\s*1|Solo\s*2|Team)[_\s-]+(Tractor|TRACTOR)[_\s-]*(\d+)/i;
+  
+  const match = normalized.match(pattern);
+  if (!match) {
+    // Failed to parse - return null so caller can log and skip
+    return null;
+  }
+  
+  const contractType = match[1].replace(/\s+/g, "").toLowerCase(); // "solo1", "solo2", "team"
+  const tractorNumberRaw = match[3]; // Extracted digit(s)
+  
+  // Normalize tractor number: remove leading zeros to match existing contracts/blocks
+  // "02" → "2", "10" → "10"
+  // Special case: "00" is invalid, treat as parse failure
+  const tractorNumberParsed = parseInt(tractorNumberRaw, 10);
+  if (tractorNumberParsed === 0) {
+    // Invalid tractor number (e.g., "00")
+    return null;
+  }
+  
+  const tractorNumber = String(tractorNumberParsed);
   
   return {
-    type: match[1].toLowerCase(), // "solo1", "solo2", "team"
-    tractorId: `Tractor_${match[2]}`, // "Tractor_1", "Tractor_2", etc.
+    type: contractType,
+    tractorId: `Tractor_${tractorNumber}`,
   };
 }
 
@@ -364,7 +445,7 @@ export async function parseExcelSchedule(
 
       // Find existing contract using ONLY Operator ID (type + tractorId)
       // Contract times are fixed benchmark times, not imported from Excel
-      const existingContracts = await db
+      let existingContracts = await db
         .select()
         .from(contracts)
         .where(
@@ -376,12 +457,43 @@ export async function parseExcelSchedule(
         );
 
       if (existingContracts.length === 0) {
-        // Contract not found - skip this block
+        // Auto-create missing contract using Excel timing data
+        // This handles Amazon data with contract types not in the 17 benchmark set
         result.warnings.push(
-          `Block ${blockId}: No contract found for ${parsedOperator.type.toUpperCase()} ${parsedOperator.tractorId}. ` +
-          `Please ensure the 17 benchmark contracts are seeded before importing.`
+          `Block ${blockId}: Auto-creating contract for ${parsedOperator.type.toUpperCase()} ${parsedOperator.tractorId} ` +
+          `using timing data from Excel. Consider seeding this contract as a benchmark.`
         );
-        continue;
+        
+        // Calculate duration from first block's timing data
+        const duration = Math.round((endTimestamp.getTime() - startTimestamp.getTime()) / (1000 * 60 * 60));
+        
+        // Extract canonical start time from Excel (will be used as benchmark)
+        const startHour = startTimestamp.getHours();
+        const startMinute = startTimestamp.getMinutes();
+        const startTimeStr = `${String(startHour).padStart(2, '0')}:${String(startMinute).padStart(2, '0')}`;
+        
+        // Determine baseRoutes based on contract type
+        const baseRoutes = parsedOperator.type === "solo1" ? 10 : parsedOperator.type === "solo2" ? 7 : 5;
+        
+        // Construct contract name
+        const contractName = `${parsedOperator.type.toUpperCase()} ${startTimeStr} ${parsedOperator.tractorId}`;
+        
+        // Create placeholder contract
+        const [newContract] = await db.insert(contracts).values({
+          tenantId,
+          name: contractName, // e.g., "SOLO1 16:30 Tractor_2"
+          type: parsedOperator.type, // "solo1", "solo2", "team"
+          tractorId: parsedOperator.tractorId, // "Tractor_1", "Tractor_2", etc.
+          startTime: startTimeStr, // e.g., "16:30"
+          duration, // Calculated from Excel timing
+          baseRoutes, // 10 for solo1, 7 for solo2, 5 for team
+          status: "active",
+          domicile: "MKC", // Default domicile (can be updated later)
+          daysPerWeek: 6, // Standard rolling 6-day pattern
+          protectedDrivers: false,
+        }).returning();
+        
+        existingContracts = [newContract];
       }
 
       if (existingContracts.length > 1) {
@@ -568,28 +680,36 @@ export async function parseExcelSchedule(
       }
 
       // Find driver by name (robust matching: handles "Last, First", "First Last", middle names, suffixes)
-      const driverNameLower = row.driverName.trim().toLowerCase().replace(/\s+/g, " ");
+      // Normalize both Excel name and DB names to remove suffixes (Jr, Sr, III, etc.)
+      const excelNameNormalized = normalizeDriverName(row.driverName);
+      const excelNameLower = row.driverName.trim().toLowerCase().replace(/\s+/g, " ");
       
       const driver = allDrivers.find((d) => {
         const first = d.firstName.toLowerCase();
         const last = d.lastName.toLowerCase();
         
-        // Try exact match: "First Last"
-        if (`${first} ${last}` === driverNameLower) return true;
+        // Normalize DB driver name (First Last)
+        const dbNameNormalized = normalizeDriverName(`${d.firstName} ${d.lastName}`);
+        
+        // Try exact match after normalization (handles suffixes)
+        if (dbNameNormalized === excelNameNormalized) return true;
+        
+        // Try exact match without normalization: "First Last"
+        if (`${first} ${last}` === excelNameLower) return true;
         
         // Try "Last, First" format (common in Excel exports)
-        if (`${last}, ${first}` === driverNameLower) return true;
-        if (`${last},${first}` === driverNameLower) return true;
+        if (`${last}, ${first}` === excelNameLower) return true;
+        if (`${last},${first}` === excelNameLower) return true;
         
-        // Try with middle names/suffixes: contains both first AND last
-        const hasFirst = driverNameLower.includes(first);
-        const hasLast = driverNameLower.includes(last);
+        // Try with middle names/suffixes: contains both first AND last (after normalization)
+        const hasFirst = excelNameNormalized.includes(first);
+        const hasLast = excelNameNormalized.includes(last);
         if (!hasFirst || !hasLast) return false;
         
         // Ensure proper ordering (First...Last or Last...First)
-        const firstIndex = driverNameLower.indexOf(first);
-        const lastIndex = driverNameLower.indexOf(last);
-        return (firstIndex < lastIndex) || (driverNameLower.startsWith(last));
+        const firstIndex = excelNameNormalized.indexOf(first);
+        const lastIndex = excelNameNormalized.indexOf(last);
+        return (firstIndex < lastIndex) || (excelNameNormalized.startsWith(last));
       });
 
       if (!driver) {
