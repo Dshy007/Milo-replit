@@ -1,6 +1,6 @@
 import { startOfWeek, endOfWeek, isSameDay, eachDayOfInterval } from "date-fns";
 import type { Block, BlockAssignment, Driver, ProtectedDriverRule } from "@shared/schema";
-import { validateBlockAssignment } from "./rolling6-calculator";
+import { validateBlockAssignment, blockToAssignmentSubject } from "./rolling6-calculator";
 
 export interface WorkloadSummary {
   driverId: string;
@@ -169,10 +169,11 @@ export async function findSwapCandidates(
     // Validate compliance and protected rules
     const validationResult = await validateBlockAssignment(
       driver,
-      proposedBlock,
+      blockToAssignmentSubject(proposedBlock),
       driverAssignments,
       driverRules,
-      allAssignments
+      allAssignments,
+      proposedBlock.id
     );
     
     // Calculate workload for ranking

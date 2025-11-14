@@ -1,5 +1,8 @@
-import type { Block, BlockAssignment, Driver, ProtectedDriverRule } from "@shared/schema";
+import type { Block, BlockAssignment, Driver, ProtectedDriverRule, shiftOccurrences, shiftTemplates } from "@shared/schema";
 import { subDays, format, getDay, addHours } from "date-fns";
+
+type ShiftOccurrence = typeof shiftOccurrences.$inferSelect;
+type ShiftTemplate = typeof shiftTemplates.$inferSelect;
 
 /**
  * DOT Rolling-6 Compliance Calculator
@@ -31,6 +34,57 @@ export interface AssignmentGuardResult {
   validationResult: ValidationResult;
   protectedRuleViolations: string[];
   conflictingAssignments: BlockAssignment[];
+}
+
+/**
+ * Minimal interface for assignment subjects (blocks or shift occurrences)
+ * Contains only the fields needed for DOT validation, decoupling validation
+ * logic from specific storage schemas.
+ */
+export interface AssignmentSubject {
+  startTimestamp: Date;
+  endTimestamp: Date;
+  duration: number;
+  soloType: string;
+  cycleId: string;
+  patternGroup: "sunWed" | "wedSat";
+}
+
+/**
+ * Adapter: Convert Block to AssignmentSubject
+ * Allows legacy block-based assignments to work with new validation logic
+ */
+export function blockToAssignmentSubject(block: Block): AssignmentSubject {
+  return {
+    startTimestamp: new Date(block.startTimestamp),
+    endTimestamp: new Date(block.endTimestamp),
+    duration: block.duration,
+    soloType: block.soloType,
+    cycleId: block.cycleId || "",
+    patternGroup: block.patternGroup as "sunWed" | "wedSat",
+  };
+}
+
+/**
+ * Adapter: Convert ShiftOccurrence + ShiftTemplate to AssignmentSubject
+ * Allows new shift-based assignments to work with validation logic
+ * CRITICAL: Template provides the Contract Slot metadata (operatorId, tractorId, soloType, time)
+ */
+export function shiftOccurrenceToAssignmentSubject(
+  occurrence: ShiftOccurrence,
+  template: ShiftTemplate
+): AssignmentSubject {
+  return {
+    startTimestamp: new Date(occurrence.scheduledStart),
+    endTimestamp: new Date(occurrence.scheduledEnd),
+    duration: Math.round(
+      (new Date(occurrence.scheduledEnd).getTime() - new Date(occurrence.scheduledStart).getTime()) / 
+      (1000 * 60 * 60)
+    ),
+    soloType: template.soloType,
+    cycleId: occurrence.cycleId || "",
+    patternGroup: (occurrence.patternGroup || template.patternGroup) as "sunWed" | "wedSat",
+  };
 }
 
 /**
@@ -83,19 +137,19 @@ export function normalizeSoloType(soloType: string): string {
 
 export async function validateRolling6Compliance(
   driver: Driver,
-  proposedBlock: Block,
+  proposedSubject: AssignmentSubject,
   existingAssignments: Array<BlockAssignment & { block: Block }>,
 ): Promise<ValidationResult> {
-  const soloType = normalizeSoloType(proposedBlock.soloType);
-  const proposedStart = new Date(proposedBlock.startTimestamp);
-  const proposedDuration = proposedBlock.duration;
+  const soloType = normalizeSoloType(proposedSubject.soloType);
+  const proposedStart = new Date(proposedSubject.startTimestamp);
+  const proposedDuration = proposedSubject.duration;
 
   // Validate solo type
   if (soloType !== "solo1" && soloType !== "solo2") {
     return {
       isValid: false,
       validationStatus: "violation",
-      messages: [`Unsupported solo type: ${proposedBlock.soloType}. Only Solo1 and Solo2 are supported.`],
+      messages: [`Unsupported solo type: ${proposedSubject.soloType}. Only Solo1 and Solo2 are supported.`],
       metrics: {},
     };
   }
@@ -260,14 +314,14 @@ export async function validateRolling6Compliance(
  */
 export function validateProtectedDriverRules(
   driver: Driver,
-  proposedBlock: Block,
+  proposedSubject: AssignmentSubject,
   protectedRules: ProtectedDriverRule[],
 ): string[] {
   const violations: string[] = [];
-  const blockStart = new Date(proposedBlock.startTimestamp);
+  const blockStart = new Date(proposedSubject.startTimestamp);
   const dayOfWeek = format(blockStart, "EEEE"); // e.g., "Friday"
   const startTime = format(blockStart, "HH:mm"); // e.g., "16:30"
-  const soloType = normalizeSoloType(proposedBlock.soloType);
+  const soloType = normalizeSoloType(proposedSubject.soloType);
 
   const driverName = `${driver.firstName} ${driver.lastName}`;
 
@@ -306,7 +360,7 @@ export function validateProtectedDriverRules(
       const allowedNormalized = rule.allowedSoloTypes.map(s => normalizeSoloType(s));
       if (!allowedNormalized.includes(soloType)) {
         violations.push(
-          `Rule "${rule.ruleName}": Driver ${driverName} can only work ${rule.allowedSoloTypes.join(", ")} types, not ${proposedBlock.soloType}`
+          `Rule "${rule.ruleName}": Driver ${driverName} can only work ${rule.allowedSoloTypes.join(", ")} types, not ${proposedSubject.soloType}`
         );
       }
     }
@@ -338,39 +392,42 @@ export function validateProtectedDriverRules(
  */
 export async function validateBlockAssignment(
   driver: Driver,
-  proposedBlock: Block,
+  proposedSubject: AssignmentSubject,
   existingAssignments: Array<BlockAssignment & { block: Block }>,
   protectedRules: ProtectedDriverRule[],
   allBlockAssignments: BlockAssignment[], // All assignments across all drivers
+  blockId?: string, // Optional: for legacy block-based assignments to check conflicts
 ): Promise<AssignmentGuardResult> {
-  // 1. Check if block is already assigned
-  const existingAssignment = allBlockAssignments.find(
-    (a) => a.blockId === proposedBlock.id
-  );
-  const conflictingAssignments: BlockAssignment[] = existingAssignment
-    ? [existingAssignment]
-    : [];
+  // 1. Check if block is already assigned (only for legacy block-based assignments)
+  let conflictingAssignments: BlockAssignment[] = [];
+  
+  if (blockId) {
+    const existingAssignment = allBlockAssignments.find(
+      (a) => a.blockId === blockId
+    );
+    conflictingAssignments = existingAssignment ? [existingAssignment] : [];
 
-  if (existingAssignment) {
-    return {
-      canAssign: false,
-      validationResult: {
-        isValid: false,
-        validationStatus: "violation",
-        messages: [
-          `Block ${proposedBlock.blockId} is already assigned to another driver`,
-        ],
-        metrics: {},
-      },
-      protectedRuleViolations: [],
-      conflictingAssignments,
-    };
+    if (existingAssignment) {
+      return {
+        canAssign: false,
+        validationResult: {
+          isValid: false,
+          validationStatus: "violation",
+          messages: [
+            `Block is already assigned to another driver`,
+          ],
+          metrics: {},
+        },
+        protectedRuleViolations: [],
+        conflictingAssignments,
+      };
+    }
   }
 
   // 2. Check protected driver rules
   const ruleViolations = validateProtectedDriverRules(
     driver,
-    proposedBlock,
+    proposedSubject,
     protectedRules,
   );
 
@@ -391,7 +448,7 @@ export async function validateBlockAssignment(
   // 3. Check rolling-6 compliance
   const rolling6Result = await validateRolling6Compliance(
     driver,
-    proposedBlock,
+    proposedSubject,
     existingAssignments,
   );
 

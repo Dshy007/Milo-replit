@@ -2,7 +2,7 @@ import { db } from "./db";
 import { drivers, blocks, blockAssignments, assignmentHistory, driverContractStats, protectedDriverRules } from "@shared/schema";
 import { eq, and, desc, inArray } from "drizzle-orm";
 import { validateBumpTolerance, validateRestPeriod } from "./bump-validation";
-import { validateBlockAssignment } from "./rolling6-calculator";
+import { validateBlockAssignment, blockToAssignmentSubject } from "./rolling6-calculator";
 
 export interface DriverSuggestion {
   driver: {
@@ -176,10 +176,11 @@ export async function getAssignmentSuggestions(
 
     const validation = await validateBlockAssignment(
       driver,
-      targetBlock,
+      blockToAssignmentSubject(targetBlock),
       driverExistingAssignments,
       protectedRules,
-      existingAssignments
+      existingAssignments,
+      targetBlock.id
     );
 
     // Skip if DOT violation or protected rule violation

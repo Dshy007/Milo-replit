@@ -23,7 +23,7 @@ import { fromZodError } from "zod-validation-error";
 import bcrypt from "bcryptjs";
 import { benchContracts } from "./seed-data";
 import multer from "multer";
-import { validateBlockAssignment, normalizeSoloType } from "./rolling6-calculator";
+import { validateBlockAssignment, normalizeSoloType, blockToAssignmentSubject } from "./rolling6-calculator";
 import { subDays, parseISO, format, startOfWeek, addWeeks } from "date-fns";
 import { findSwapCandidates, getAllDriverWorkloads } from "./workload-calculator";
 import { analyzeCascadeEffect, executeCascadeChange, type CascadeAnalysisRequest } from "./cascade-analyzer";
@@ -2025,10 +2025,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Run comprehensive validation
       const validationResult = await validateBlockAssignment(
         driver,
-        block,
+        blockToAssignmentSubject(block),
         existingAssignments,
         protectedRules,
-        allAssignments
+        allAssignments,
+        block.id // For conflict checking
       );
       
       // If validation failed, return detailed error
@@ -2115,10 +2116,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
         const validationResult = await validateBlockAssignment(
           driver,
-          block,
+          blockToAssignmentSubject(block),
           filteredAssignments,
           protectedRules,
-          filteredAllAssignments
+          filteredAllAssignments,
+          block.id // For conflict checking
         );
         
         if (!validationResult.canAssign) {
@@ -2395,10 +2397,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 
                 const validationResult = await validateBlockAssignment(
                   driver,
-                  block,
+                  blockToAssignmentSubject(block),
                   existingAssignments,
                   protectedRules,
-                  allBlockAssignments
+                  allBlockAssignments,
+                  block.id // For conflict checking
                 );
                 
                 if (!validationResult.canAssign) {
@@ -3414,10 +3417,11 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
 
       const validation = await validateBlockAssignment(
         targetDriver,
-        targetBlock,
+        blockToAssignmentSubject(targetBlock),
         driverAssignmentsWithBlocks,
         protectedRules,
-        allExistingAssignments
+        allExistingAssignments,
+        targetBlock.id // For conflict checking
       );
 
       if (!validation.canAssign) {

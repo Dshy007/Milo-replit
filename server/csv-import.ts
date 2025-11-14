@@ -1,7 +1,7 @@
 import { db } from "./db";
 import { drivers, contracts, blocks, blockAssignments, protectedDriverRules } from "@shared/schema";
 import { eq, and, inArray } from "drizzle-orm";
-import { validateBlockAssignment } from "./rolling6-calculator";
+import { validateBlockAssignment, blockToAssignmentSubject } from "./rolling6-calculator";
 import { format, getDay, startOfDay } from "date-fns";
 
 interface CSVRow {
@@ -327,10 +327,11 @@ export async function validateCSVImport(
 
     const validation = await validateBlockAssignment(
       driverObj,
-      matchingBlock,
+      blockToAssignmentSubject(matchingBlock),
       driverExistingAssignments,
       fetchedProtectedRules,
-      allTenantAssignments
+      allTenantAssignments,
+      matchingBlock.id
     );
 
     // Check for hard-stop issues: protected rules or conflicts
@@ -456,10 +457,11 @@ export async function commitCSVImport(
 
       const validation = await validateBlockAssignment(
         driverObj,
-        block,
+        blockToAssignmentSubject(block),
         driverExistingAssignments,
         fetchedProtectedRules,
-        allTenantAssignments
+        allTenantAssignments,
+        block.id
       );
 
       // Block on hard-stops: protected rules, conflicts, or DOT violations

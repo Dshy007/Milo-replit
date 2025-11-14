@@ -20,7 +20,7 @@ import {
   CONFIDENCE_THRESHOLDS,
 } from "./pattern-engine";
 import { getDriverWorkloadForWeek } from "./workload-calculator";
-import { validateBlockAssignment, type AssignmentGuardResult } from "./rolling6-calculator";
+import { validateBlockAssignment, type AssignmentGuardResult, blockToAssignmentSubject } from "./rolling6-calculator";
 import { getBlockSignature, createBlockSignature } from "@shared/utils";
 
 /**
@@ -96,10 +96,11 @@ async function calculateComplianceScore(
 ): Promise<number> {
   const validation = await validateBlockAssignment(
     driver,
-    block,
+    blockToAssignmentSubject(block),
     existingAssignments,
     protectedRules,
-    allBlockAssignments
+    allBlockAssignments,
+    block.id
   );
   
   return validation.canAssign ? 1.0 : 0.0;

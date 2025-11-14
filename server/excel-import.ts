@@ -1,7 +1,7 @@
 import { db } from "./db";
 import { drivers, blocks, blockAssignments, protectedDriverRules, contracts, shiftTemplates, shiftOccurrences } from "@shared/schema";
 import { eq, and, inArray, sql } from "drizzle-orm";
-import { validateBlockAssignment } from "./rolling6-calculator";
+import { validateBlockAssignment, shiftOccurrenceToAssignmentSubject, blockToAssignmentSubject } from "./rolling6-calculator";
 import * as XLSX from "xlsx";
 import { startOfWeek, parseISO, getDay, startOfDay, format } from "date-fns";
 
@@ -952,10 +952,11 @@ export async function parseExcelSchedule(
       
       const validation = await validateBlockAssignment(
         driver,
-        block,
+        blockToAssignmentSubject(block), // Convert Block to AssignmentSubject
         driverAllAssignments, // Historical (active + archived) for rolling-6, excluding soon-to-be-archived
         protectedRules,
-        existingAssignments // Active-only for conflict detection
+        existingAssignments, // Active-only for conflict detection
+        block.id // Pass blockId for conflict checking
       );
 
       // Check for hard-stop issues: protected rules, conflicts, or DOT violations
@@ -1535,48 +1536,32 @@ export async function parseExcelScheduleShiftBased(
 
       const template = occurrenceTemplate[0];
 
-      // Convert shift occurrence to Block type for validation
-      // IMPORTANT: Use a synthetic block ID to avoid confusing validation logic
-      const occurrenceAsBlock: typeof blocks.$inferSelect = {
-        id: `synthetic_shift_${occurrence.id}`, // Synthetic ID, won't clash with real blocks
-        tenantId: occurrence.tenantId,
-        blockId: occurrence.externalBlockId || `shift_${occurrence.id}`,
-        serviceDate: new Date(occurrence.serviceDate), // Convert string back to Date
-        contractId: template.contractId,
-        soloType: template.soloType,
-        startTimestamp: occurrence.scheduledStart,
-        endTimestamp: occurrence.scheduledEnd,
-        tractorId: occurrence.tractorId || "",
-        duration: Math.round((occurrence.scheduledEnd.getTime() - occurrence.scheduledStart.getTime()) / (1000 * 60 * 60)),
-        patternGroup: occurrence.patternGroup || "sunWed",
-        canonicalStart: occurrence.scheduledStart,
-        cycleId: occurrence.cycleId || "",
-        status: occurrence.status,
-        createdAt: occurrence.createdAt,
-        updatedAt: occurrence.updatedAt,
-      };
+      // Convert shift occurrence to AssignmentSubject using adapter
+      // CRITICAL: Template provides Contract Slot metadata (operatorId, tractorId, soloType, time)
+      const assignmentSubject = shiftOccurrenceToAssignmentSubject(occurrence, template);
 
-      // Validate assignment
+      // Validate assignment using minimal interface (no blockId needed for shift occurrences)
       const validation = await validateBlockAssignment(
         driver,
-        occurrenceAsBlock,
+        assignmentSubject,
         driverAssignmentsWithBlocks,
         protectedRules,
         allAssignments
+        // Note: No blockId parameter - shift occurrences don't need conflict checking
       );
 
       if (!validation.canAssign) {
         result.failed++;
         const errorMsg = validation.protectedRuleViolations.length > 0
           ? validation.protectedRuleViolations.join("; ")
-          : validation.validationResult.summary || "Assignment validation failed";
+          : validation.validationResult.messages.join("; ") || "Assignment validation failed";
         result.errors.push(`Row ${rowNum}: ${errorMsg}`);
         continue;
       }
 
-      // Determine validation status
-      const validationStatus = validation.validationResult.status;
-      const validationSummary = validation.validationResult.summary;
+      // Determine validation status and summary from ValidationResult
+      const validationStatus = validation.validationResult.validationStatus;
+      const validationSummary = validation.validationResult.messages.join("; ") || "OK";
 
       // Stage for commit
       assignmentsToCommit.push({
