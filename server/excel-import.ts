@@ -75,49 +75,46 @@ function detectPatternGroup(startDate: Date, contractStartTime: string): "sunWed
 /**
  * Calculate canonical start time for a block
  * 
- * The canonical start is the contract's base start time anchored to the pattern's start day:
- * - sunWed: Contract time on Sunday of that week
- * - wedSat: Contract time on Wednesday of that week
+ * The canonical start is the contract's base start time on the SAME day of week as the block.
+ * This allows bump calculations to measure time-of-day variations (±2h tolerance)
+ * rather than day-to-day differences within a pattern cycle.
  * 
- * This provides a stable reference point for bump calculations (±2h tolerance)
+ * Special handling for midnight crossings:
+ * - If block starts early AM (00:00-04:00) and contract is late PM (20:00-23:59),
+ *   the canonical start should be the previous day to avoid negative multi-day bumps
  * 
- * CRITICAL: Immutable calculation using UTC to prevent drift and ensure consistency
+ * Example: Block starts Saturday 00:06, contract time 23:30
+ * → Canonical: Friday 23:30 (0.6h bump), not Saturday 23:30 (-23.4h bump)
+ * 
+ * CRITICAL: Immutable calculation using local time methods to match contract timezone
  * 
  * @param startTimestamp - Actual block start time
  * @param contractStartTime - Contract base time (HH:MM format like "16:30")
- * @param patternGroup - sunWed or wedSat
- * @returns Canonical start timestamp (immutable per cycle)
+ * @param patternGroup - sunWed or wedSat (used for cycle_id but not canonical calculation)
+ * @returns Canonical start timestamp (same day or previous day if midnight crossing)
  */
 function calculateCanonicalStart(
   startTimestamp: Date,
   contractStartTime: string,
   patternGroup: "sunWed" | "wedSat"
 ): Date {
-  // Use UTC day-of-week for timezone-independent calculation
-  const utcDayOfWeek = startTimestamp.getUTCDay(); // 0=Sunday, 1=Monday, ..., 6=Saturday
-  
   // Parse contract time (HH:MM format)
   const [hours, minutes] = contractStartTime.split(":").map(Number);
   
-  // Calculate days offset to reach pattern start day
-  let daysOffset: number;
-  if (patternGroup === "sunWed") {
-    // Find the Sunday of this week (or previous week if we're before Sunday)
-    daysOffset = -utcDayOfWeek; // 0=Sunday, so -0=0, -1=-1, etc.
-  } else {
-    // Find the Wednesday of this week (or previous week if before Wednesday)
-    if (utcDayOfWeek >= 3) {
-      daysOffset = 3 - utcDayOfWeek; // Wednesday (3) - current day
-    } else {
-      daysOffset = -(utcDayOfWeek + 4); // Go back to previous Wednesday
-    }
-  }
+  // Create canonical start: same day as block, but at contract time
+  const canonicalDate = new Date(startTimestamp);
+  canonicalDate.setHours(hours, minutes, 0, 0);
   
-  // Create canonical start date with contract time (IMMUTABLE - use UTC methods)
-  // Clone the date to avoid mutation, then use UTC setters
-  const canonicalDate = new Date(startTimestamp.getTime()); // Clone via timestamp
-  canonicalDate.setUTCDate(canonicalDate.getUTCDate() + daysOffset);
-  canonicalDate.setUTCHours(hours, minutes, 0, 0);
+  // Handle midnight crossings:
+  // If canonical is in the future (more than 12 hours ahead), shift to previous day
+  // This catches cases where block starts 00:06 and contract is 23:30
+  const bumpMilliseconds = startTimestamp.getTime() - canonicalDate.getTime();
+  const bumpHours = bumpMilliseconds / (1000 * 60 * 60);
+  
+  if (bumpHours < -12) {
+    // Shift canonical to previous day to avoid negative multi-day bumps
+    canonicalDate.setDate(canonicalDate.getDate() - 1);
+  }
   
   return canonicalDate;
 }

@@ -130,10 +130,9 @@ export async function getAssignmentSuggestions(
     // Validate bump tolerance
     const bumpValidation = validateBumpTolerance(targetBlock, driverHistory);
 
-    // If bump validation fails or requires review, skip or lower confidence
-    if (!bumpValidation.withinTolerance) {
-      continue; // Skip drivers with bumps outside tolerance
-    }
+    // Note: We don't skip drivers with bumps outside tolerance
+    // Instead, we include them but with lowered confidence and "requires review" flag
+    // This ensures suggestions are always available, especially for new systems with no history
 
     // Check rest period (10-hour requirement)
     let restValidation = { isValid: true, actualRestHours: 10, reason: "No previous shifts" };
@@ -227,9 +226,16 @@ export async function getAssignmentSuggestions(
       reason += ", exact time match";
     }
 
-    // Penalty for large bumps (even if within tolerance)
-    if (Math.abs(bumpValidation.bumpMinutes) > 60) {
-      confidence -= 5;
+    // Penalty for large bumps
+    const absBumpMinutes = Math.abs(bumpValidation.bumpMinutes);
+    if (absBumpMinutes > 120) {
+      // Very large bump (>2h) - significant penalty
+      confidence -= 30;
+      reason += `, large ${bumpValidation.bumpHours}h bump`;
+    } else if (absBumpMinutes > 60) {
+      // Moderate bump (1-2h) - small penalty
+      confidence -= 10;
+      reason += `, ${bumpValidation.bumpHours}h bump`;
     }
 
     // Cap confidence at 95 (never 100% - always leave room for human review)
