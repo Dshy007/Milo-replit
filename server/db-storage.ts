@@ -2,6 +2,7 @@ import { db } from "./db";
 import { 
   users, tenants, drivers, trucks, routes, contracts, schedules, loads,
   blocks, blockAssignments, protectedDriverRules, specialRequests, driverAvailabilityPreferences,
+  shiftOccurrences,
   type User, type InsertUser,
   type Tenant, type InsertTenant,
   type Driver, type InsertDriver,
@@ -14,7 +15,8 @@ import {
   type BlockAssignment, type InsertBlockAssignment,
   type ProtectedDriverRule, type InsertProtectedDriverRule,
   type SpecialRequest, type InsertSpecialRequest,
-  type DriverAvailabilityPreference, type InsertDriverAvailabilityPreference
+  type DriverAvailabilityPreference, type InsertDriverAvailabilityPreference,
+  type ShiftOccurrence
 } from "@shared/schema";
 import { eq, and, gte, lte } from "drizzle-orm";
 import type { IStorage } from "./storage";
@@ -307,6 +309,46 @@ export class DbStorage implements IStorage {
   async deleteBlock(id: string): Promise<boolean> {
     const result = await db.delete(blocks).where(eq(blocks.id, id)).returning();
     return result.length > 0;
+  }
+
+  // Shift Occurrences
+  async getShiftOccurrence(id: string, tenantId: string): Promise<ShiftOccurrence | undefined> {
+    const result = await db.select()
+      .from(shiftOccurrences)
+      .where(and(eq(shiftOccurrences.id, id), eq(shiftOccurrences.tenantId, tenantId)))
+      .limit(1);
+    return result[0];
+  }
+
+  async deleteShiftOccurrence(id: string, tenantId: string): Promise<boolean> {
+    // Delete in transaction with tenant scoping for multi-tenant safety
+    const result = await db.transaction(async (tx) => {
+      // First verify the shift occurrence exists and belongs to this tenant
+      const occurrence = await tx.select()
+        .from(shiftOccurrences)
+        .where(and(eq(shiftOccurrences.id, id), eq(shiftOccurrences.tenantId, tenantId)))
+        .limit(1);
+      
+      if (occurrence.length === 0) {
+        return false; // Not found or wrong tenant
+      }
+      
+      // Delete any assignments for this shift occurrence (tenant-scoped)
+      await tx.delete(blockAssignments)
+        .where(and(
+          eq(blockAssignments.shiftOccurrenceId, id),
+          eq(blockAssignments.tenantId, tenantId)
+        ));
+      
+      // Delete the shift occurrence (tenant-scoped)
+      const deleted = await tx.delete(shiftOccurrences)
+        .where(and(eq(shiftOccurrences.id, id), eq(shiftOccurrences.tenantId, tenantId)))
+        .returning();
+      
+      return deleted.length > 0;
+    });
+    
+    return result;
   }
 
   // Block Assignments

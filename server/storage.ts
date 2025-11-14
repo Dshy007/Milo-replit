@@ -84,6 +84,10 @@ export interface IStorage {
   updateBlock(id: string, block: Partial<InsertBlock>): Promise<Block | undefined>;
   deleteBlock(id: string): Promise<boolean>;
   
+  // Shift Occurrences
+  getShiftOccurrence(id: string, tenantId: string): Promise<ShiftOccurrence | undefined>;
+  deleteShiftOccurrence(id: string, tenantId: string): Promise<boolean>;
+  
   // Block Assignments
   getBlockAssignment(id: string): Promise<BlockAssignment | undefined>;
   getBlockAssignmentByBlock(blockId: string): Promise<BlockAssignment | undefined>;
@@ -532,6 +536,17 @@ export class MemStorage implements IStorage {
 
   async deleteBlock(id: string): Promise<boolean> {
     return this.blocks.delete(id);
+  }
+
+  // Shift Occurrences (stub implementations - not used in production)
+  async getShiftOccurrence(id: string, tenantId: string): Promise<ShiftOccurrence | undefined> {
+    // MemStorage doesn't support shift occurrences yet - using DbStorage in production
+    return undefined;
+  }
+
+  async deleteShiftOccurrence(id: string, tenantId: string): Promise<boolean> {
+    // MemStorage doesn't support shift occurrences yet - using DbStorage in production
+    return false;
   }
 
   // Block Assignments

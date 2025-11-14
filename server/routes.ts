@@ -1959,6 +1959,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ==================== SHIFT OCCURRENCES ====================
+
+  app.delete("/api/shift-occurrences/:id", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const occurrenceId = req.params.id;
+      
+      // Fetch the shift occurrence with tenant validation
+      const occurrence = await dbStorage.getShiftOccurrence(occurrenceId, tenantId);
+      
+      if (!occurrence) {
+        return res.status(404).json({ message: "Shift occurrence not found" });
+      }
+      
+      // Validate status: only allow deletion of unassigned or assigned shifts
+      if (occurrence.status === "in_progress" || occurrence.status === "completed") {
+        return res.status(409).json({ 
+          message: `Cannot delete ${occurrence.status} shift. Only unassigned or assigned shifts can be deleted.` 
+        });
+      }
+      
+      // Delete the shift occurrence and its assignments (tenant-scoped)
+      const deleted = await dbStorage.deleteShiftOccurrence(occurrenceId, tenantId);
+      
+      if (!deleted) {
+        return res.status(500).json({ message: "Failed to delete shift occurrence" });
+      }
+      
+      res.json({ message: "Shift occurrence deleted successfully" });
+    } catch (error: any) {
+      res.status(500).json({ message: "Failed to delete shift occurrence", error: error.message });
+    }
+  });
+
   // ==================== BLOCK ASSIGNMENTS ====================
   
   app.get("/api/block-assignments", requireAuth, async (req, res) => {
