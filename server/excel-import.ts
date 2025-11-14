@@ -1154,7 +1154,8 @@ export async function parseExcelScheduleShiftBased(
   tenantId: string,
   fileBuffer: Buffer,
   userId: string,
-  debugMode: boolean = false
+  debugMode: boolean = false,
+  startDateFilter: Date | null = null
 ): Promise<ImportResult> {
   const result: ImportResult = {
     created: 0,
@@ -1223,7 +1224,24 @@ export async function parseExcelScheduleShiftBased(
       );
     }
     
-    const rows: ExcelRow[] = normalizeRows(rawRows, columnMap);
+    let rows: ExcelRow[] = normalizeRows(rawRows, columnMap);
+
+    // Apply start date filter if provided
+    if (startDateFilter) {
+      const filterDateOnly = new Date(startDateFilter);
+      filterDateOnly.setHours(0, 0, 0, 0);
+      
+      const originalCount = rows.length;
+      rows = rows.filter(row => {
+        if (!row.stop1PlannedStartDate) return false;
+        const rowDate = excelDateToJSDate(row.stop1PlannedStartDate, 0);
+        rowDate.setHours(0, 0, 0, 0);
+        return rowDate >= filterDateOnly;
+      });
+      
+      const filtered = originalCount - rows.length;
+      result.warnings.push(`Date filter: ${filtered} shifts before ${format(filterDateOnly, "MMM d, yyyy")} were skipped`);
+    }
 
     // ========== GROUP BY OPERATOR ID (NEW APPROACH) ==========
     // operatorId is stable across weekly imports, blockId changes weekly

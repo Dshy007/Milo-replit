@@ -48,6 +48,7 @@ export default function Schedules() {
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [shiftToDelete, setShiftToDelete] = useState<string | null>(null);
+  const [importStartDate, setImportStartDate] = useState<string>("2025-11-03"); // Sunday, Nov 3, 2024
 
   const handleBlockClick = (block: Block & { contract: Contract | null }) => {
     setSelectedBlock(block);
@@ -117,11 +118,12 @@ export default function Schedules() {
   };
 
   const importMutation = useMutation({
-    mutationFn: async (file: File) => {
+    mutationFn: async ({ file, startDate }: { file: File; startDate: string }) => {
       const formData = new FormData();
       formData.append("file", file);
       
-      const response = await fetch("/api/schedules/excel-import", {
+      const url = `/api/schedules/excel-import?startDate=${encodeURIComponent(startDate)}`;
+      const response = await fetch(url, {
         method: "POST",
         body: formData,
         credentials: "include",
@@ -183,7 +185,7 @@ export default function Schedules() {
       return;
     }
 
-    importMutation.mutate(importFile);
+    importMutation.mutate({ file: importFile, startDate: importStartDate });
   };
 
   // Calculate week range (Sunday to Saturday)
@@ -354,14 +356,32 @@ export default function Schedules() {
                   </AlertDescription>
                 </Alert>
 
-                <div className="flex items-center gap-4">
-                  <input
-                    type="file"
-                    accept=".xlsx,.xls"
-                    onChange={handleFileSelect}
-                    className="flex-1 text-sm"
-                    data-testid="input-import-file"
-                  />
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-sm font-medium mb-1.5 block">
+                      Import shifts starting from:
+                    </label>
+                    <input
+                      type="date"
+                      value={importStartDate}
+                      onChange={(e) => setImportStartDate(e.target.value)}
+                      className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm"
+                      data-testid="input-start-date"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-sm font-medium mb-1.5 block">
+                      Select Excel file:
+                    </label>
+                    <input
+                      type="file"
+                      accept=".xlsx,.xls,.csv"
+                      onChange={handleFileSelect}
+                      className="w-full text-sm"
+                      data-testid="input-import-file"
+                    />
+                  </div>
                 </div>
 
                 {importFile && (

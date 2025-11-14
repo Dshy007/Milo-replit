@@ -3349,6 +3349,9 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
         return res.status(400).json({ message: "No file uploaded" });
       }
 
+      // Extract optional startDate filter from query parameters
+      const startDateFilter = req.query.startDate ? new Date(req.query.startDate as string) : null;
+
       // Validate importMode parameter (defaults to 'block' for backward compatibility)
       const importMode = req.body.importMode || 'block';
       if (importMode !== 'block' && importMode !== 'shift') {
@@ -3363,7 +3366,7 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
       // Dispatch to appropriate parser based on mode
       const { parseExcelSchedule, parseExcelScheduleShiftBased } = await import("./excel-import");
       const importFn = importMode === 'shift' ? parseExcelScheduleShiftBased : parseExcelSchedule;
-      const result = await importFn(tenantId, req.file.buffer, userId, debugMode);
+      const result = await importFn(tenantId, req.file.buffer, userId, debugMode, startDateFilter);
       
       // Automatically recompute patterns after successful import (async, non-blocking)
       // This ensures Auto-Build has fresh patterns for next week's suggestions
