@@ -894,8 +894,8 @@ export async function parseExcelSchedule(
       // CRITICAL FIX: Fetch blocks for ALL driver assignments (active + archived)
       // This ensures rolling-6 calculations use correct historical block data
       const allDriverAssignmentIds = allAssignments
-        .filter(a => a.driverId === driver.id)
-        .map(a => a.blockId);
+        .filter(a => a.driverId === driver.id && a.blockId !== null)
+        .map(a => a.blockId!); // Filter nulls above, so ! is safe
       
       const assignmentBlocks = allDriverAssignmentIds.length > 0
         ? await db.select().from(blocks).where(inArray(blocks.id, allDriverAssignmentIds))
@@ -938,10 +938,12 @@ export async function parseExcelSchedule(
       const driverAllAssignmentRows = allAssignments.filter(
         (a) => a.driverId === driver.id && a.id !== existingAssignment?.id
       );
-      const driverAllAssignments = driverAllAssignmentRows.map((assignment) => ({
-        ...assignment,
-        block: blockMap.get(assignment.blockId) || block,
-      }));
+      const driverAllAssignments = driverAllAssignmentRows
+        .filter(assignment => assignment.blockId !== null)
+        .map((assignment) => ({
+          ...assignment,
+          block: blockMap.get(assignment.blockId!) || block, // Filter nulls above, so ! is safe
+        }));
 
       // TODO: Refactor validateBlockAssignment to accept explicit activeAssignments and historicalAssignments
       // parameters instead of relying on single existingAssignments array. This will make the distinction

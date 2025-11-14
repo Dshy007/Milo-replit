@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, timestamp, integer, boolean, decimal, uniqueIndex, index, check, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, timestamp, integer, boolean, decimal, uniqueIndex, index, check, pgEnum, date, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { addYears, isAfter } from "date-fns";
@@ -522,11 +522,87 @@ export type InsertBlock = z.infer<typeof insertBlockSchema>;
 export type UpdateBlock = z.infer<typeof updateBlockSchema>;
 export type Block = typeof blocks.$inferSelect;
 
-// Block Assignments (Link blocks to drivers with validation)
+// Shift Templates (Reusable shift definitions keyed by operatorId, not Amazon's transient block IDs)
+// Amazon provides different block IDs each week, so we key on operatorId for stability
+export const shiftTemplates = pgTable("shift_templates", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+  operatorId: text("operator_id").notNull(), // Stable key from Excel: "FTIM_MKC_Solo1_Tractor_2_d2"
+  contractId: varchar("contract_id").notNull().references(() => contracts.id),
+  canonicalStartTime: text("canonical_start_time").notNull(), // HH:MM format (e.g., "20:30")
+  defaultDuration: integer("default_duration").notNull(), // hours: 14 for Solo1, 38 for Solo2 (NOTE: may span midnight)
+  defaultTractorId: text("default_tractor_id"), // e.g., "Tractor_2" (nullable - Amazon often omits)
+  soloType: text("solo_type").notNull(), // solo1, solo2, team
+  patternGroup: patternGroupEnum("pattern_group"), // 'sunWed' or 'wedSat'
+  status: text("status").notNull().default("active"), // active, inactive
+  metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`), // JSONB metadata for structured data
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  // Unique constraint: one template per (tenant, operatorId)
+  uniqueOperatorId: uniqueIndex("shift_templates_tenant_operator_idx").on(table.tenantId, table.operatorId),
+  // Index for contract lookups
+  contractIdIdx: index("shift_templates_contract_id_idx").on(table.contractId),
+}));
+
+export const insertShiftTemplateSchema = createInsertSchema(shiftTemplates).omit({ id: true, createdAt: true });
+export const updateShiftTemplateSchema = insertShiftTemplateSchema.omit({ tenantId: true }).partial();
+export type InsertShiftTemplate = z.infer<typeof insertShiftTemplateSchema>;
+export type UpdateShiftTemplate = z.infer<typeof updateShiftTemplateSchema>;
+export type ShiftTemplate = typeof shiftTemplates.$inferSelect;
+
+// Shift Occurrences (Daily instances of shift templates)
+// Each occurrence represents a specific day's shift, replacing the role of the blocks table
+export const shiftOccurrences = pgTable("shift_occurrences", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+  templateId: varchar("template_id").notNull().references(() => shiftTemplates.id),
+  serviceDate: date("service_date").notNull(), // Calendar date this shift runs (timezone-safe date storage)
+  scheduledStart: timestamp("scheduled_start").notNull(), // Full start date+time (facility local time)
+  scheduledEnd: timestamp("scheduled_end").notNull(), // Full end date+time (may cross midnight)
+  actualStart: timestamp("actual_start"), // Actual start time (nullable, filled when shift starts)
+  actualEnd: timestamp("actual_end"), // Actual end time (nullable, filled when shift completes)
+  tractorId: text("tractor_id"), // e.g., "Tractor_2" (nullable - imports may lack this)
+  externalBlockId: text("external_block_id"), // Amazon's transient block ID (nullable, informational only)
+  status: text("status").notNull().default("unassigned"), // unassigned, assigned, in_progress, completed, cancelled
+  isCarryover: boolean("is_carryover").notNull().default(false), // True for Fri/Sat from previous week
+  importBatchId: text("import_batch_id"), // Track which Excel import created this occurrence
+  // Pattern-aware fields for rolling-6 calculations
+  patternGroup: patternGroupEnum("pattern_group"), // 'sunWed' or 'wedSat' (derived from template)
+  cycleId: text("cycle_id"), // Pattern-aware cycle identifier: "${patternGroup}:${cycleStartDateISO}"
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  // Unique constraint: one occurrence per (tenant, template, serviceDate)
+  uniqueOccurrence: uniqueIndex("shift_occurrences_tenant_template_date_idx").on(table.tenantId, table.templateId, table.serviceDate),
+  // Index for time range queries
+  timeRangeIdx: index("shift_occurrences_time_range_idx").on(table.scheduledStart, table.scheduledEnd),
+  // Index for pattern-based queries
+  patternIdx: index("shift_occurrences_pattern_idx").on(table.patternGroup, table.cycleId),
+  // Index for external block ID lookups (for migration/debugging)
+  externalBlockIdIdx: index("shift_occurrences_external_block_id_idx").on(table.externalBlockId),
+  // Index for template + date lookups
+  templateDateIdx: index("shift_occurrences_template_date_idx").on(table.templateId, table.serviceDate),
+}));
+
+export const insertShiftOccurrenceSchema = createInsertSchema(shiftOccurrences, {
+  serviceDate: z.coerce.date(),
+  scheduledStart: z.coerce.date(),
+  scheduledEnd: z.coerce.date(),
+  actualStart: z.coerce.date().optional().nullable(),
+  actualEnd: z.coerce.date().optional().nullable(),
+}).omit({ id: true, createdAt: true, updatedAt: true });
+export const updateShiftOccurrenceSchema = insertShiftOccurrenceSchema.omit({ tenantId: true }).partial();
+export type InsertShiftOccurrence = z.infer<typeof insertShiftOccurrenceSchema>;
+export type UpdateShiftOccurrence = z.infer<typeof updateShiftOccurrenceSchema>;
+export type ShiftOccurrence = typeof shiftOccurrences.$inferSelect;
+
+// Block Assignments (Link blocks/shifts to drivers with validation)
+// MIGRATION: Transitioning from blockId to shiftOccurrenceId
 export const blockAssignments = pgTable("block_assignments", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
-  blockId: varchar("block_id").notNull().references(() => blocks.id),
+  blockId: varchar("block_id").references(() => blocks.id), // DEPRECATED: Nullable during migration, will be removed
+  shiftOccurrenceId: varchar("shift_occurrence_id").references(() => shiftOccurrences.id), // NEW: Replaces blockId
   driverId: varchar("driver_id").notNull().references(() => drivers.id),
   assignedAt: timestamp("assigned_at").defaultNow().notNull(),
   assignedBy: varchar("assigned_by").references(() => users.id), // User who made the assignment
@@ -538,12 +614,16 @@ export const blockAssignments = pgTable("block_assignments", {
   importBatchId: text("import_batch_id"), // Track which Excel import created this assignment
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
-  // Unique constraint: one active driver per block
-  uniqueBlockAssignment: uniqueIndex("block_assignments_tenant_block_idx").on(table.tenantId, table.blockId).where(sql`${table.isActive} = true`),
+  // Unique constraint: one active driver per block (legacy)
+  uniqueBlockAssignment: uniqueIndex("block_assignments_tenant_block_idx").on(table.tenantId, table.blockId).where(sql`${table.isActive} = true AND ${table.blockId} IS NOT NULL`),
+  // Unique constraint: one active driver per shift occurrence (new)
+  uniqueShiftAssignment: uniqueIndex("block_assignments_tenant_shift_idx").on(table.tenantId, table.shiftOccurrenceId).where(sql`${table.isActive} = true AND ${table.shiftOccurrenceId} IS NOT NULL`),
   // Index for driver lookups
   driverIdIdx: index("block_assignments_driver_id_idx").on(table.driverId),
   // Index for tenant+driver+time queries
   driverTimeIdx: index("block_assignments_driver_time_idx").on(table.tenantId, table.driverId, table.assignedAt),
+  // Index for shift occurrence lookups
+  shiftOccurrenceIdIdx: index("block_assignments_shift_occurrence_id_idx").on(table.shiftOccurrenceId),
 }));
 
 export const insertBlockAssignmentSchema = createInsertSchema(blockAssignments, {
