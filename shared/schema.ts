@@ -480,10 +480,12 @@ export type UpdateLoad = z.infer<typeof updateLoadSchema>;
 export type Load = typeof loads.$inferSelect;
 
 // Blocks (Scheduled instances of contracts - immutable time windows)
+// Supports Amazon's weekly "block tours" where same blockId runs daily Sun-Sat
 export const blocks = pgTable("blocks", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
-  blockId: text("block_id").notNull(), // e.g., "B-00000001"
+  blockId: text("block_id").notNull(), // Amazon block tour ID: "B-00000001"
+  serviceDate: timestamp("service_date", { mode: "date" }).notNull(), // Calendar date this block instance runs
   contractId: varchar("contract_id").notNull().references(() => contracts.id),
   startTimestamp: timestamp("start_timestamp").notNull(), // Full start date+time in CT
   endTimestamp: timestamp("end_timestamp").notNull(), // Calculated: startTimestamp + duration
@@ -501,8 +503,8 @@ export const blocks = pgTable("blocks", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({
-  // Unique constraint: one block per (tenant, blockId)
-  uniqueBlockId: uniqueIndex("blocks_tenant_block_idx").on(table.tenantId, table.blockId),
+  // Unique constraint: one block per (tenant, blockId, serviceDate) - supports daily occurrences of weekly tours
+  uniqueBlockId: uniqueIndex("blocks_tenant_block_servicedate_idx").on(table.tenantId, table.blockId, table.serviceDate),
   // Index for time range queries
   timeRangeIdx: index("blocks_time_range_idx").on(table.startTimestamp, table.endTimestamp),
   // Index for pattern-based queries
@@ -510,6 +512,7 @@ export const blocks = pgTable("blocks", {
 }));
 
 export const insertBlockSchema = createInsertSchema(blocks, {
+  serviceDate: z.coerce.date(),
   startTimestamp: z.coerce.date(),
   endTimestamp: z.coerce.date(),
   canonicalStart: z.coerce.date().optional().nullable(),

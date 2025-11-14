@@ -406,7 +406,7 @@ export async function parseExcelSchedule(
     const rows: ExcelRow[] = normalizeRows(rawRows, columnMap);
 
     // ========== PREPROCESSING STAGE: Auto-create missing blocks ==========
-    // Group rows by Block ID to extract block metadata
+    // Group rows by Block ID to extract contract metadata (shared across all days)
     const blockGroups = new Map<string, ExcelRow[]>();
     for (const row of rows) {
       const blockId = row.blockId?.trim();
@@ -418,159 +418,291 @@ export async function parseExcelSchedule(
       blockGroups.get(blockId)!.push(row);
     }
 
-    // Upsert blocks and contracts from Excel data
+    // Track contracts found/created for each block tour (to avoid redundant lookups)
+    const contractCache = new Map<string, typeof contracts.$inferSelect>();
+
+    // Process each block tour: find/create contract, then create daily block occurrences
     for (const [blockId, blockRows] of Array.from(blockGroups.entries())) {
       const firstRow = blockRows[0];
       
-      // Parse Operator ID to extract contract info
+      // Parse Operator ID to extract contract info (same for all days of the tour)
       const parsedOperator = parseOperatorId(firstRow.operatorId);
       if (!parsedOperator) {
         result.warnings.push(`Block ${blockId}: Could not parse Operator ID "${firstRow.operatorId}"`);
         continue;
       }
 
-      // Extract start and end times from Excel date numbers
-      const startDate = firstRow.stop1PlannedStartDate;
-      const startTime = firstRow.stop1PlannedStartTime;
-      const endDate = firstRow.stop2PlannedArrivalDate;
-      const endTime = firstRow.stop2PlannedArrivalTime;
+      // Find or create contract (shared across all daily occurrences of this tour)
+      const contractKey = `${parsedOperator.type}:${parsedOperator.tractorId}`;
+      let contract = contractCache.get(contractKey);
+      
+      if (!contract) {
+        // Look up existing contract by (type + tractorId)
+        const existingContracts = await db
+          .select()
+          .from(contracts)
+          .where(
+            and(
+              eq(contracts.tenantId, tenantId),
+              eq(contracts.type, parsedOperator.type),
+              eq(contracts.tractorId, parsedOperator.tractorId)
+            )
+          );
 
-      if (!startDate || !endDate || startTime === undefined || endTime === undefined) {
-        result.warnings.push(`Block ${blockId}: Missing timing data (Stop 1/2 planned times)`);
+        if (existingContracts.length === 0) {
+          // Auto-create contract from first row's timing data
+          const startDate = firstRow.stop1PlannedStartDate;
+          const startTime = firstRow.stop1PlannedStartTime;
+          const endDate = firstRow.stop2PlannedArrivalDate;
+          const endTime = firstRow.stop2PlannedArrivalTime;
+
+          if (!startDate || !endDate || startTime === undefined || endTime === undefined) {
+            result.warnings.push(`Block ${blockId}: Cannot auto-create contract - missing timing data in first row`);
+            continue; // Skip entire tour if we can't create the contract
+          }
+
+          const startTimestamp = excelDateToJSDate(startDate, startTime);
+          const endTimestamp = excelDateToJSDate(endDate, endTime);
+          
+          // Calculate duration from first block's timing data
+          const duration = Math.round((endTimestamp.getTime() - startTimestamp.getTime()) / (1000 * 60 * 60));
+          
+          // Extract canonical start time from Excel (will be used as benchmark)
+          const startHour = startTimestamp.getHours();
+          const startMinute = startTimestamp.getMinutes();
+          const startTimeStr = `${String(startHour).padStart(2, '0')}:${String(startMinute).padStart(2, '0')}`;
+          
+          // Determine baseRoutes based on contract type
+          const baseRoutes = parsedOperator.type === "solo1" ? 10 : parsedOperator.type === "solo2" ? 7 : 5;
+          
+          // Construct contract name
+          const contractName = `${parsedOperator.type.toUpperCase()} ${startTimeStr} ${parsedOperator.tractorId}`;
+          
+          // Create and persist contract to database
+          const [newContract] = await db.insert(contracts).values({
+            tenantId,
+            name: contractName, // e.g., "SOLO1 16:30 Tractor_2"
+            type: parsedOperator.type, // "solo1", "solo2", "team"
+            tractorId: parsedOperator.tractorId, // "Tractor_1", "Tractor_2", etc.
+            startTime: startTimeStr, // e.g., "16:30"
+            duration, // Calculated from Excel timing
+            baseRoutes, // 10 for solo1, 7 for solo2, 5 for team
+            status: "active",
+            domicile: "MKC", // Default domicile (can be updated later)
+            daysPerWeek: 6, // Standard rolling 6-day pattern
+            protectedDrivers: false,
+          }).returning();
+          
+          // Log warning after successful creation
+          result.warnings.push(
+            `Block ${blockId}: Auto-created contract for ${parsedOperator.type.toUpperCase()} ${parsedOperator.tractorId} ` +
+            `using timing data from Excel. Consider seeding this contract as a benchmark.`
+          );
+          
+          // Use the newly created and persisted contract
+          contract = newContract;
+        } else {
+          // Use existing contract
+          if (existingContracts.length > 1) {
+            // Multiple contracts found - data corruption, use first but warn
+            result.warnings.push(
+              `Block ${blockId}: Found ${existingContracts.length} contracts for ${parsedOperator.type.toUpperCase()} ${parsedOperator.tractorId}. ` +
+              `This indicates data corruption. Using first match but database should be cleaned.`
+            );
+          }
+          contract = existingContracts[0];
+        }
+
+        // Cache the contract for reuse
+        contractCache.set(contractKey, contract);
+      }
+
+      // ========== BUILD PER-TOUR CANONICAL TIMELINE ==========
+      // Validate contract has required metadata
+      if (!contract.duration || !contract.startTime) {
+        result.warnings.push(
+          `Block ${blockId}: Contract ${contract.name} missing duration or startTime - cannot create blocks. ` +
+          `Skipping entire tour.`
+        );
         continue;
       }
 
-      const startTimestamp = excelDateToJSDate(startDate, startTime);
-      const endTimestamp = excelDateToJSDate(endDate, endTime);
-
-      // Find existing contract using ONLY Operator ID (type + tractorId)
-      // Contract times are fixed benchmark times, not imported from Excel
-      let existingContracts = await db
-        .select()
-        .from(contracts)
-        .where(
-          and(
-            eq(contracts.tenantId, tenantId),
-            eq(contracts.type, parsedOperator.type),
-            eq(contracts.tractorId, parsedOperator.tractorId)
-          )
-        );
-
-      if (existingContracts.length === 0) {
-        // Auto-create missing contract using Excel timing data
-        // This handles Amazon data with contract types not in the 17 benchmark set
-        result.warnings.push(
-          `Block ${blockId}: Auto-creating contract for ${parsedOperator.type.toUpperCase()} ${parsedOperator.tractorId} ` +
-          `using timing data from Excel. Consider seeding this contract as a benchmark.`
-        );
+      // Sort rows by Excel date, preserving original order when dates are missing
+      const sortedRows = blockRows.slice().sort((a, b) => {
+        const dateA = a.stop1PlannedStartDate;
+        const dateB = b.stop1PlannedStartDate;
         
-        // Calculate duration from first block's timing data
-        const duration = Math.round((endTimestamp.getTime() - startTimestamp.getTime()) / (1000 * 60 * 60));
+        // If both have dates, sort by date
+        if (dateA && dateB) {
+          return dateA - dateB;
+        }
         
-        // Extract canonical start time from Excel (will be used as benchmark)
-        const startHour = startTimestamp.getHours();
-        const startMinute = startTimestamp.getMinutes();
-        const startTimeStr = `${String(startHour).padStart(2, '0')}:${String(startMinute).padStart(2, '0')}`;
-        
-        // Determine baseRoutes based on contract type
-        const baseRoutes = parsedOperator.type === "solo1" ? 10 : parsedOperator.type === "solo2" ? 7 : 5;
-        
-        // Construct contract name
-        const contractName = `${parsedOperator.type.toUpperCase()} ${startTimeStr} ${parsedOperator.tractorId}`;
-        
-        // Create placeholder contract
-        const [newContract] = await db.insert(contracts).values({
-          tenantId,
-          name: contractName, // e.g., "SOLO1 16:30 Tractor_2"
-          type: parsedOperator.type, // "solo1", "solo2", "team"
-          tractorId: parsedOperator.tractorId, // "Tractor_1", "Tractor_2", etc.
-          startTime: startTimeStr, // e.g., "16:30"
-          duration, // Calculated from Excel timing
-          baseRoutes, // 10 for solo1, 7 for solo2, 5 for team
-          status: "active",
-          domicile: "MKC", // Default domicile (can be updated later)
-          daysPerWeek: 6, // Standard rolling 6-day pattern
-          protectedDrivers: false,
-        }).returning();
-        
-        existingContracts = [newContract];
-      }
+        // If either lacks a date, preserve original order (stable sort)
+        // This keeps pre-baseline stubs before the anchor row
+        return 0;
+      });
 
-      if (existingContracts.length > 1) {
-        // Multiple contracts found - data corruption, use first but warn
-        result.warnings.push(
-          `Block ${blockId}: Found ${existingContracts.length} contracts for ${parsedOperator.type.toUpperCase()} ${parsedOperator.tractorId}. ` +
-          `This indicates data corruption. Using first match but database should be cleaned.`
-        );
-      }
-
-      const contractId = existingContracts[0].id;
-      const contract = existingContracts[0];
-
-      // Upsert block (update if exists, insert if new)
-      const existingBlock = await db
-        .select()
-        .from(blocks)
-        .where(and(eq(blocks.tenantId, tenantId), eq(blocks.blockId, blockId)))
-        .limit(1);
-
-      // Calculate pattern-aware metadata (for both new and existing blocks)
-      const duration = Math.round((endTimestamp.getTime() - startTimestamp.getTime()) / (1000 * 60 * 60));
-      
-      // CONTRACT-TIME VALIDATION: Verify block duration matches contract expectations
-      // Allow ±2 hour tolerance for Amazon's bump variations
-      const expectedDuration = contract.duration;
-      const durationDiff = Math.abs(duration - expectedDuration);
-      
-      if (durationDiff > 2) {
-        result.warnings.push(
-          `Block ${blockId}: Duration mismatch - Expected ${expectedDuration}h (${contract.type.toUpperCase()}), got ${duration}h. ` +
-          `Difference: ${durationDiff}h exceeds ±2h tolerance. Check Excel data for accuracy.`
-        );
-      }
-      
-      // Detect Amazon pattern group by finding closest canonical anchor
-      // This correctly handles edge cases like Tuesday 11 PM shifts crossing into Wednesday UTC
-      const patternGroup = detectPatternGroup(startTimestamp, existingContracts[0].startTime);
-      
-      // Calculate canonical start time for bump calculations
-      const canonicalStart = calculateCanonicalStart(
-        startTimestamp,
-        existingContracts[0].startTime, // Contract's base start time (e.g., "16:30")
-        patternGroup
+      // Find first row with actual timing data to establish baseline
+      const baselineIndex = sortedRows.findIndex(
+        r => r.stop1PlannedStartDate && r.stop1PlannedStartTime !== undefined && 
+             r.stop2PlannedArrivalDate && r.stop2PlannedArrivalTime !== undefined
       );
-      
-      // Generate cycle identifier for pattern grouping
-      const cycleId = generateCycleId(patternGroup, canonicalStart);
-      
-      if (existingBlock.length === 0) {
-        // Create new block with pattern-aware metadata
-        await db.insert(blocks).values({
-          tenantId,
-          blockId,
-          contractId,
-          soloType: parsedOperator.type,
+
+      if (baselineIndex === -1) {
+        result.warnings.push(
+          `Block ${blockId}: No valid timing data in any occurrence - cannot establish baseline. ` +
+          `Skipping entire tour.`
+        );
+        continue;
+      }
+
+      const baselineRow = sortedRows[baselineIndex];
+
+      // Calculate baseline canonical start (anchor for entire tour)
+      const baselineActualStart = excelDateToJSDate(
+        baselineRow.stop1PlannedStartDate!,
+        baselineRow.stop1PlannedStartTime!
+      );
+      const baselinePatternGroup = detectPatternGroup(baselineActualStart, contract.startTime);
+      const baselineCanonicalStart = calculateCanonicalStart(
+        baselineActualStart,
+        contract.startTime,
+        baselinePatternGroup
+      );
+
+      // Build canonical timeline by advancing baseline by calendar days
+      // CRITICAL: Use (i - baselineIndex) offset so days BEFORE baseline move backward
+      const canonicalStarts: Date[] = sortedRows.map((_, i) => {
+        const dayCanonicalStart = new Date(baselineCanonicalStart);
+        dayCanonicalStart.setDate(dayCanonicalStart.getDate() + (i - baselineIndex));
+        return dayCanonicalStart;
+      });
+
+      // Stage blocks in memory (commit only if entire tour succeeds)
+      const stagedBlocks: Array<{
+        serviceDate: Date;
+        canonicalStart: Date;
+        startTimestamp: Date;
+        endTimestamp: Date;
+        duration: number;
+        patternGroup: "sunWed" | "wedSat";
+        cycleId: string;
+      }> = [];
+
+      // Process each day using canonical timeline
+      for (let i = 0; i < sortedRows.length; i++) {
+        const row = sortedRows[i];
+        const canonicalStart = canonicalStarts[i];
+        
+        // Service date is always start of canonical day
+        const serviceDate = new Date(canonicalStart);
+        serviceDate.setHours(0, 0, 0, 0);
+
+        // Determine if row has actual Excel timing data
+        const hasActualTiming =
+          row.stop1PlannedStartDate && row.stop1PlannedStartTime !== undefined &&
+          row.stop2PlannedArrivalDate && row.stop2PlannedArrivalTime !== undefined;
+
+        let startTimestamp: Date;
+        let endTimestamp: Date;
+
+        if (hasActualTiming) {
+          // Use actual Excel data
+          startTimestamp = excelDateToJSDate(row.stop1PlannedStartDate!, row.stop1PlannedStartTime!);
+          endTimestamp = excelDateToJSDate(row.stop2PlannedArrivalDate!, row.stop2PlannedArrivalTime!);
+
+          // Warn if drift from canonical start exceeds 2 hours
+          const driftHours = Math.abs(startTimestamp.getTime() - canonicalStart.getTime()) / (1000 * 60 * 60);
+          if (driftHours > 2) {
+            result.warnings.push(
+              `Block ${blockId}, day ${i + 1}: Start time drifts ${driftHours.toFixed(1)}h from canonical ` +
+              `(expected ~${canonicalStart.toLocaleTimeString()}). Check Excel data.`
+            );
+          }
+        } else {
+          // Synthesize from canonical start (works even if Excel date is missing)
+          // The canonical timeline already provides the correct service date and start time
+          result.warnings.push(
+            `Block ${blockId}, day ${i + 1}: Missing timing data - synthesizing from canonical timeline`
+          );
+          
+          startTimestamp = canonicalStart; // Already at contract start time
+          endTimestamp = new Date(startTimestamp.getTime() + contract.duration * 60 * 60 * 1000);
+        }
+
+        // Calculate metadata for this occurrence
+        const duration = Math.round((endTimestamp.getTime() - startTimestamp.getTime()) / (1000 * 60 * 60));
+        const patternGroup = detectPatternGroup(canonicalStart, contract.startTime);
+        const cycleId = generateCycleId(patternGroup, canonicalStart);
+
+        // Stage this block
+        stagedBlocks.push({
+          serviceDate,
+          canonicalStart,
           startTimestamp,
           endTimestamp,
-          tractorId: parsedOperator.tractorId, // From Operator ID: "Tractor_1", "Tractor_2", etc.
           duration,
-          patternGroup, // sunWed or wedSat
-          canonicalStart, // Canonical contract start time for this cycle
-          cycleId, // Pattern-aware cycle identifier (e.g., "sunWed:2025-11-09")
+          patternGroup,
+          cycleId,
         });
-      } else {
-        // Backfill pattern metadata for existing blocks
-        await db
-          .update(blocks)
-          .set({
-            patternGroup,
-            canonicalStart,
-            cycleId,
-          })
-          .where(and(
-            eq(blocks.tenantId, tenantId),
-            eq(blocks.blockId, blockId)
-          ));
+      }
+
+      // Commit staged blocks if tour succeeded
+      if (stagedBlocks.length === sortedRows.length) {
+        for (const staged of stagedBlocks) {
+          // Upsert block occurrence (keyed by blockId + serviceDate)
+          const existingBlock = await db
+            .select()
+            .from(blocks)
+            .where(
+              and(
+                eq(blocks.tenantId, tenantId),
+                eq(blocks.blockId, blockId),
+                eq(blocks.serviceDate, staged.serviceDate)
+              )
+            )
+            .limit(1);
+
+          if (existingBlock.length === 0) {
+            // Create new block occurrence
+            await db.insert(blocks).values({
+              tenantId,
+              blockId,
+              serviceDate: staged.serviceDate,
+              contractId: contract.id,
+              soloType: parsedOperator.type,
+              startTimestamp: staged.startTimestamp,
+              endTimestamp: staged.endTimestamp,
+              tractorId: parsedOperator.tractorId,
+              duration: staged.duration,
+              patternGroup: staged.patternGroup,
+              canonicalStart: staged.canonicalStart,
+              cycleId: staged.cycleId,
+            });
+          } else {
+            // Update existing block occurrence
+            await db
+              .update(blocks)
+              .set({
+                contractId: contract.id,
+                soloType: parsedOperator.type,
+                startTimestamp: staged.startTimestamp,
+                endTimestamp: staged.endTimestamp,
+                tractorId: parsedOperator.tractorId,
+                duration: staged.duration,
+                patternGroup: staged.patternGroup,
+                canonicalStart: staged.canonicalStart,
+                cycleId: staged.cycleId,
+              })
+              .where(
+                and(
+                  eq(blocks.tenantId, tenantId),
+                  eq(blocks.blockId, blockId),
+                  eq(blocks.serviceDate, staged.serviceDate)
+                )
+              );
+          }
+        }
       }
     }
 
