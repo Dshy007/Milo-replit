@@ -11,7 +11,8 @@ import {
   type BlockAssignment, type InsertBlockAssignment,
   type ProtectedDriverRule, type InsertProtectedDriverRule,
   type SpecialRequest, type InsertSpecialRequest,
-  type DriverAvailabilityPreference, type InsertDriverAvailabilityPreference
+  type DriverAvailabilityPreference, type InsertDriverAvailabilityPreference,
+  type ShiftOccurrence
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 
