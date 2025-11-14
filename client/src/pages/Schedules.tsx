@@ -5,6 +5,7 @@ import { ChevronLeft, ChevronRight, Calendar, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { DriverAssignmentModal } from "@/components/DriverAssignmentModal";
 import type { Block, BlockAssignment, Driver, Contract } from "@shared/schema";
 
 // Calendar API response type
@@ -20,6 +21,18 @@ type CalendarResponse = {
 
 export default function Schedules() {
   const [currentDate, setCurrentDate] = useState(new Date());
+  const [selectedBlock, setSelectedBlock] = useState<(Block & { contract: Contract | null }) | null>(null);
+  const [isAssignmentModalOpen, setIsAssignmentModalOpen] = useState(false);
+
+  const handleBlockClick = (block: Block & { contract: Contract | null }) => {
+    setSelectedBlock(block);
+    setIsAssignmentModalOpen(true);
+  };
+
+  const handleCloseModal = () => {
+    setIsAssignmentModalOpen(false);
+    setSelectedBlock(null);
+  };
 
   // Calculate week range (Sunday to Saturday)
   const weekRange = useMemo(() => {
@@ -94,6 +107,41 @@ export default function Schedules() {
     if (normalized === "solo2") return "bg-purple-500/20 text-purple-700 dark:text-purple-300";
     if (normalized === "team") return "bg-green-500/20 text-green-700 dark:text-green-300";
     return "bg-gray-500/20 text-gray-700 dark:text-gray-300";
+  };
+
+  const getPatternBadgeColor = (pattern: string | null | undefined) => {
+    if (pattern === "sunWed") return "bg-orange-500/20 text-orange-700 dark:text-orange-300";
+    if (pattern === "wedSat") return "bg-cyan-500/20 text-cyan-700 dark:text-cyan-300";
+    return "bg-gray-500/20 text-gray-700 dark:text-gray-300";
+  };
+
+  const getBumpIndicatorColor = (bumpMinutes: number) => {
+    const absMinutes = Math.abs(bumpMinutes);
+    if (absMinutes === 0) return "text-muted-foreground";
+    if (absMinutes <= 120) return "text-yellow-600 dark:text-yellow-400"; // ±2h warning
+    return "text-red-600 dark:text-red-400"; // >2h alert
+  };
+
+  const formatBumpTime = (bumpMinutes: number) => {
+    if (bumpMinutes === 0) return "On time";
+    const hours = Math.floor(Math.abs(bumpMinutes) / 60);
+    const mins = Math.abs(bumpMinutes) % 60;
+    const sign = bumpMinutes > 0 ? "+" : "-";
+    
+    if (hours === 0) {
+      return `${sign}${mins}m`;
+    }
+    if (mins === 0) {
+      return `${sign}${hours}h`;
+    }
+    return `${sign}${hours}h${mins}m`;
+  };
+
+  const calculateBumpMinutes = (actualStart: string | Date, canonicalStart: string | Date | null): number => {
+    if (!canonicalStart) return 0;
+    const actual = typeof actualStart === 'string' ? new Date(actualStart).getTime() : actualStart.getTime();
+    const canonical = typeof canonicalStart === 'string' ? new Date(canonicalStart).getTime() : canonicalStart.getTime();
+    return Math.round((actual - canonical) / (1000 * 60));
   };
 
   if (contractsLoading || calendarLoading) {
@@ -209,30 +257,86 @@ export default function Schedules() {
                         >
                           {dayBlocks.length > 0 ? (
                             <div className="space-y-1">
-                              {dayBlocks.map((block) => (
-                                <div
-                                  key={block.id}
-                                  className="p-1.5 rounded-md bg-muted/50 text-xs space-y-0.5"
-                                  data-testid={`block-${block.id}`}
-                                >
-                                  <div className="font-mono font-medium text-xs">
-                                    {block.blockId}
-                                  </div>
-                                  {block.assignment?.driver ? (
-                                    <div className="flex items-center gap-1 text-foreground text-xs">
-                                      <User className="w-2.5 h-2.5" />
-                                      <span>
-                                        {block.assignment.driver.firstName}{" "}
-                                        {block.assignment.driver.lastName}
-                                      </span>
+                              {dayBlocks.map((block) => {
+                                const bumpMinutes = calculateBumpMinutes(
+                                  block.startTimestamp,
+                                  block.canonicalStart
+                                );
+                                
+                                return (
+                                  <button
+                                    key={block.id}
+                                    onClick={() => handleBlockClick(block)}
+                                    className="w-full p-1.5 rounded-md bg-muted/50 text-xs space-y-1 text-left hover-elevate active-elevate-2 transition-colors"
+                                    data-testid={`block-${block.id}`}
+                                  >
+                                    {/* Block ID */}
+                                    <div className="font-mono font-medium text-xs">
+                                      {block.blockId}
                                     </div>
-                                  ) : (
-                                    <Badge variant="secondary" className="text-xs px-1 py-0">
-                                      Unassigned
-                                    </Badge>
-                                  )}
-                                </div>
-                              ))}
+
+                                    {/* Pattern & Bump Indicators */}
+                                    <div className="flex items-center gap-1 flex-wrap">
+                                      {block.patternGroup && (
+                                        <Badge 
+                                          variant="outline" 
+                                          className={`${getPatternBadgeColor(block.patternGroup)} text-xs px-1 py-0`}
+                                          data-testid={`badge-pattern-${block.id}`}
+                                        >
+                                          {block.patternGroup === "sunWed" ? "Sun-Wed" : "Wed-Sat"}
+                                        </Badge>
+                                      )}
+                                      {block.canonicalStart && (
+                                        <span 
+                                          className={`text-xs font-medium ${getBumpIndicatorColor(bumpMinutes)}`}
+                                          data-testid={`bump-indicator-${block.id}`}
+                                        >
+                                          {formatBumpTime(bumpMinutes)}
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    {/* Driver Assignment */}
+                                    {block.assignment?.driver ? (
+                                      <div className="space-y-1">
+                                        <div className="flex items-center gap-1 text-foreground text-xs">
+                                          <User className="w-2.5 h-2.5" />
+                                          <span>
+                                            {block.assignment.driver.firstName}{" "}
+                                            {block.assignment.driver.lastName}
+                                          </span>
+                                        </div>
+                                        {/* Assignment Type Indicator */}
+                                        {!block.assignment.assignedBy ? (
+                                          <Badge 
+                                            variant="outline" 
+                                            className="text-xs px-1 py-0 bg-blue-500/10 text-blue-700 dark:text-blue-300"
+                                            data-testid={`badge-auto-${block.id}`}
+                                          >
+                                            Auto
+                                          </Badge>
+                                        ) : (
+                                          <Badge 
+                                            variant="outline" 
+                                            className="text-xs px-1 py-0 bg-gray-500/10 text-gray-700 dark:text-gray-300"
+                                            data-testid={`badge-manual-${block.id}`}
+                                          >
+                                            Manual
+                                          </Badge>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <Badge 
+                                        variant="secondary" 
+                                        className="text-xs px-1 py-0"
+                                        data-testid={`badge-unassigned-${block.id}`}
+                                      >
+                                        Unassigned
+                                      </Badge>
+                                    )}
+                                  </button>
+                                );
+                              })}
                             </div>
                           ) : (
                             <div className="text-center text-muted-foreground text-xs py-1">
@@ -249,6 +353,13 @@ export default function Schedules() {
           </table>
         </CardContent>
       </Card>
+
+      {/* Driver Assignment Modal */}
+      <DriverAssignmentModal
+        block={selectedBlock}
+        isOpen={isAssignmentModalOpen}
+        onClose={handleCloseModal}
+      />
     </div>
   );
 }
