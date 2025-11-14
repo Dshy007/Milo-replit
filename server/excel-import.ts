@@ -1511,6 +1511,7 @@ export async function parseExcelScheduleShiftBased(
     const assignmentsToCommit: Array<{
       rowNum: number;
       occurrenceId: string;
+      amazonBlockId: string | null;
       driverId: string;
       validationStatus: string;
       validationSummary: string | null;
@@ -1650,9 +1651,13 @@ export async function parseExcelScheduleShiftBased(
       const validationSummary = validation.validationResult.messages.join("; ") || "OK";
 
       // Stage for commit
+      // Safe Block ID handling: trim if string exists, otherwise null
+      const amazonBlockId = typeof row.blockId === 'string' ? row.blockId.trim() || null : null;
+      
       assignmentsToCommit.push({
         rowNum,
         occurrenceId: occurrence.id,
+        amazonBlockId,
         driverId: driver.id,
         validationStatus,
         validationSummary,
@@ -1687,6 +1692,7 @@ export async function parseExcelScheduleShiftBased(
             tenantId,
             shiftOccurrenceId: assignment.occurrenceId, // NEW: use shiftOccurrenceId
             blockId: null, // Legacy field, not used
+            amazonBlockId: assignment.amazonBlockId, // Amazon's Block ID as metadata
             driverId: assignment.driverId,
             assignedBy: userId,
             validationStatus: assignment.validationStatus,

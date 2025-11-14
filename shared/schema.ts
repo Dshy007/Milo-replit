@@ -612,6 +612,7 @@ export const blockAssignments = pgTable("block_assignments", {
   isActive: boolean("is_active").notNull().default(true), // Soft-delete: false when archived
   archivedAt: timestamp("archived_at"), // When assignment was archived (null if active)
   importBatchId: text("import_batch_id"), // Track which Excel import created this assignment
+  amazonBlockId: text("amazon_block_id"), // Amazon's Block ID as metadata (no foreign key) - e.g., "B-00000001"
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   // Unique constraint: one active driver per block (legacy)

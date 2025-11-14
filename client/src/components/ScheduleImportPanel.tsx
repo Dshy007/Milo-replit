@@ -22,7 +22,7 @@ interface ScheduleImportPanelProps {
 }
 
 export function ScheduleImportPanel({ file, onImport, isImporting }: ScheduleImportPanelProps) {
-  const [importMode, setImportMode] = useState<'block' | 'shift'>('block');
+  const [importMode, setImportMode] = useState<'block' | 'shift'>('shift');
   const [debugMode, setDebugMode] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
 
@@ -79,13 +79,13 @@ export function ScheduleImportPanel({ file, onImport, isImporting }: ScheduleImp
           <AlertDescription className="text-sm">
             {importMode === 'block' ? (
               <>
-                <strong>Block Mode (Recommended):</strong> Tracks assignments using Amazon's Block IDs. 
-                This is the proven approach for weekly re-imports and DOT compliance.
+                <strong>Block Mode (Legacy):</strong> Requires Block IDs to exist in the database before import. 
+                This mode is deprecated - use Shift Mode for standard imports.
               </>
             ) : (
               <>
-                <strong>Shift Mode (Experimental):</strong> Tracks assignments using Contract Slots (operatorId + tractorId + start time). 
-                This approach is under development for future multi-week scheduling.
+                <strong>Shift Mode (Recommended):</strong> Tracks assignments using Contract Slots (Operator ID → Contract → Driver). 
+                Amazon Block IDs are stored as reference metadata. This is the standard import method.
               </>
             )}
           </AlertDescription>
