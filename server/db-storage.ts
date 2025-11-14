@@ -320,6 +320,18 @@ export class DbStorage implements IStorage {
     return result[0];
   }
 
+  async getShiftOccurrencesByDateRange(tenantId: string, startDate: Date, endDate: Date): Promise<ShiftOccurrence[]> {
+    return await db.select()
+      .from(shiftOccurrences)
+      .where(
+        and(
+          eq(shiftOccurrences.tenantId, tenantId),
+          gte(shiftOccurrences.serviceDate, startDate.toISOString().split('T')[0]),
+          lte(shiftOccurrences.serviceDate, endDate.toISOString().split('T')[0])
+        )
+      );
+  }
+
   async deleteShiftOccurrence(id: string, tenantId: string): Promise<boolean> {
     // Delete in transaction with tenant scoping for multi-tenant safety
     const result = await db.transaction(async (tx) => {

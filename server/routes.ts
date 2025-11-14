@@ -15,7 +15,8 @@ import {
   insertProtectedDriverRuleSchema, updateProtectedDriverRuleSchema,
   insertSpecialRequestSchema, updateSpecialRequestSchema,
   insertDriverAvailabilityPreferenceSchema, updateDriverAvailabilityPreferenceSchema,
-  blocks, blockAssignments, assignmentHistory, driverContractStats, drivers, protectedDriverRules
+  blocks, blockAssignments, assignmentHistory, driverContractStats, drivers, protectedDriverRules,
+  shiftOccurrences, shiftTemplates, contracts
 } from "@shared/schema";
 import { eq, and, inArray } from "drizzle-orm";
 import session from "express-session";
@@ -1198,39 +1199,62 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Date range cannot exceed 31 days" });
       }
       
-      // Fetch blocks in date range
-      const blocks = await dbStorage.getBlocksByDateRange(req.session.tenantId!, start, end);
+      // QUICK WORKAROUND: Fetch shift occurrences instead of blocks
+      // This shows data from shift-based imports (new system)
+      const occurrences = await dbStorage.getShiftOccurrencesByDateRange(req.session.tenantId!, start, end);
       
-      // Fetch all assignments for tenant (will filter to blocks in range)
+      // Fetch all assignments for tenant
       const allAssignments = await dbStorage.getBlockAssignmentsByTenant(req.session.tenantId!);
-      const blockIds = new Set(blocks.map(b => b.id));
-      const relevantAssignments = allAssignments.filter(a => blockIds.has(a.blockId));
+      const occurrenceIds = new Set(occurrences.map(o => o.id));
+      const relevantAssignments = allAssignments.filter(a => a.shiftOccurrenceId && occurrenceIds.has(a.shiftOccurrenceId));
       
-      // Build maps for efficient lookups
-      const assignmentsByBlockId = new Map(relevantAssignments.map(a => [a.blockId, a]));
+      // Build assignment lookup by occurrence ID
+      const assignmentsByOccurrenceId = new Map(relevantAssignments.map(a => [a.shiftOccurrenceId!, a]));
       
-      // Fetch unique contract IDs and driver IDs
-      const contractIds = [...new Set(blocks.map(b => b.contractId))];
+      // Fetch templates and contracts
+      const templateIds = [...new Set(occurrences.map(o => o.templateId))];
       const driverIds = [...new Set(relevantAssignments.map(a => a.driverId))];
       
-      // Fetch all contracts and drivers in parallel
-      const [contracts, drivers] = await Promise.all([
+      const templates = await db.select().from(shiftTemplates).where(
+        and(
+          eq(shiftTemplates.tenantId, req.session.tenantId!),
+          inArray(shiftTemplates.id, templateIds.length > 0 ? templateIds : [''])
+        )
+      );
+      
+      const contractIds = [...new Set(templates.map(t => t.contractId))];
+      const [fetchedContracts, fetchedDrivers] = await Promise.all([
         Promise.all(contractIds.map(id => dbStorage.getContract(id))),
         Promise.all(driverIds.map(id => dbStorage.getDriver(id))),
       ]);
       
       // Build lookup maps
-      const contractsMap = new Map(contracts.filter(c => c).map(c => [c!.id, c!]));
-      const driversMap = new Map(drivers.filter(d => d).map(d => [d!.id, d!]));
+      const templatesMap = new Map(templates.map(t => [t.id, t]));
+      const contractsMap = new Map(fetchedContracts.filter(c => c).map(c => [c!.id, c!]));
+      const driversMap = new Map(fetchedDrivers.filter(d => d).map(d => [d!.id, d!]));
       
-      // Enrich blocks with contract, assignment, and driver data
-      const enrichedBlocks = blocks.map(block => {
-        const contract = contractsMap.get(block.contractId) || null;
-        const assignment = assignmentsByBlockId.get(block.id) || null;
+      // Transform shift occurrences to look like blocks for frontend compatibility
+      const enrichedBlocks = occurrences.map(occ => {
+        const template = templatesMap.get(occ.templateId);
+        const contract = template ? contractsMap.get(template.contractId) || null : null;
+        const assignment = assignmentsByOccurrenceId.get(occ.id) || null;
         const driver = assignment ? driversMap.get(assignment.driverId) || null : null;
         
+        // Transform shift occurrence to block-like structure
         return {
-          ...block,
+          id: occ.id, // Shift occurrence ID
+          blockId: occ.externalBlockId || `SO-${occ.id.slice(0, 8)}`, // Use Amazon Block ID or fallback
+          serviceDate: occ.serviceDate,
+          contractId: contract?.id || '',
+          startTimestamp: occ.scheduledStart,
+          endTimestamp: occ.scheduledEnd,
+          tractorId: occ.tractorId || '',
+          soloType: contract?.type || 'solo1',
+          duration: contract?.duration || 0,
+          status: occ.status,
+          isCarryover: occ.isCarryover,
+          patternGroup: occ.patternGroup,
+          canonicalStart: template?.canonicalStart || null,
           contract,
           assignment: assignment ? {
             ...assignment,
@@ -1243,7 +1267,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({
         dateRange: { start: startDate, end: endDate },
         blocks: enrichedBlocks,
-        // Include normalized maps for frontend caching if needed
         drivers: Object.fromEntries(driversMap),
         contracts: Object.fromEntries(contractsMap),
       });

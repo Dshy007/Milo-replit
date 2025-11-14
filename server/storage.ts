@@ -86,6 +86,7 @@ export interface IStorage {
   
   // Shift Occurrences
   getShiftOccurrence(id: string, tenantId: string): Promise<ShiftOccurrence | undefined>;
+  getShiftOccurrencesByDateRange(tenantId: string, startDate: Date, endDate: Date): Promise<ShiftOccurrence[]>;
   deleteShiftOccurrence(id: string, tenantId: string): Promise<boolean>;
   
   // Block Assignments
@@ -542,6 +543,11 @@ export class MemStorage implements IStorage {
   async getShiftOccurrence(id: string, tenantId: string): Promise<ShiftOccurrence | undefined> {
     // MemStorage doesn't support shift occurrences yet - using DbStorage in production
     return undefined;
+  }
+
+  async getShiftOccurrencesByDateRange(tenantId: string, startDate: Date, endDate: Date): Promise<ShiftOccurrence[]> {
+    // MemStorage doesn't support shift occurrences yet - using DbStorage in production
+    return [];
   }
 
   async deleteShiftOccurrence(id: string, tenantId: string): Promise<boolean> {

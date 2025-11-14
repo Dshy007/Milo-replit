@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format, startOfWeek, addWeeks, subWeeks, eachDayOfInterval, addDays } from "date-fns";
-import { ChevronLeft, ChevronRight, Calendar, User, Upload } from "lucide-react";
+import { ChevronLeft, ChevronRight, Calendar, User, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -13,6 +13,16 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient } from "@/lib/queryClient";
@@ -37,6 +47,7 @@ export default function Schedules() {
   const [isAssignmentModalOpen, setIsAssignmentModalOpen] = useState(false);
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
+  const [shiftToDelete, setShiftToDelete] = useState<string | null>(null);
 
   const handleBlockClick = (block: Block & { contract: Contract | null }) => {
     setSelectedBlock(block);
@@ -46,6 +57,48 @@ export default function Schedules() {
   const handleCloseModal = () => {
     setIsAssignmentModalOpen(false);
     setSelectedBlock(null);
+  };
+
+  const deleteMutation = useMutation({
+    mutationFn: async (shiftId: string) => {
+      const response = await fetch(`/api/shift-occurrences/${shiftId}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || "Failed to delete shift");
+      }
+      
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
+      toast({
+        title: "Shift Deleted",
+        description: "The shift has been removed from the calendar",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Delete Failed",
+        description: error.message || "Failed to delete shift",
+      });
+    },
+  });
+
+  const handleDeleteShift = (e: React.MouseEvent, shiftId: string) => {
+    e.stopPropagation(); // Don't open the assignment modal
+    setShiftToDelete(shiftId);
+  };
+
+  const confirmDelete = () => {
+    if (shiftToDelete) {
+      deleteMutation.mutate(shiftToDelete);
+      setShiftToDelete(null);
+    }
   };
 
   const importMutation = useMutation({
@@ -409,77 +462,93 @@ export default function Schedules() {
                                 );
                                 
                                 return (
-                                  <button
-                                    key={block.id}
-                                    onClick={() => handleBlockClick(block)}
-                                    className="w-full p-1.5 rounded-md bg-muted/50 text-xs space-y-1 text-left hover-elevate active-elevate-2 transition-colors"
-                                    data-testid={`block-${block.id}`}
-                                  >
-                                    {/* Block ID */}
-                                    <div className="font-mono font-medium text-xs">
-                                      {block.blockId}
-                                    </div>
+                                  <div key={block.id} className="relative group">
+                                    <button
+                                      onClick={() => handleBlockClick(block)}
+                                      className="w-full p-1.5 rounded-md bg-muted/50 text-xs space-y-1 text-left hover-elevate active-elevate-2 transition-colors"
+                                      data-testid={`block-${block.id}`}
+                                    >
+                                      {/* Block ID */}
+                                      <div className="font-mono font-medium text-xs pr-4">
+                                        {block.blockId}
+                                      </div>
 
-                                    {/* Pattern & Bump Indicators */}
-                                    <div className="flex items-center gap-1 flex-wrap">
-                                      {block.patternGroup && (
-                                        <Badge 
-                                          variant="outline" 
-                                          className={`${getPatternBadgeColor(block.patternGroup)} text-xs px-1 py-0`}
-                                          data-testid={`badge-pattern-${block.id}`}
-                                        >
-                                          {block.patternGroup === "sunWed" ? "Sun-Wed" : "Wed-Sat"}
-                                        </Badge>
-                                      )}
-                                      {block.canonicalStart && (
-                                        <span 
-                                          className={`text-xs font-medium ${getBumpIndicatorColor(bumpMinutes)}`}
-                                          data-testid={`bump-indicator-${block.id}`}
-                                        >
-                                          {formatBumpTime(bumpMinutes)}
-                                        </span>
-                                      )}
-                                    </div>
-
-                                    {/* Driver Assignment */}
-                                    {block.assignment?.driver ? (
-                                      <div className="space-y-1">
-                                        <div className="flex items-center gap-1 text-foreground text-xs">
-                                          <User className="w-2.5 h-2.5" />
-                                          <span>
-                                            {block.assignment.driver.firstName}{" "}
-                                            {block.assignment.driver.lastName}
-                                          </span>
-                                        </div>
-                                        {/* Assignment Type Indicator */}
-                                        {!block.assignment.assignedBy ? (
+                                      {/* Pattern & Bump Indicators */}
+                                      <div className="flex items-center gap-1 flex-wrap">
+                                        {block.patternGroup && (
                                           <Badge 
                                             variant="outline" 
-                                            className="text-xs px-1 py-0 bg-blue-500/10 text-blue-700 dark:text-blue-300"
-                                            data-testid={`badge-auto-${block.id}`}
+                                            className={`${getPatternBadgeColor(block.patternGroup)} text-xs px-1 py-0`}
+                                            data-testid={`badge-pattern-${block.id}`}
                                           >
-                                            Auto
-                                          </Badge>
-                                        ) : (
-                                          <Badge 
-                                            variant="outline" 
-                                            className="text-xs px-1 py-0 bg-gray-500/10 text-gray-700 dark:text-gray-300"
-                                            data-testid={`badge-manual-${block.id}`}
-                                          >
-                                            Manual
+                                            {block.patternGroup === "sunWed" ? "Sun-Wed" : "Wed-Sat"}
                                           </Badge>
                                         )}
+                                        {block.canonicalStart && (
+                                          <span 
+                                            className={`text-xs font-medium ${getBumpIndicatorColor(bumpMinutes)}`}
+                                            data-testid={`bump-indicator-${block.id}`}
+                                          >
+                                            {formatBumpTime(bumpMinutes)}
+                                          </span>
+                                        )}
                                       </div>
-                                    ) : (
-                                      <Badge 
-                                        variant="secondary" 
-                                        className="text-xs px-1 py-0"
-                                        data-testid={`badge-unassigned-${block.id}`}
-                                      >
-                                        Unassigned
-                                      </Badge>
-                                    )}
-                                  </button>
+
+                                      {/* Driver Assignment */}
+                                      {block.assignment?.driver ? (
+                                        <div className="space-y-1">
+                                          <div className="flex items-center gap-1 text-foreground text-xs">
+                                            <User className="w-2.5 h-2.5" />
+                                            <span>
+                                              {block.assignment.driver.firstName}{" "}
+                                              {block.assignment.driver.lastName}
+                                            </span>
+                                          </div>
+                                          {/* Assignment Type Indicator */}
+                                          {!block.assignment.assignedBy ? (
+                                            <Badge 
+                                              variant="outline" 
+                                              className="text-xs px-1 py-0 bg-blue-500/10 text-blue-700 dark:text-blue-300"
+                                              data-testid={`badge-auto-${block.id}`}
+                                            >
+                                              Auto
+                                            </Badge>
+                                          ) : (
+                                            <Badge 
+                                              variant="outline" 
+                                              className="text-xs px-1 py-0 bg-gray-500/10 text-gray-700 dark:text-gray-300"
+                                              data-testid={`badge-manual-${block.id}`}
+                                            >
+                                              Manual
+                                            </Badge>
+                                          )}
+                                        </div>
+                                      ) : (
+                                        <Badge 
+                                          variant="secondary" 
+                                          className="text-xs px-1 py-0"
+                                          data-testid={`badge-unassigned-${block.id}`}
+                                        >
+                                          Unassigned
+                                        </Badge>
+                                      )}
+                                    </button>
+                                    
+                                    {/* Delete Button */}
+                                    <button
+                                      onClick={(e) => handleDeleteShift(e, block.id)}
+                                      disabled={deleteMutation.isPending}
+                                      className="absolute top-0.5 right-0.5 p-0.5 rounded hover:bg-destructive/20 opacity-0 group-hover:opacity-100 transition-opacity"
+                                      data-testid={`button-delete-shift-${block.id}`}
+                                      aria-label="Delete shift"
+                                    >
+                                      {deleteMutation.isPending ? (
+                                        <div className="w-3 h-3 border-2 border-destructive border-t-transparent rounded-full animate-spin" />
+                                      ) : (
+                                        <X className="w-3 h-3 text-destructive" />
+                                      )}
+                                    </button>
+                                  </div>
                                 );
                               })}
                             </div>
@@ -505,6 +574,29 @@ export default function Schedules() {
         isOpen={isAssignmentModalOpen}
         onClose={handleCloseModal}
       />
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={!!shiftToDelete} onOpenChange={(open) => !open && setShiftToDelete(null)}>
+        <AlertDialogContent data-testid="dialog-confirm-delete">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Shift?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently remove this shift occurrence from the calendar. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-delete">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmDelete}
+              disabled={deleteMutation.isPending}
+              data-testid="button-confirm-delete"
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleteMutation.isPending ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
