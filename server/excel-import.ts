@@ -1240,6 +1240,7 @@ export async function parseExcelScheduleShiftBased(
 
     const contractCache = new Map<string, typeof contracts.$inferSelect>();
     const templateCache = new Map<string, typeof shiftTemplates.$inferSelect>();
+    const failedOperatorIds = new Map<string, string>(); // Track which Operator IDs failed and why
 
     // Process each shift tour (by operatorId)
     for (const [operatorId, shiftRows] of Array.from(shiftGroups.entries())) {
@@ -1248,7 +1249,8 @@ export async function parseExcelScheduleShiftBased(
       // Parse Operator ID to extract contract info
       const parsedOperator = parseOperatorId(operatorId);
       if (!parsedOperator) {
-        result.warnings.push(`Operator ${operatorId}: Could not parse operator ID format`);
+        failedOperatorIds.set(operatorId, `Invalid Operator ID format (expected: FTIM_{domicile}_{type}_{tractorId}_d2)`);
+        result.warnings.push(`Operator ${operatorId}: Could not parse operator ID format - ${shiftRows.length} rows affected`);
         continue;
       }
 
@@ -1270,15 +1272,22 @@ export async function parseExcelScheduleShiftBased(
 
         if (existingContracts.length === 0) {
           // Auto-create contract from timing data
-          const startDate = firstRow.stop1PlannedStartDate;
-          const startTime = firstRow.stop1PlannedStartTime;
-          const endDate = firstRow.stop2PlannedArrivalDate;
-          const endTime = firstRow.stop2PlannedArrivalTime;
+          // Try to find a row with complete timing data (search ALL rows, not just first)
+          const rowWithTiming = shiftRows.find(r => 
+            r.stop1PlannedStartDate && r.stop1PlannedStartTime !== undefined &&
+            r.stop2PlannedArrivalDate && r.stop2PlannedArrivalTime !== undefined
+          );
 
-          if (!startDate || !endDate || startTime === undefined || endTime === undefined) {
-            result.warnings.push(`Operator ${operatorId}: Cannot auto-create contract - missing timing data`);
+          if (!rowWithTiming) {
+            failedOperatorIds.set(operatorId, `Cannot create contract - no rows have complete timing data (Stop 1 & Stop 2 columns)`);
+            result.warnings.push(`Operator ${operatorId}: Cannot auto-create contract - missing timing data - ${shiftRows.length} rows affected`);
             continue;
           }
+
+          const startDate = rowWithTiming.stop1PlannedStartDate!;
+          const startTime = rowWithTiming.stop1PlannedStartTime!;
+          const endDate = rowWithTiming.stop2PlannedArrivalDate!;
+          const endTime = rowWithTiming.stop2PlannedArrivalTime!;
 
           const startTimestamp = excelDateToJSDate(startDate, startTime);
           const endTimestamp = excelDateToJSDate(endDate, endTime);
@@ -1326,7 +1335,8 @@ export async function parseExcelScheduleShiftBased(
       
       if (!template) {
         if (!contract.duration || !contract.startTime) {
-          result.warnings.push(`Operator ${operatorId}: Contract missing duration or startTime - cannot create template`);
+          failedOperatorIds.set(operatorId, `Contract "${contract.name}" missing duration or startTime`);
+          result.warnings.push(`Operator ${operatorId}: Contract missing duration/startTime - cannot create template - ${shiftRows.length} rows affected`);
           continue;
         }
 
@@ -1335,7 +1345,8 @@ export async function parseExcelScheduleShiftBased(
         );
 
         if (!firstRowWithTiming) {
-          result.warnings.push(`Operator ${operatorId}: No timing data found - cannot determine pattern group`);
+          failedOperatorIds.set(operatorId, `No rows have timing data to determine pattern group`);
+          result.warnings.push(`Operator ${operatorId}: No timing data found - cannot determine pattern group - ${shiftRows.length} rows affected`);
           continue;
         }
 
@@ -1533,6 +1544,14 @@ export async function parseExcelScheduleShiftBased(
         continue;
       }
 
+      // Check if this row's Operator ID failed during template/contract creation
+      const failureReason = failedOperatorIds.get(row.operatorId.trim());
+      if (failureReason) {
+        result.failed++;
+        result.errors.push(`Row ${rowNum}: Cannot process - Operator ${row.operatorId} failed: ${failureReason}`);
+        continue;
+      }
+
       // Find shift occurrence by externalBlockId (Amazon's block ID)
       const occurrence = allOccurrences.find(
         o => o.externalBlockId === row.blockId.trim()
@@ -1540,7 +1559,7 @@ export async function parseExcelScheduleShiftBased(
 
       if (!occurrence) {
         result.failed++;
-        result.errors.push(`Row ${rowNum}: Shift occurrence not found for block ${row.blockId}`);
+        result.errors.push(`Row ${rowNum}: Shift occurrence not found for block ${row.blockId} (this may indicate a system error - shift occurrence should have been created)`);
         continue;
       }
 
