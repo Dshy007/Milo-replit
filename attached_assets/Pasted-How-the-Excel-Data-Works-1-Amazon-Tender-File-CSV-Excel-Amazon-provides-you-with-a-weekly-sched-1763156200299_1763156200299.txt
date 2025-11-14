@@ -1,0 +1,61 @@
+How the Excel Data Works
+1. Amazon Tender File (CSV/Excel)
+Amazon provides you with a weekly schedule showing:
+Block ID (e.g., B-BDMP1T4Z8)
+Start date/time
+End date/time
+Origin → Destination (usually LENEXA → LENEXA)
+Operator ID (e.g., FTIM_MKC_Solo2_Tractor_4_d2)
+2. Milo Maps Blocks to Bench Slots
+The system uses the Operator ID and start time to match each Amazon block to your fixed contract slots:
+Example:
+Plain Text
+Block: B-BDMP1T4Z8
+Operator: FTIM_MKC_Solo2_Tractor_4_d2
+Start: 11/15 08:30 → End: 11/16 22:30
+→ Maps to: Solo2, Tractor 4, 08:30 start time
+3. Why Static Start Times Matter
+✅ Predictability - You know exactly when each tractor needs a driver
+✅ Pattern Recognition - The AI can learn which slots consistently run vs. which are sporadic
+✅ Driver Planning - Drivers know their schedule in advance (e.g., "I'm on Solo1 Tractor 9, always 16:30 starts")
+✅ Compliance - Built-in gaps between start times ensure 10-hour rest periods
+✅ Cross-Training - You can move drivers between similar start times (±2 hours) without breaking the bench
+4. The "Friday View" Problem Milo Solves
+Every Friday, you receive Amazon's schedule showing:
+Trips (top section) - drivers currently out on the road from last week
+Blocks (bottom section) - new work starting this week, sitting on the "bench"
+Manual Problem: You had to:
+Figure out which drivers are finishing their trips
+Calculate their rest periods
+Match them to available bench blocks
+Ensure no DOT violations (6-day limit, 34-hour resets)
+Track Solo1 vs Solo2 assignments
+Milo's Solution:
+Reads the Excel file automatically
+Separates Trips from Blocks
+Tracks driver history and fatigue
+Suggests optimal assignments
+Flags compliance risks
+Generates the final schedule in driver-friendly format: "TIME SOLO1/SOLO2 - DATE"
+Example Week (Nov 15-22)
+From your actual data:
+Total blocks: 81
+Solo1 blocks: 58 (80%) - single-day coverage
+Solo2 blocks: 23 (20%) - two-day coverage
+Busiest day: Saturday 11/15 (29 blocks)
+Peak start times: 20:30 (20 blocks), 16:30 (18 blocks)
+All 81 blocks align perfectly with your bench contract times - no off-bench anomalies like 09:40 starts, which means clean, predictable scheduling.
+Business Impact
+Before Milo:
+Manual Excel analysis every Friday (hours of work)
+Risk of DOT violations from miscalculations
+Difficulty scaling beyond 25 drivers
+Constant back-and-forth with you to refine schedules
+With Milo:
+Automated analysis (seconds)
+Built-in compliance checking
+Scales to 600+ drivers
+AI handles routine questions ("Who's available for Solo2 on Monday?")
+You focus on strategy, not spreadsheets
+Current Status
+The system is functionally complete and was packaged for deployment to Replit. The core logic is validated and working. What we're discussing now is making the AI component self-sufficient so users can interact with Milo directly without you needing to manually intervene or burn through Manus credits for every refinement.
