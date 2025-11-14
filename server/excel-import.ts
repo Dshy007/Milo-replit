@@ -639,10 +639,14 @@ export async function parseExcelSchedule(
         driverImportBlockIds.includes(b.id)
       );
 
-      // Fetch blocks for existing assignments
-      const assignmentBlockIds = driverExistingAssignmentRows.map((a) => a.blockId);
-      const assignmentBlocks = assignmentBlockIds.length > 0
-        ? await db.select().from(blocks).where(inArray(blocks.id, assignmentBlockIds))
+      // CRITICAL FIX: Fetch blocks for ALL driver assignments (active + archived)
+      // This ensures rolling-6 calculations use correct historical block data
+      const allDriverAssignmentIds = allAssignments
+        .filter(a => a.driverId === driver.id)
+        .map(a => a.blockId);
+      
+      const assignmentBlocks = allDriverAssignmentIds.length > 0
+        ? await db.select().from(blocks).where(inArray(blocks.id, allDriverAssignmentIds))
         : [];
 
       // Create map for fast lookup
