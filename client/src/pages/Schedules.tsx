@@ -67,8 +67,10 @@ export default function Schedules() {
       });
       
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || "Failed to delete shift");
+        const errorData = await response.json().catch(() => ({ message: "Failed to delete shift" }));
+        const error: any = new Error(errorData.message);
+        error.status = response.status;
+        throw error;
       }
       
       return response.json();
@@ -80,11 +82,24 @@ export default function Schedules() {
         description: "The shift has been removed from the calendar",
       });
     },
-    onError: (error: Error) => {
+    onError: (error: any) => {
+      let title = "Delete Failed";
+      let description = "Failed to delete shift";
+      
+      if (error.status === 409) {
+        title = "Cannot Delete Active Shift";
+        description = "This shift is currently in progress or completed and cannot be deleted.";
+      } else if (error.status === 404) {
+        title = "Shift Not Found";
+        description = "The shift you're trying to delete no longer exists.";
+      } else if (error.message) {
+        description = error.message;
+      }
+      
       toast({
         variant: "destructive",
-        title: "Delete Failed",
-        description: error.message || "Failed to delete shift",
+        title,
+        description,
       });
     },
   });
