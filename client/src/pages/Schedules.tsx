@@ -156,19 +156,19 @@ export default function Schedules() {
       {/* Contract Grid Table */}
       <Card className="flex-1 overflow-hidden">
         <CardContent className="p-0 h-full overflow-auto">
-          <table className="w-full border-collapse">
+          <table className="w-full border-collapse text-sm">
             <thead className="sticky top-0 z-10 bg-card border-b">
               <tr>
-                <th className="text-left p-4 font-semibold min-w-[300px] border-r">
+                <th className="text-left p-2 font-semibold min-w-[140px] border-r">
                   Start Time
                 </th>
                 {weekRange.weekDays.map((day) => (
                   <th
                     key={day.toISOString()}
-                    className="text-center p-4 font-semibold min-w-[150px] border-r last:border-r-0"
+                    className="text-center p-2 font-semibold min-w-[120px] border-r last:border-r-0"
                   >
-                    <div>{format(day, "EEE")}</div>
-                    <div className="text-sm font-normal text-muted-foreground">
+                    <div className="text-sm">{format(day, "EEE")}</div>
+                    <div className="text-xs font-normal text-muted-foreground">
                       {format(day, "MMM d")}
                     </div>
                   </th>
@@ -186,26 +186,14 @@ export default function Schedules() {
                 sortedContracts.map((contract) => (
                   <tr key={contract.id} className="border-b hover:bg-muted/30">
                     {/* Contract Info Cell */}
-                    <td className="p-4 border-r align-top">
-                      <div className="space-y-2">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium text-base">
-                            {formatTime(contract.startTime)} CT
-                          </span>
-                          <Badge variant="outline" className={getBlockTypeColor(contract.type)}>
-                            {contract.type.toUpperCase()}
-                          </Badge>
-                        </div>
-                        <div className="text-sm text-muted-foreground space-y-1">
-                          <div className="flex items-center gap-1">
-                            <span className="font-medium">Tractor:</span> {contract.tractorId}
-                          </div>
-                          {contract.domicile && (
-                            <div className="flex items-center gap-1">
-                              <span className="font-medium">Domicile:</span> {contract.domicile}
-                            </div>
-                          )}
-                        </div>
+                    <td className="p-2 border-r align-top">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-medium text-sm">
+                          {formatTime(contract.startTime)}
+                        </span>
+                        <Badge variant="outline" className={`${getBlockTypeColor(contract.type)} text-xs px-1.5 py-0`}>
+                          {contract.type.toUpperCase()}
+                        </Badge>
                       </div>
                     </td>
 
@@ -217,29 +205,29 @@ export default function Schedules() {
                       return (
                         <td
                           key={day.toISOString()}
-                          className="p-2 border-r last:border-r-0 align-top"
+                          className="p-1.5 border-r last:border-r-0 align-top"
                         >
                           {dayBlocks.length > 0 ? (
                             <div className="space-y-1">
                               {dayBlocks.map((block) => (
                                 <div
                                   key={block.id}
-                                  className="p-2 rounded-md bg-muted/50 text-xs space-y-1"
+                                  className="p-1.5 rounded-md bg-muted/50 text-xs space-y-0.5"
                                   data-testid={`block-${block.id}`}
                                 >
-                                  <div className="font-mono font-medium">
+                                  <div className="font-mono font-medium text-xs">
                                     {block.blockId}
                                   </div>
                                   {block.assignment?.driver ? (
-                                    <div className="flex items-center gap-1 text-foreground">
-                                      <User className="w-3 h-3" />
+                                    <div className="flex items-center gap-1 text-foreground text-xs">
+                                      <User className="w-2.5 h-2.5" />
                                       <span>
                                         {block.assignment.driver.firstName}{" "}
                                         {block.assignment.driver.lastName}
                                       </span>
                                     </div>
                                   ) : (
-                                    <Badge variant="secondary" className="text-xs">
+                                    <Badge variant="secondary" className="text-xs px-1 py-0">
                                       Unassigned
                                     </Badge>
                                   )}
@@ -247,7 +235,7 @@ export default function Schedules() {
                               ))}
                             </div>
                           ) : (
-                            <div className="text-center text-muted-foreground text-xs py-2">
+                            <div className="text-center text-muted-foreground text-xs py-1">
                               -
                             </div>
                           )}
