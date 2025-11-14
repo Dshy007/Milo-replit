@@ -6,14 +6,34 @@ import * as XLSX from "xlsx";
 import { startOfWeek, parseISO, getDay, startOfDay, format } from "date-fns";
 
 interface ExcelRow {
-  "Block ID": string;
-  "Driver Name": string;
-  "Operator ID": string;
-  "Stop 1 Planned Arrival Date"?: number;
-  "Stop 1 Planned Arrival Time"?: number;
-  "Stop 2 Planned Arrival Date"?: number;
-  "Stop 2 Planned Arrival Time"?: number;
+  blockId: string;
+  driverName: string;
+  operatorId: string;
+  stop1PlannedStartDate?: number;
+  stop1PlannedStartTime?: number;
+  stop2PlannedArrivalDate?: number;
+  stop2PlannedArrivalTime?: number;
 }
+
+/**
+ * Canonical column name mapping
+ * Maps various Excel column name variations to standardized internal keys
+ */
+const CANONICAL_COLUMN_MAP: Record<string, string> = {
+  "block id": "blockId",
+  "driver name": "driverName",
+  "operator id": "operatorId",
+  
+  // Stop 1 timing (handles both "Arrival" and "Departure" variations with single/double spaces)
+  "stop 1 planned arrival date": "stop1PlannedStartDate",
+  "stop 1 planned departure date": "stop1PlannedStartDate",
+  "stop 1 planned arrival time": "stop1PlannedStartTime",
+  "stop 1 planned departure time": "stop1PlannedStartTime",
+  
+  // Stop 2 timing
+  "stop 2 planned arrival date": "stop2PlannedArrivalDate",
+  "stop 2 planned arrival time": "stop2PlannedArrivalTime",
+};
 
 /**
  * Normalize column header: trim, collapse multiple spaces, lowercase
@@ -23,29 +43,17 @@ function normalizeHeader(header: string): string {
 }
 
 /**
- * Create a normalized column map from raw Excel headers to actual values
- * Handles spacing variations and provides aliases for common column name variations
+ * Create a mapping from raw Excel headers to canonical property names
  */
 function createColumnMap(rawHeaders: string[]): Map<string, string> {
   const map = new Map<string, string>();
   
   for (const header of rawHeaders) {
     const normalized = normalizeHeader(header);
-    map.set(normalized, header);
+    const canonicalKey = CANONICAL_COLUMN_MAP[normalized];
     
-    // Add aliases for common variations
-    // "Stop 1 Planned Arrival Date" <-> "Stop 1 Planned Departure Date"
-    if (normalized.includes("stop 1") && normalized.includes("planned arrival date")) {
-      map.set("stop 1 planned departure date", header);
-    }
-    if (normalized.includes("stop 1") && normalized.includes("planned departure date")) {
-      map.set("stop 1 planned arrival date", header);
-    }
-    if (normalized.includes("stop 1") && normalized.includes("planned arrival time")) {
-      map.set("stop 1 planned departure time", header);
-    }
-    if (normalized.includes("stop 1") && normalized.includes("planned departure time")) {
-      map.set("stop 1 planned arrival time", header);
+    if (canonicalKey) {
+      map.set(header, canonicalKey); // raw header → canonical key
     }
   }
   
@@ -53,17 +61,37 @@ function createColumnMap(rawHeaders: string[]): Map<string, string> {
 }
 
 /**
- * Validate that required columns exist in the Excel file
+ * Normalize Excel rows to use canonical column names
+ * This allows downstream logic to work with consistent property names
+ * regardless of spacing variations or Arrival/Departure column naming
+ */
+function normalizeRows(rawRows: any[], columnMap: Map<string, string>): ExcelRow[] {
+  return rawRows.map(rawRow => {
+    const normalized: any = {};
+    
+    for (const [rawHeader, value] of Object.entries(rawRow)) {
+      const canonicalKey = columnMap.get(rawHeader);
+      if (canonicalKey) {
+        normalized[canonicalKey] = value;
+      }
+    }
+    
+    return normalized as ExcelRow;
+  });
+}
+
+/**
+ * Validate that required canonical columns can be resolved from Excel headers
  */
 function validateRequiredColumns(
   columnMap: Map<string, string>,
-  requiredColumns: string[]
+  requiredCanonicalKeys: string[]
 ): { valid: boolean; missing: string[] } {
   const missing: string[] = [];
+  const canonicalValues = new Set(columnMap.values());
   
-  for (const required of requiredColumns) {
-    const normalized = normalizeHeader(required);
-    if (!columnMap.has(normalized)) {
+  for (const required of requiredCanonicalKeys) {
+    if (!canonicalValues.has(required)) {
       missing.push(required);
     }
   }
@@ -252,41 +280,52 @@ export async function parseExcelSchedule(
     }
 
     const worksheet = workbook.Sheets[sheetName];
-    const rows: ExcelRow[] = XLSX.utils.sheet_to_json(worksheet);
-
-    if (rows.length === 0) {
-      throw new Error("Excel file is empty");
+    
+    // Extract true header row directly from worksheet (not from data rows)
+    // This ensures we get all column headers even if first data row has blank cells
+    const allRows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+    
+    if (allRows.length < 2) {
+      throw new Error("Excel file is empty or has no data rows");
     }
+    
+    const rawHeaders: string[] = allRows[0] as string[];
+    const rawRows: any[] = XLSX.utils.sheet_to_json(worksheet);
 
-    // ========== COLUMN VALIDATION ==========
-    // Extract actual column headers from the first row
-    const rawHeaders = rows.length > 0 ? Object.keys(rows[0]) : [];
+    // ========== COLUMN NORMALIZATION ==========
     const columnMap = createColumnMap(rawHeaders);
     
-    // Validate required columns exist
-    const requiredColumns = [
-      "Block ID",
-      "Driver Name",
-      "Operator ID",
-      "Stop 1 Planned Arrival Date",
-      "Stop 1 Planned Arrival Time",
-      "Stop 2 Planned Arrival Date",
-      "Stop 2 Planned Arrival Time",
+    // Validate required columns can be resolved
+    const requiredCanonicalKeys = [
+      "blockId",
+      "driverName",
+      "operatorId",
+      "stop1PlannedStartDate",
+      "stop1PlannedStartTime",
+      "stop2PlannedArrivalDate",
+      "stop2PlannedArrivalTime",
     ];
     
-    const validation = validateRequiredColumns(columnMap, requiredColumns);
+    const validation = validateRequiredColumns(columnMap, requiredCanonicalKeys);
     if (!validation.valid) {
+      const friendlyNames = validation.missing.map(key => {
+        return Object.entries(CANONICAL_COLUMN_MAP).find(([_, v]) => v === key)?.[0] || key;
+      });
       throw new Error(
-        `Missing required columns in Excel file: ${validation.missing.join(", ")}. ` +
-        `Please ensure your Excel file has these columns: ${requiredColumns.join(", ")}`
+        `Missing required columns in Excel file. Could not find columns for: ${friendlyNames.join(", ")}. ` +
+        `Please ensure your Excel file has columns like "Block ID", "Driver Name", "Operator ID", ` +
+        `"Stop 1 Planned Arrival Date/Time", and "Stop 2 Planned Arrival Date/Time".`
       );
     }
+    
+    // Normalize all rows to use canonical column names
+    const rows: ExcelRow[] = normalizeRows(rawRows, columnMap);
 
     // ========== PREPROCESSING STAGE: Auto-create missing blocks ==========
     // Group rows by Block ID to extract block metadata
     const blockGroups = new Map<string, ExcelRow[]>();
     for (const row of rows) {
-      const blockId = row["Block ID"]?.trim();
+      const blockId = row.blockId?.trim();
       if (!blockId) continue;
       
       if (!blockGroups.has(blockId)) {
@@ -300,17 +339,17 @@ export async function parseExcelSchedule(
       const firstRow = blockRows[0];
       
       // Parse Operator ID to extract contract info
-      const parsedOperator = parseOperatorId(firstRow["Operator ID"]);
+      const parsedOperator = parseOperatorId(firstRow.operatorId);
       if (!parsedOperator) {
-        result.warnings.push(`Block ${blockId}: Could not parse Operator ID "${firstRow["Operator ID"]}"`);
+        result.warnings.push(`Block ${blockId}: Could not parse Operator ID "${firstRow.operatorId}"`);
         continue;
       }
 
       // Extract start and end times from Excel date numbers
-      const startDate = firstRow["Stop 1 Planned Arrival Date"];
-      const startTime = firstRow["Stop 1 Planned Arrival Time"];
-      const endDate = firstRow["Stop 2 Planned Arrival Date"];
-      const endTime = firstRow["Stop 2 Planned Arrival Time"];
+      const startDate = firstRow.stop1PlannedStartDate;
+      const startTime = firstRow.stop1PlannedStartTime;
+      const endDate = firstRow.stop2PlannedArrivalDate;
+      const endTime = firstRow.stop2PlannedArrivalTime;
 
       if (!startDate || !endDate || startTime === undefined || endTime === undefined) {
         result.warnings.push(`Block ${blockId}: Missing timing data (Stop 1/2 planned times)`);
@@ -448,7 +487,7 @@ export async function parseExcelSchedule(
       const rowNum = i + 2; // Excel row number (1-indexed + header)
 
       // Validate required fields
-      if (!row["Block ID"] || !row["Driver Name"] || !row["Operator ID"]) {
+      if (!row.blockId || !row.driverName || !row.operatorId) {
         result.failed++;
         result.errors.push(
           `Row ${rowNum}: Missing required fields (Block ID, Driver Name, or Operator ID)`
@@ -458,13 +497,13 @@ export async function parseExcelSchedule(
 
       // Find block by Block ID
       const block = allBlocks.find(
-        (b) => b.blockId.trim() === row["Block ID"].trim()
+        (b) => b.blockId.trim() === row.blockId.trim()
       );
 
       if (!block) {
         result.failed++;
         result.errors.push(
-          `Row ${rowNum}: Block not found: "${row["Block ID"]}"`
+          `Row ${rowNum}: Block not found: "${row.blockId}"`
         );
         continue;
       }
@@ -477,7 +516,7 @@ export async function parseExcelSchedule(
       if (existingAssignment) {
         result.failed++;
         result.errors.push(
-          `Row ${rowNum}: Block ${row["Block ID"]} is already assigned to another driver`
+          `Row ${rowNum}: Block ${row.blockId} is already assigned to another driver`
         );
         continue;
       }
@@ -485,13 +524,13 @@ export async function parseExcelSchedule(
       if (assignedBlocksInImport.has(block.id)) {
         result.failed++;
         result.errors.push(
-          `Row ${rowNum}: Block ${row["Block ID"]} is assigned multiple times in this import file`
+          `Row ${rowNum}: Block ${row.blockId} is assigned multiple times in this import file`
         );
         continue;
       }
 
       // Find driver by name (robust matching: handles "Last, First", "First Last", middle names, suffixes)
-      const driverNameLower = row["Driver Name"].trim().toLowerCase().replace(/\s+/g, " ");
+      const driverNameLower = row.driverName.trim().toLowerCase().replace(/\s+/g, " ");
       
       const driver = allDrivers.find((d) => {
         const first = d.firstName.toLowerCase();
@@ -518,14 +557,14 @@ export async function parseExcelSchedule(
       if (!driver) {
         result.failed++;
         result.errors.push(
-          `Row ${rowNum}: Driver not found: "${row["Driver Name"]}". Check spelling and ensure driver exists in system.`
+          `Row ${rowNum}: Driver not found: "${row.driverName}". Check spelling and ensure driver exists in system.`
         );
         continue;
       }
 
       // Validate Operator ID for data integrity (secondary validation)
       try {
-        const operatorId = row["Operator ID"];
+        const operatorId = row.operatorId;
         // Parse Operator ID: FTIM_{domicile}_{contractType}_{tractorId}_d2
         const parts = operatorId.split("_");
         if (parts.length >= 4 && parts[0] === "FTIM") {
@@ -587,7 +626,7 @@ export async function parseExcelSchedule(
         if (overlap) {
           result.failed++;
           result.errors.push(
-            `Row ${rowNum}: Time overlap - Driver "${row["Driver Name"]}" already assigned to block ${existingBlock.blockId} during this time`
+            `Row ${rowNum}: Time overlap - Driver "${row.driverName}" already assigned to block ${existingBlock.blockId} during this time`
           );
           hasOverlap = true;
           break;
@@ -647,7 +686,7 @@ export async function parseExcelSchedule(
         validationSummary: validation.validationResult.metrics
           ? JSON.stringify(validation.validationResult.metrics)
           : null,
-        operatorId: row["Operator ID"],
+        operatorId: row.operatorId,
       });
 
       // Track this assignment
