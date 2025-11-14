@@ -18,6 +18,7 @@ interface ImportResult {
   errors: string[];
   warnings: string[];
   committedWithWarnings: number;
+  debugLog?: string[];
 }
 
 export default function ScheduleImport() {
@@ -25,6 +26,7 @@ export default function ScheduleImport() {
   const [importing, setImporting] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
   const [importMode, setImportMode] = useState<'block' | 'shift'>('shift'); // Default to new shift-based mode
+  const [debugMode, setDebugMode] = useState(false);
   const { toast } = useToast();
 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -60,6 +62,7 @@ export default function ScheduleImport() {
       const formData = new FormData();
       formData.append('file', selectedFile);
       formData.append('importMode', importMode);
+      formData.append('debugMode', String(debugMode));
 
       const response = await fetch('/api/schedules/excel-import', {
         method: 'POST',
@@ -206,6 +209,44 @@ export default function ScheduleImport() {
               </Alert>
             </div>
 
+            {/* Debug Mode Toggle */}
+            <div className="border rounded-lg p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label htmlFor="debug-mode" className="text-base font-medium">
+                    Debug Mode
+                  </Label>
+                  <p className="text-sm text-muted-foreground">
+                    {debugMode 
+                      ? 'Enabled: Detailed logging will be included in the import report'
+                      : 'Disabled: Standard logging only'}
+                  </p>
+                </div>
+                <Switch
+                  id="debug-mode"
+                  checked={debugMode}
+                  onCheckedChange={setDebugMode}
+                  disabled={importing}
+                  data-testid="switch-debug-mode"
+                />
+              </div>
+              <Alert>
+                <Info className="h-4 w-4" />
+                <AlertDescription className="text-sm">
+                  {debugMode ? (
+                    <>
+                      <strong>Debug Mode:</strong> Shows detailed information about each row including Operator ID parsing, 
+                      truck extraction, contract matching, driver lookup, and time overlap analysis. Useful for troubleshooting import issues.
+                    </>
+                  ) : (
+                    <>
+                      <strong>Standard Mode:</strong> Shows summary results and error messages only.
+                    </>
+                  )}
+                </AlertDescription>
+              </Alert>
+            </div>
+
             {/* Action Buttons */}
             <div className="flex gap-3">
               <Button
@@ -313,6 +354,24 @@ export default function ScheduleImport() {
                         </li>
                       ))}
                     </ul>
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              {/* Debug Log */}
+              {result.debugLog && result.debugLog.length > 0 && (
+                <Alert data-testid="alert-debug-log">
+                  <Info className="h-4 w-4" />
+                  <AlertTitle>Debug Log ({result.debugLog.length} entries)</AlertTitle>
+                  <AlertDescription>
+                    <div className="mt-2 max-h-96 overflow-y-auto">
+                      <pre className="text-xs font-mono whitespace-pre-wrap bg-muted p-3 rounded">
+                        {result.debugLog.join('\n')}
+                      </pre>
+                    </div>
+                    <p className="text-sm mt-2">
+                      You can copy and paste this debug log to troubleshoot import issues.
+                    </p>
                   </AlertDescription>
                 </Alert>
               )}
