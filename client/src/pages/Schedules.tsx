@@ -29,35 +29,45 @@ import { queryClient } from "@/lib/queryClient";
 import { DriverAssignmentModal } from "@/components/DriverAssignmentModal";
 import type { Block, BlockAssignment, Driver, Contract } from "@shared/schema";
 
-// Calendar API response type
+// Simplified occurrence from new calendar API
+type ShiftOccurrence = {
+  occurrenceId: string;
+  serviceDate: string; // YYYY-MM-DD
+  startTime: string; // HH:mm (canonical)
+  blockId: string;
+  driverName: string | null;
+  contractType: string | null;
+  status: string;
+  tractorId: string | null;
+  assignmentId: string | null;
+  bumpMinutes: number;
+  isCarryover: boolean;
+};
+
+// Calendar API response type (simplified)
 type CalendarResponse = {
-  dateRange: { start: string; end: string };
-  blocks: Array<Block & {
-    contract: Contract | null;
-    assignment: (BlockAssignment & { driver: Driver | null }) | null;
-  }>;
-  drivers: Record<string, Driver>;
-  contracts: Record<string, Contract>;
+  range: { start: string; end: string };
+  occurrences: ShiftOccurrence[];
 };
 
 export default function Schedules() {
   const { toast } = useToast();
   const [currentDate, setCurrentDate] = useState(new Date());
-  const [selectedBlock, setSelectedBlock] = useState<(Block & { contract: Contract | null }) | null>(null);
+  const [selectedOccurrence, setSelectedOccurrence] = useState<ShiftOccurrence | null>(null);
   const [isAssignmentModalOpen, setIsAssignmentModalOpen] = useState(false);
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [shiftToDelete, setShiftToDelete] = useState<string | null>(null);
   const [importStartDate, setImportStartDate] = useState<string>("2025-11-03"); // Sunday, Nov 3, 2024
 
-  const handleBlockClick = (block: Block & { contract: Contract | null }) => {
-    setSelectedBlock(block);
+  const handleOccurrenceClick = (occurrence: ShiftOccurrence) => {
+    setSelectedOccurrence(occurrence);
     setIsAssignmentModalOpen(true);
   };
 
   const handleCloseModal = () => {
     setIsAssignmentModalOpen(false);
-    setSelectedBlock(null);
+    setSelectedOccurrence(null);
   };
 
   const deleteMutation = useMutation({
@@ -199,11 +209,6 @@ export default function Schedules() {
     return { weekStart, weekDays };
   }, [currentDate]);
 
-  // Fetch all contracts
-  const { data: contracts = [], isLoading: contractsLoading } = useQuery<Contract[]>({
-    queryKey: ["/api/contracts"],
-  });
-
   // Fetch week's calendar data
   const { data: calendarData, isLoading: calendarLoading } = useQuery<CalendarResponse>({
     queryKey: ["/api/schedules/calendar", format(weekRange.weekStart, "yyyy-MM-dd"), format(addDays(weekRange.weekStart, 6), "yyyy-MM-dd")],
@@ -218,29 +223,32 @@ export default function Schedules() {
     },
   });
 
-  // Normalize blocks into contract/day grid: { contractId: { "2025-11-09": [blocks] } }
-  const blockGrid = useMemo(() => {
+  // Group occurrences by time slot, then by date: { "00:30": { "2025-11-03": [occ1, occ2], ... }, ... }
+  const occurrencesByStart = useMemo(() => {
     if (!calendarData) return {};
 
-    const grid: Record<string, Record<string, typeof calendarData.blocks>> = {};
+    const grouped: Record<string, Record<string, ShiftOccurrence[]>> = {};
 
-    calendarData.blocks.forEach((block) => {
-      if (!block.contract) return;
+    calendarData.occurrences.forEach((occ) => {
+      const timeSlot = occ.startTime; // canonical time (e.g., "00:30")
+      const date = occ.serviceDate; // YYYY-MM-DD
 
-      const contractId = block.contract.id;
-      const dayISO = format(new Date(block.startTimestamp), "yyyy-MM-dd");
-
-      if (!grid[contractId]) {
-        grid[contractId] = {};
+      if (!grouped[timeSlot]) {
+        grouped[timeSlot] = {};
       }
-      if (!grid[contractId][dayISO]) {
-        grid[contractId][dayISO] = [];
+      if (!grouped[timeSlot][date]) {
+        grouped[timeSlot][date] = [];
       }
-      grid[contractId][dayISO].push(block);
+      grouped[timeSlot][date].push(occ);
     });
 
-    return grid;
+    return grouped;
   }, [calendarData]);
+
+  // Get sorted time slots for deterministic row order
+  const timeSlots = useMemo(() => {
+    return Object.keys(occurrencesByStart).sort();
+  }, [occurrencesByStart]);
 
   // Navigation handlers
   const handlePreviousWeek = () => {
@@ -292,28 +300,13 @@ export default function Schedules() {
     return `${sign}${hours}h${mins}m`;
   };
 
-  const calculateBumpMinutes = (actualStart: string | Date, canonicalStart: string | Date | null): number => {
-    if (!canonicalStart) return 0;
-    const actual = typeof actualStart === 'string' ? new Date(actualStart).getTime() : actualStart.getTime();
-    const canonical = typeof canonicalStart === 'string' ? new Date(canonicalStart).getTime() : canonicalStart.getTime();
-    return Math.round((actual - canonical) / (1000 * 60));
-  };
-
-  if (contractsLoading || calendarLoading) {
+  if (calendarLoading) {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-muted-foreground">Loading schedules...</div>
       </div>
     );
   }
-
-  // Sort contracts by type and start time
-  const sortedContracts = [...contracts].sort((a, b) => {
-    if (a.type !== b.type) {
-      return a.type.localeCompare(b.type);
-    }
-    return a.startTime.localeCompare(b.startTime);
-  });
 
   return (
     <div className="flex flex-col h-full bg-background p-6 gap-6">
@@ -458,135 +451,111 @@ export default function Schedules() {
               </tr>
             </thead>
             <tbody>
-              {sortedContracts.length === 0 ? (
+              {timeSlots.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="text-center py-12 text-muted-foreground">
-                    No contracts found. Import weekly assignments from Start Times page.
+                    No shifts scheduled. Import schedule from Excel to get started.
                   </td>
                 </tr>
               ) : (
-                sortedContracts.map((contract) => (
-                  <tr key={contract.id} className="border-b hover:bg-muted/30">
-                    {/* Contract Info Cell */}
+                timeSlots.map((timeSlot) => (
+                  <tr key={timeSlot} className="border-b hover:bg-muted/30">
+                    {/* Time Slot Cell */}
                     <td className="p-2 border-r align-top">
                       <div className="flex items-center gap-1.5">
                         <span className="font-medium text-sm">
-                          {formatTime(contract.startTime)}
+                          {formatTime(timeSlot)}
                         </span>
-                        <Badge variant="outline" className={`${getBlockTypeColor(contract.type)} text-xs px-1.5 py-0`}>
-                          {contract.type.toUpperCase()}
-                        </Badge>
                       </div>
                     </td>
 
                     {/* Day Cells */}
                     {weekRange.weekDays.map((day) => {
                       const dayISO = format(day, "yyyy-MM-dd");
-                      const dayBlocks = blockGrid[contract.id]?.[dayISO] || [];
+                      const dayOccurrences = occurrencesByStart[timeSlot]?.[dayISO] || [];
 
                       return (
                         <td
                           key={day.toISOString()}
                           className="p-1.5 border-r last:border-r-0 align-top"
                         >
-                          {dayBlocks.length > 0 ? (
+                          {dayOccurrences.length > 0 ? (
                             <div className="space-y-1">
-                              {dayBlocks.map((block) => {
-                                const bumpMinutes = calculateBumpMinutes(
-                                  block.startTimestamp,
-                                  block.canonicalStart
-                                );
-                                
-                                return (
-                                  <div key={block.id} className="relative group">
-                                    <button
-                                      onClick={() => handleBlockClick(block)}
-                                      className="w-full p-1.5 rounded-md bg-muted/50 text-xs space-y-1 text-left hover-elevate active-elevate-2 transition-colors"
-                                      data-testid={`block-${block.id}`}
-                                    >
-                                      {/* Block ID */}
-                                      <div className="font-mono font-medium text-xs pr-4">
-                                        {block.blockId}
-                                      </div>
+                              {dayOccurrences.map((occ) => (
+                                <div key={occ.occurrenceId} className="relative group">
+                                  <button
+                                    onClick={() => handleOccurrenceClick(occ)}
+                                    className="w-full p-1.5 rounded-md bg-muted/50 text-xs space-y-1 text-left hover-elevate active-elevate-2 transition-colors"
+                                    data-testid={`occurrence-${occ.occurrenceId}`}
+                                  >
+                                    {/* Block ID (Prominent) */}
+                                    <div className="font-mono font-medium text-foreground pr-4">
+                                      {occ.blockId}
+                                    </div>
 
-                                      {/* Pattern & Bump Indicators */}
-                                      <div className="flex items-center gap-1 flex-wrap">
-                                        {block.patternGroup && (
-                                          <Badge 
-                                            variant="outline" 
-                                            className={`${getPatternBadgeColor(block.patternGroup)} text-xs px-1 py-0`}
-                                            data-testid={`badge-pattern-${block.id}`}
-                                          >
-                                            {block.patternGroup === "sunWed" ? "Sun-Wed" : "Wed-Sat"}
-                                          </Badge>
-                                        )}
-                                        {block.canonicalStart && (
-                                          <span 
-                                            className={`text-xs font-medium ${getBumpIndicatorColor(bumpMinutes)}`}
-                                            data-testid={`bump-indicator-${block.id}`}
-                                          >
-                                            {formatBumpTime(bumpMinutes)}
-                                          </span>
-                                        )}
+                                    {/* Driver Name (Secondary) */}
+                                    {occ.driverName ? (
+                                      <div className="flex items-center gap-1 text-muted-foreground text-xs">
+                                        <User className="w-2.5 h-2.5" />
+                                        <span>{occ.driverName}</span>
                                       </div>
+                                    ) : (
+                                      <Badge 
+                                        variant="secondary" 
+                                        className="text-xs px-1 py-0"
+                                        data-testid={`badge-unassigned-${occ.occurrenceId}`}
+                                      >
+                                        Unassigned
+                                      </Badge>
+                                    )}
 
-                                      {/* Driver Assignment */}
-                                      {block.assignment?.driver ? (
-                                        <div className="space-y-1">
-                                          <div className="flex items-center gap-1 text-foreground text-xs">
-                                            <User className="w-2.5 h-2.5" />
-                                            <span>
-                                              {block.assignment.driver.firstName}{" "}
-                                              {block.assignment.driver.lastName}
-                                            </span>
-                                          </div>
-                                          {/* Assignment Type Indicator */}
-                                          {!block.assignment.assignedBy ? (
-                                            <Badge 
-                                              variant="outline" 
-                                              className="text-xs px-1 py-0 bg-blue-500/10 text-blue-700 dark:text-blue-300"
-                                              data-testid={`badge-auto-${block.id}`}
-                                            >
-                                              Auto
-                                            </Badge>
-                                          ) : (
-                                            <Badge 
-                                              variant="outline" 
-                                              className="text-xs px-1 py-0 bg-gray-500/10 text-gray-700 dark:text-gray-300"
-                                              data-testid={`badge-manual-${block.id}`}
-                                            >
-                                              Manual
-                                            </Badge>
-                                          )}
-                                        </div>
-                                      ) : (
+                                    {/* Status & Bump Indicators (Subtle) */}
+                                    <div className="flex items-center gap-1 flex-wrap">
+                                      {occ.contractType && (
                                         <Badge 
-                                          variant="secondary" 
-                                          className="text-xs px-1 py-0"
-                                          data-testid={`badge-unassigned-${block.id}`}
+                                          variant="outline" 
+                                          className={`${getBlockTypeColor(occ.contractType)} text-xs px-1 py-0`}
+                                          data-testid={`badge-type-${occ.occurrenceId}`}
                                         >
-                                          Unassigned
+                                          {occ.contractType.toUpperCase()}
                                         </Badge>
                                       )}
-                                    </button>
-                                    
-                                    {/* Delete Button */}
-                                    <button
-                                      onClick={(e) => handleDeleteShift(e, block.id)}
-                                      disabled={deleteMutation.isPending}
-                                      className="absolute top-0.5 right-0.5 p-0.5 rounded hover:bg-destructive/20 opacity-0 group-hover:opacity-100 transition-opacity"
-                                      data-testid={`button-delete-shift-${block.id}`}
-                                      aria-label="Delete shift"
-                                    >
-                                      {deleteMutation.isPending ? (
-                                        <div className="w-3 h-3 border-2 border-destructive border-t-transparent rounded-full animate-spin" />
-                                      ) : (
-                                        <X className="w-3 h-3 text-destructive" />
+                                      {occ.isCarryover && (
+                                        <Badge 
+                                          variant="outline" 
+                                          className="text-xs px-1 py-0 bg-orange-500/20 text-orange-700 dark:text-orange-300"
+                                          data-testid={`badge-carryover-${occ.occurrenceId}`}
+                                        >
+                                          Carryover
+                                        </Badge>
                                       )}
-                                    </button>
-                                  </div>
-                                );
-                              })}
+                                      {occ.bumpMinutes !== 0 && (
+                                        <span 
+                                          className={`text-xs font-medium ${getBumpIndicatorColor(occ.bumpMinutes)}`}
+                                          data-testid={`bump-indicator-${occ.occurrenceId}`}
+                                        >
+                                          {formatBumpTime(occ.bumpMinutes)}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </button>
+                                  
+                                  {/* Delete Button */}
+                                  <button
+                                    onClick={(e) => handleDeleteShift(e, occ.occurrenceId)}
+                                    disabled={deleteMutation.isPending}
+                                    className="absolute top-0.5 right-0.5 p-0.5 rounded hover:bg-destructive/20 opacity-0 group-hover:opacity-100 transition-opacity"
+                                    data-testid={`button-delete-shift-${occ.occurrenceId}`}
+                                    aria-label="Delete shift"
+                                  >
+                                    {deleteMutation.isPending ? (
+                                      <div className="w-3 h-3 border-2 border-destructive border-t-transparent rounded-full animate-spin" />
+                                    ) : (
+                                      <X className="w-3 h-3 text-destructive" />
+                                    )}
+                                  </button>
+                                </div>
+                              ))}
                             </div>
                           ) : (
                             <div className="text-center text-muted-foreground text-xs py-1">
@@ -604,12 +573,15 @@ export default function Schedules() {
         </CardContent>
       </Card>
 
-      {/* Driver Assignment Modal */}
-      <DriverAssignmentModal
-        block={selectedBlock}
-        isOpen={isAssignmentModalOpen}
-        onClose={handleCloseModal}
-      />
+      {/* Driver Assignment Modal - Temporarily disabled until modal is updated for occurrences */}
+      {/* TODO: Update DriverAssignmentModal to work with occurrenceId instead of blockId */}
+      {selectedOccurrence && false && (
+        <DriverAssignmentModal
+          block={null}
+          isOpen={isAssignmentModalOpen}
+          onClose={handleCloseModal}
+        />
+      )}
 
       {/* Delete Confirmation Dialog */}
       <AlertDialog open={!!shiftToDelete} onOpenChange={(open) => !open && setShiftToDelete(null)}>
