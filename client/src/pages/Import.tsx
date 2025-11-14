@@ -20,10 +20,13 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
-import { Upload, FileText, AlertCircle, CheckCircle2, Download } from "lucide-react";
+import { Upload, FileText, AlertCircle, CheckCircle2, Download, Info } from "lucide-react";
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
+import { ScheduleImportPanel } from "@/components/ScheduleImportPanel";
 
 type EntityType = "schedules" | "drivers" | "trucks" | "startTimes";
 
@@ -43,27 +46,46 @@ export default function Import() {
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [fullData, setFullData] = useState<any[]>([]); // Store all parsed rows for import
 
-  const importMutation = useMutation({
-    mutationFn: async (data: { entityType: EntityType; rows: any[]; file?: File }) => {
-      // For schedules, use specialized Excel import endpoint
-      if (data.entityType === "schedules" && data.file) {
-        const formData = new FormData();
-        formData.append("file", data.file);
-        
-        const response = await fetch("/api/schedules/excel-import", {
-          method: "POST",
-          body: formData,
-          credentials: "include",
-        });
-        
-        if (!response.ok) {
-          const error = await response.json();
-          throw new Error(error.message || "Failed to import schedule");
-        }
-        
-        return response.json();
+  // Dedicated mutation for schedule imports with debug/import mode support
+  const schedulesMutation = useMutation({
+    mutationFn: async (formData: FormData) => {
+      const response = await fetch("/api/schedules/excel-import", {
+        method: "POST",
+        body: formData,
+        credentials: "include",
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || "Failed to import schedule");
       }
       
+      return response.json();
+    },
+    onSuccess: (result) => {
+      // Invalidate relevant queries
+      queryClient.invalidateQueries({ queryKey: ["/api/schedules"] });
+      
+      // Show success toast
+      if (result.created > 0) {
+        toast({
+          title: result.failed === 0 ? "Import Successful" : "Partial Import",
+          description: result.message || `Imported ${result.created} assignments${result.failed > 0 ? `, ${result.failed} failed` : ''}`,
+          variant: result.failed === 0 ? "default" : "default",
+        });
+      }
+    },
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Import Failed",
+        description: error.message || "Failed to import schedule data",
+      });
+    },
+  });
+
+  const importMutation = useMutation({
+    mutationFn: async (data: { entityType: EntityType; rows: any[] }) => {
       // Map startTimes to contracts endpoint
       const endpoint = data.entityType === "startTimes" ? "contracts" : data.entityType;
       
@@ -172,6 +194,14 @@ export default function Import() {
   const processFile = (selectedFile: File) => {
     setFile(selectedFile);
     setValidationErrors([]);
+
+    // For schedules, skip parsing - ScheduleImportPanel will handle everything
+    if (entityType === "schedules") {
+      setPreviewData([]);
+      setFullData([]);
+      setHeaders([]);
+      return;
+    }
 
     const fileExt = selectedFile.name.substring(selectedFile.name.lastIndexOf('.')).toLowerCase();
     
@@ -355,10 +385,10 @@ export default function Import() {
     }
 
     // Use stored full data instead of re-parsing (supports both CSV and Excel)
+    // Note: Schedules use ScheduleImportPanel's separate mutation flow
     importMutation.mutate({
       entityType,
       rows: fullData,
-      file: entityType === "schedules" ? file : undefined,
     });
   };
 
@@ -485,7 +515,25 @@ export default function Import() {
         </CardContent>
       </Card>
 
-      {validationErrors.length > 0 && (
+      {/* Schedule Import Panel - shown when entity type is schedules and file is selected */}
+      {entityType === "schedules" && file && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Schedule Import Options</CardTitle>
+            <CardDescription>Configure import mode and debug settings</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ScheduleImportPanel
+              file={file}
+              onImport={schedulesMutation.mutateAsync}
+              isImporting={schedulesMutation.isPending}
+            />
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Validation/Preview/Import for non-schedule entities */}
+      {entityType !== "schedules" && validationErrors.length > 0 && (
         <Alert variant="destructive" data-testid="validation-errors">
           <AlertCircle className="h-4 w-4" />
           <AlertTitle>Validation Errors</AlertTitle>
@@ -502,7 +550,7 @@ export default function Import() {
         </Alert>
       )}
 
-      {previewData.length > 0 && validationErrors.length === 0 && (
+      {entityType !== "schedules" && previewData.length > 0 && validationErrors.length === 0 && (
         <Alert data-testid="validation-success">
           <CheckCircle2 className="h-4 w-4" />
           <AlertTitle>Validation Passed</AlertTitle>
@@ -512,7 +560,7 @@ export default function Import() {
         </Alert>
       )}
 
-      {previewData.length > 0 && (
+      {entityType !== "schedules" && previewData.length > 0 && (
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0">
             <div>
