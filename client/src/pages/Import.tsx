@@ -78,22 +78,26 @@ export default function Import() {
 
       // Check if there were any validation errors
       if (result.errors && result.errors.length > 0) {
-        // Partial success - some rows failed
+        // For schedules, errors are strings; for other entities, they're objects
         const errorMessages = result.errors.slice(0, 20).map((err: any) => 
-          `Row ${err.row}: ${err.errors.join(', ')}`
+          typeof err === 'string' ? err : `Row ${err.row}: ${err.errors.join(', ')}`
         );
         setValidationErrors(errorMessages);
         
+        const count = result.created || result.count || 0;
+        const total = result.failed ? count + result.failed : (result.total || 0);
+        
         toast({
-          title: "Partial Import",
-          description: result.message || `Imported ${result.count} of ${result.total} rows. ${result.errors.length} rows had errors.`,
-          variant: result.count > 0 ? "default" : "destructive",
+          title: count > 0 ? "Partial Import" : "Import Failed",
+          description: result.message || `Imported ${count} of ${total} rows. ${result.errors.length} rows had errors.`,
+          variant: count > 0 ? "default" : "destructive",
         });
       } else {
         // Full success - all rows imported
+        const count = result.created || result.count || 0;
         toast({
           title: "Success",
-          description: result.message || `Imported ${result.count} ${entityType} successfully`,
+          description: result.message || `Imported ${count} ${entityType} successfully`,
         });
         
         // Only reset state on full success

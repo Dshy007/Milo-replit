@@ -69,10 +69,22 @@ export default function Schedules() {
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
       
-      toast({
-        title: "Import Successful",
-        description: result.message || `Imported ${result.summary?.imported || 0} blocks successfully`,
-      });
+      // Show errors if any
+      if (result.errors && result.errors.length > 0) {
+        const errorPreview = result.errors.slice(0, 5).join("\n");
+        const moreErrors = result.errors.length > 5 ? `\n...and ${result.errors.length - 5} more errors` : "";
+        
+        toast({
+          variant: result.created > 0 ? "default" : "destructive",
+          title: result.created > 0 ? "Partial Import" : "Import Failed",
+          description: `${result.message}\n\nErrors:\n${errorPreview}${moreErrors}`,
+        });
+      } else {
+        toast({
+          title: "Import Successful",
+          description: result.message || `Imported ${result.created || 0} blocks successfully`,
+        });
+      }
       
       setIsImportDialogOpen(false);
       setImportFile(null);
