@@ -11,10 +11,67 @@ interface ExcelRow {
   "Operator ID": string;
   "Stop 1 Planned Arrival Date"?: number;
   "Stop 1 Planned Arrival Time"?: number;
-  "Stop 1  Planned Departure Date"?: number;
-  "Stop 1  Planned Departure Time"?: number;
   "Stop 2 Planned Arrival Date"?: number;
   "Stop 2 Planned Arrival Time"?: number;
+}
+
+/**
+ * Normalize column header: trim, collapse multiple spaces, lowercase
+ */
+function normalizeHeader(header: string): string {
+  return header.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/**
+ * Create a normalized column map from raw Excel headers to actual values
+ * Handles spacing variations and provides aliases for common column name variations
+ */
+function createColumnMap(rawHeaders: string[]): Map<string, string> {
+  const map = new Map<string, string>();
+  
+  for (const header of rawHeaders) {
+    const normalized = normalizeHeader(header);
+    map.set(normalized, header);
+    
+    // Add aliases for common variations
+    // "Stop 1 Planned Arrival Date" <-> "Stop 1 Planned Departure Date"
+    if (normalized.includes("stop 1") && normalized.includes("planned arrival date")) {
+      map.set("stop 1 planned departure date", header);
+    }
+    if (normalized.includes("stop 1") && normalized.includes("planned departure date")) {
+      map.set("stop 1 planned arrival date", header);
+    }
+    if (normalized.includes("stop 1") && normalized.includes("planned arrival time")) {
+      map.set("stop 1 planned departure time", header);
+    }
+    if (normalized.includes("stop 1") && normalized.includes("planned departure time")) {
+      map.set("stop 1 planned arrival time", header);
+    }
+  }
+  
+  return map;
+}
+
+/**
+ * Validate that required columns exist in the Excel file
+ */
+function validateRequiredColumns(
+  columnMap: Map<string, string>,
+  requiredColumns: string[]
+): { valid: boolean; missing: string[] } {
+  const missing: string[] = [];
+  
+  for (const required of requiredColumns) {
+    const normalized = normalizeHeader(required);
+    if (!columnMap.has(normalized)) {
+      missing.push(required);
+    }
+  }
+  
+  return {
+    valid: missing.length === 0,
+    missing,
+  };
 }
 
 interface ImportResult {
@@ -201,6 +258,30 @@ export async function parseExcelSchedule(
       throw new Error("Excel file is empty");
     }
 
+    // ========== COLUMN VALIDATION ==========
+    // Extract actual column headers from the first row
+    const rawHeaders = rows.length > 0 ? Object.keys(rows[0]) : [];
+    const columnMap = createColumnMap(rawHeaders);
+    
+    // Validate required columns exist
+    const requiredColumns = [
+      "Block ID",
+      "Driver Name",
+      "Operator ID",
+      "Stop 1 Planned Arrival Date",
+      "Stop 1 Planned Arrival Time",
+      "Stop 2 Planned Arrival Date",
+      "Stop 2 Planned Arrival Time",
+    ];
+    
+    const validation = validateRequiredColumns(columnMap, requiredColumns);
+    if (!validation.valid) {
+      throw new Error(
+        `Missing required columns in Excel file: ${validation.missing.join(", ")}. ` +
+        `Please ensure your Excel file has these columns: ${requiredColumns.join(", ")}`
+      );
+    }
+
     // ========== PREPROCESSING STAGE: Auto-create missing blocks ==========
     // Group rows by Block ID to extract block metadata
     const blockGroups = new Map<string, ExcelRow[]>();
@@ -226,8 +307,8 @@ export async function parseExcelSchedule(
       }
 
       // Extract start and end times from Excel date numbers
-      const startDate = firstRow["Stop 1  Planned Departure Date"];
-      const startTime = firstRow["Stop 1  Planned Departure Time"];
+      const startDate = firstRow["Stop 1 Planned Arrival Date"];
+      const startTime = firstRow["Stop 1 Planned Arrival Time"];
       const endDate = firstRow["Stop 2 Planned Arrival Date"];
       const endTime = firstRow["Stop 2 Planned Arrival Time"];
 
