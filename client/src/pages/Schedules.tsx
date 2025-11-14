@@ -255,10 +255,16 @@ export default function Schedules() {
     return Object.keys(occurrencesByStart).sort();
   }, [occurrencesByStart]);
 
-  // Get all unique start times from contracts (static reference)
-  const staticStartTimes = useMemo(() => {
-    const times = new Set(contracts.map(c => c.startTime));
-    return Array.from(times).sort();
+  // Get sorted contracts for bench display (sorted by start time, then tractor)
+  const sortedContracts = useMemo(() => {
+    return [...contracts].sort((a, b) => {
+      // First sort by start time
+      if (a.startTime !== b.startTime) {
+        return a.startTime.localeCompare(b.startTime);
+      }
+      // Then by tractor
+      return a.tractorId.localeCompare(b.tractorId);
+    });
   }, [contracts]);
 
   // Navigation handlers
@@ -321,32 +327,64 @@ export default function Schedules() {
 
   return (
     <div className="flex h-full bg-background">
-      {/* Left Sidebar - Static Start Times */}
-      <div className="w-64 border-r bg-muted/30 p-4 overflow-y-auto">
+      {/* Left Sidebar - Bench Slots */}
+      <div className="w-80 border-r bg-muted/30 p-4 overflow-y-auto">
         <div className="space-y-4">
           <div>
-            <h2 className="text-sm font-semibold text-foreground mb-3" data-testid="sidebar-start-times-title">
-              Start Times
+            <h2 className="text-sm font-semibold text-foreground mb-3" data-testid="sidebar-bench-title">
+              Bench Slots
             </h2>
             <p className="text-xs text-muted-foreground mb-4">
-              All contract start times
+              Static tractor assignments
             </p>
           </div>
           
-          <div className="space-y-1.5">
-            {staticStartTimes.length === 0 ? (
+          <div className="space-y-2">
+            {sortedContracts.length === 0 ? (
               <div className="text-xs text-muted-foreground py-2">
-                No start times defined
+                No bench slots defined
               </div>
             ) : (
-              staticStartTimes.map((time) => (
-                <div
-                  key={time}
-                  className="px-3 py-2 rounded-md bg-card text-sm font-mono hover-elevate"
-                  data-testid={`static-time-${time}`}
+              sortedContracts.map((contract) => (
+                <Card
+                  key={contract.id}
+                  className="hover-elevate"
+                  data-testid={`bench-slot-${contract.id}`}
                 >
-                  {formatTime(time)}
-                </div>
+                  <CardContent className="p-3 space-y-1.5">
+                    {/* Start Time */}
+                    <div className="flex items-center justify-between">
+                      <span className="text-base font-mono font-semibold text-foreground">
+                        {formatTime(contract.startTime)} CT
+                      </span>
+                      <Badge 
+                        variant={contract.status === "active" ? "default" : "secondary"}
+                        className="text-xs"
+                        data-testid={`bench-status-${contract.id}`}
+                      >
+                        {contract.status}
+                      </Badge>
+                    </div>
+                    
+                    {/* Tractor */}
+                    <div className="text-sm text-foreground font-medium">
+                      {contract.tractorId}
+                    </div>
+                    
+                    {/* Contract Type & Site */}
+                    <div className="flex items-center gap-2 text-xs">
+                      <Badge 
+                        className={getBlockTypeColor(contract.type)}
+                        data-testid={`bench-type-${contract.id}`}
+                      >
+                        {contract.type}
+                      </Badge>
+                      <span className="text-muted-foreground">
+                        {contract.domicile || "MKC"}
+                      </span>
+                    </div>
+                  </CardContent>
+                </Card>
               ))
             )}
           </div>
