@@ -3300,10 +3300,13 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
         });
       }
 
+      // Check if debug mode is enabled
+      const debugMode = req.body.debugMode === 'true' || req.body.debugMode === true;
+
       // Dispatch to appropriate parser based on mode
       const { parseExcelSchedule, parseExcelScheduleShiftBased } = await import("./excel-import");
       const importFn = importMode === 'shift' ? parseExcelScheduleShiftBased : parseExcelSchedule;
-      const result = await importFn(tenantId, req.file.buffer, userId);
+      const result = await importFn(tenantId, req.file.buffer, userId, debugMode);
       
       // Automatically recompute patterns after successful import (async, non-blocking)
       // This ensures Auto-Build has fresh patterns for next week's suggestions

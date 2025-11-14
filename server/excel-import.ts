@@ -109,6 +109,13 @@ interface ImportResult {
   errors: string[];
   warnings: string[];
   committedWithWarnings: number;
+  debugLog?: string[]; // Optional debug logging for troubleshooting
+}
+
+interface DebugLogger {
+  enabled: boolean;
+  logs: string[];
+  log(message: string): void;
 }
 
 /**
@@ -341,7 +348,8 @@ function excelDateToJSDate(excelDate: number, excelTime?: number): Date {
 export async function parseExcelSchedule(
   tenantId: string,
   fileBuffer: Buffer,
-  userId: string
+  userId: string,
+  debugMode: boolean = false
 ): Promise<ImportResult> {
   const result: ImportResult = {
     created: 0,
@@ -350,10 +358,26 @@ export async function parseExcelSchedule(
     errors: [],
     warnings: [],
     committedWithWarnings: 0,
+    debugLog: debugMode ? [] : undefined,
   };
+
+  // Debug logger
+  const debug: DebugLogger = {
+    enabled: debugMode,
+    logs: result.debugLog || [],
+    log(message: string) {
+      if (this.enabled && result.debugLog) {
+        result.debugLog.push(`[${new Date().toISOString()}] ${message}`);
+        console.log(`[EXCEL-IMPORT-DEBUG] ${message}`);
+      }
+    }
+  };
+
+  debug.log(`=== Import started for tenant ${tenantId} ===`);
 
   // Generate unique import batch ID for tracking this import
   const importBatchId = `import_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  debug.log(`Import batch ID: ${importBatchId}`);
 
   try {
     // Parse Excel file
@@ -754,17 +778,30 @@ export async function parseExcelSchedule(
       const row = rows[i];
       const rowNum = i + 2; // Excel row number (1-indexed + header)
 
+      debug.log(`\n--- Row ${rowNum} ---`);
+      debug.log(`Block ID: ${row.blockId}, Driver: ${row.driverName}, Operator ID: ${row.operatorId}`);
+
       // Validate required fields
       if (!row.blockId || !row.driverName || !row.operatorId) {
         result.failed++;
         result.errors.push(
           `Row ${rowNum}: Missing required fields (Block ID, Driver Name, or Operator ID)`
         );
+        debug.log(`❌ FAILED: Missing required fields`);
         continue;
+      }
+
+      // Parse Operator ID to extract truck number
+      const parsedOperator = parseOperatorId(row.operatorId);
+      if (parsedOperator) {
+        debug.log(`✓ Operator ID parsed: Type=${parsedOperator.type}, Truck=${parsedOperator.tractorId}`);
+      } else {
+        debug.log(`⚠ Operator ID could not be parsed: ${row.operatorId}`);
       }
 
       // Skip duplicate block IDs within this import (Amazon Excel has multiple rows per block for different stops)
       if (processedBlockIds.has(row.blockId.trim())) {
+        debug.log(`⊗ SKIPPED: Duplicate block ID in this import (multiple stops)`);
         continue; // Silently skip - not an error, just multiple stops for same block
       }
       
@@ -780,8 +817,11 @@ export async function parseExcelSchedule(
         result.errors.push(
           `Row ${rowNum}: Block not found: "${row.blockId}"`
         );
+        debug.log(`❌ FAILED: Block not found in database`);
         continue;
       }
+
+      debug.log(`✓ Block found: ID=${block.id}, Start=${block.startTimestamp}, End=${block.endTimestamp}, Duration=${block.duration}hrs`);
 
       // Check if block is already assigned in DB (active assignments only)
       const existingAssignment = existingAssignments.find(
@@ -791,16 +831,21 @@ export async function parseExcelSchedule(
       // If block already assigned, we'll archive it AFTER validation passes (in Phase 2)
       // For now, just remove from in-memory array so validation doesn't see conflicts
       if (existingAssignment) {
+        debug.log(`⚠ Block already has assignment: ID=${existingAssignment.id}, will replace after validation`);
+        
         // CRITICAL: Remove existing assignment from in-memory array to prevent validation conflicts
         // Archive will happen in Phase 2 (commit) only if new assignment passes validation
         const assignmentIndex = existingAssignments.findIndex(a => a.id === existingAssignment.id);
         if (assignmentIndex !== -1) {
           existingAssignments.splice(assignmentIndex, 1);
+          debug.log(`  → Removed from in-memory array to prevent conflict detection`);
         }
         
         result.warnings.push(
           `Row ${rowNum}: Block ${row.blockId} was already assigned - will replace after validation`
         );
+      } else {
+        debug.log(`✓ Block has no existing assignment`);
       }
 
       if (assignedBlocksInImport.has(block.id)) {
@@ -815,6 +860,8 @@ export async function parseExcelSchedule(
       // Normalize both Excel name and DB names to remove suffixes (Jr, Sr, III, etc.)
       const excelNameNormalized = normalizeDriverName(row.driverName);
       const excelNameLower = row.driverName.trim().toLowerCase().replace(/\s+/g, " ");
+      
+      debug.log(`Looking for driver: "${row.driverName}" (normalized: "${excelNameNormalized}")`);
       
       const driver = allDrivers.find((d) => {
         const first = d.firstName.toLowerCase();
@@ -849,8 +896,12 @@ export async function parseExcelSchedule(
         result.errors.push(
           `Row ${rowNum}: Driver not found: "${row.driverName}". Check spelling and ensure driver exists in system.`
         );
+        debug.log(`❌ FAILED: Driver not found in database`);
+        debug.log(`  Available drivers (first 5): ${allDrivers.slice(0, 5).map(d => `${d.firstName} ${d.lastName}`).join(', ')}`);
         continue;
       }
+
+      debug.log(`✓ Driver matched: ${driver.firstName} ${driver.lastName} (ID: ${driver.id})`);
 
       // Validate Operator ID for data integrity (secondary validation)
       try {
@@ -893,24 +944,35 @@ export async function parseExcelSchedule(
 
       // CRITICAL FIX: Fetch blocks for ALL driver assignments (active + archived)
       // This ensures rolling-6 calculations use correct historical block data
+      // EXCLUDE the block being replaced to prevent false overlap detection during re-imports
       const allDriverAssignmentIds = allAssignments
-        .filter(a => a.driverId === driver.id && a.blockId !== null)
+        .filter(a => 
+          a.driverId === driver.id && 
+          a.blockId !== null &&
+          a.id !== existingAssignment?.id // Exclude the assignment we're replacing
+        )
         .map(a => a.blockId!); // Filter nulls above, so ! is safe
       
       const assignmentBlocks = allDriverAssignmentIds.length > 0
         ? await db.select().from(blocks).where(inArray(blocks.id, allDriverAssignmentIds))
         : [];
 
+      debug.log(`Found ${assignmentBlocks.length} existing blocks for driver (excluding block being replaced)`);
+
       // Create map for fast lookup
       const blockMap = new Map(assignmentBlocks.map((b) => [b.id, b]));
 
-      // Combine existing + import blocks
+      // Combine existing + import blocks for overlap checking
+      // This list does NOT include the block being replaced, so re-imports work correctly
       const allDriverBlocks = [
         ...assignmentBlocks,
         ...driverImportBlocks,
       ];
 
       // Check for time overlaps
+      debug.log(`Checking time overlaps against ${allDriverBlocks.length} existing blocks for this driver`);
+      debug.log(`  New block: ${block.blockId} (${block.startTimestamp} → ${block.endTimestamp})`);
+      
       let hasOverlap = false;
       for (const existingBlock of allDriverBlocks) {
         const overlap =
@@ -919,17 +981,23 @@ export async function parseExcelSchedule(
 
         if (overlap) {
           result.failed++;
-          result.errors.push(
-            `Row ${rowNum}: Time overlap - Driver "${row.driverName}" already assigned to block ${existingBlock.blockId} during this time`
-          );
+          const errorMsg = `Row ${rowNum}: Time overlap - Driver "${row.driverName}" already assigned to block ${existingBlock.blockId} during this time`;
+          result.errors.push(errorMsg);
+          debug.log(`❌ FAILED: ${errorMsg}`);
+          debug.log(`  Existing block: ${existingBlock.blockId} (${existingBlock.startTimestamp} → ${existingBlock.endTimestamp})`);
+          debug.log(`  ⚠ BUG: This overlap check is using fresh DB query which includes the block we just removed from in-memory array!`);
+          debug.log(`  → The block being replaced still exists in DB, causing false overlap detection`);
           hasOverlap = true;
           break;
         }
       }
 
       if (hasOverlap) {
+        debug.log(`⊗ Skipping row due to overlap`);
         continue;
       }
+      
+      debug.log(`✓ No time overlaps detected`);
 
       // Run full validation (DOT compliance, rolling-6, protected rules)
       // IMPORTANT: Include archived assignments for rolling-6 compliance calculations
@@ -1085,7 +1153,8 @@ export async function parseExcelSchedule(
 export async function parseExcelScheduleShiftBased(
   tenantId: string,
   fileBuffer: Buffer,
-  userId: string
+  userId: string,
+  debugMode: boolean = false
 ): Promise<ImportResult> {
   const result: ImportResult = {
     created: 0,
@@ -1094,9 +1163,25 @@ export async function parseExcelScheduleShiftBased(
     errors: [],
     warnings: [],
     committedWithWarnings: 0,
+    debugLog: debugMode ? [] : undefined,
   };
 
+  // Debug logger
+  const debug: DebugLogger = {
+    enabled: debugMode,
+    logs: result.debugLog || [],
+    log(message: string) {
+      if (this.enabled && result.debugLog) {
+        result.debugLog.push(`[${new Date().toISOString()}] ${message}`);
+        console.log(`[SHIFT-IMPORT-DEBUG] ${message}`);
+      }
+    }
+  };
+
+  debug.log(`=== Shift-based import started for tenant ${tenantId} ===`);
+
   const importBatchId = `import_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  debug.log(`Import batch ID: ${importBatchId}`);
 
   try {
     // Parse Excel file (same as before)
