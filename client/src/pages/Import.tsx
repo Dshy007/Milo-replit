@@ -44,7 +44,26 @@ export default function Import() {
   const [fullData, setFullData] = useState<any[]>([]); // Store all parsed rows for import
 
   const importMutation = useMutation({
-    mutationFn: async (data: { entityType: EntityType; rows: any[] }) => {
+    mutationFn: async (data: { entityType: EntityType; rows: any[]; file?: File }) => {
+      // For blocks, use specialized Excel import endpoint
+      if (data.entityType === "blocks" && data.file) {
+        const formData = new FormData();
+        formData.append("file", data.file);
+        
+        const response = await fetch("/api/schedules/excel-import", {
+          method: "POST",
+          body: formData,
+        });
+        
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || "Failed to import schedule");
+        }
+        
+        return response.json();
+      }
+      
+      // For other entity types, use generic import endpoint
       const response = await apiRequest("POST", `/api/import/${data.entityType}`, {
         rows: data.rows,
       });
@@ -254,6 +273,12 @@ export default function Import() {
   };
 
   const validateData = (data: any[], headers: string[]) => {
+    // Skip validation for blocks - specialized endpoint handles it
+    if (entityType === "blocks") {
+      setValidationErrors([]);
+      return;
+    }
+    
     const errors: string[] = [];
     const requiredFields = getRequiredFields(entityType);
 
@@ -315,7 +340,8 @@ export default function Import() {
       return;
     }
 
-    if (validationErrors.length > 0) {
+    // Skip validation for blocks - specialized endpoint handles it
+    if (entityType !== "blocks" && validationErrors.length > 0) {
       toast({
         variant: "destructive",
         title: "Validation Errors",
@@ -328,6 +354,7 @@ export default function Import() {
     importMutation.mutate({
       entityType,
       rows: fullData,
+      file: entityType === "blocks" ? file : undefined,
     });
   };
 
