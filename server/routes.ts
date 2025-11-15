@@ -3679,6 +3679,243 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
     }
   });
 
+  // ==================== PYTHON-POWERED ANALYSIS ====================
+
+  // POST /api/analysis/excel-parse - Analyze Excel file using Python pandas
+  app.post("/api/analysis/excel-parse", requireAuth, upload.single('file'), async (req: Request, res: Response) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const userId = req.session.userId!;
+      
+      if (!req.file) {
+        return res.status(400).json({ message: "No file provided" });
+      }
+
+      // Save temp file for Python to read
+      const fs = await import("fs");
+      const path = await import("path");
+      const os = await import("os");
+      
+      const tempFilePath = path.join(os.tmpdir(), `upload_${Date.now()}.xlsx`);
+      fs.writeFileSync(tempFilePath, req.file.buffer);
+
+      const startTime = Date.now();
+      const { parseExcelFile } = await import("./python-bridge");
+      const pythonResult = await parseExcelFile(tempFilePath);
+      const executionTime = Date.now() - startTime;
+
+      // Clean up temp file
+      fs.unlinkSync(tempFilePath);
+
+      if (!pythonResult.success || !pythonResult.data) {
+        return res.status(400).json({ 
+          message: "Failed to parse Excel file", 
+          error: pythonResult.error 
+        });
+      }
+
+      // Store analysis result
+      const { analysisResults } = await import("@shared/schema");
+      await db.insert(analysisResults).values({
+        tenantId,
+        analysisType: 'excel_parse',
+        inputData: { filename: req.file.originalname },
+        result: pythonResult.data as any,
+        success: true,
+        executionTimeMs: executionTime,
+        createdBy: userId,
+      });
+
+      res.json({
+        success: true,
+        analysis: pythonResult.data,
+        executionTimeMs: executionTime,
+      });
+    } catch (error: any) {
+      console.error("Python Excel parse error:", error);
+      res.status(500).json({ message: "Failed to analyze Excel file", error: error.message });
+    }
+  });
+
+  // POST /api/analysis/predict-assignments - Get AI-powered driver assignment recommendations
+  app.post("/api/analysis/predict-assignments", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const userId = req.session.userId!;
+      
+      const { blocks, constraints } = req.body;
+      
+      if (!blocks || !Array.isArray(blocks)) {
+        return res.status(400).json({ message: "Missing required field: blocks (array)" });
+      }
+
+      // Get all drivers for matching
+      const allDrivers = await db
+        .select()
+        .from(drivers)
+        .where(eq(drivers.tenantId, tenantId));
+
+      // Get historical assignments for better predictions
+      const historicalAssignments = await db
+        .select({
+          driverId: shiftOccurrences.driverId,
+          blockId: shiftOccurrences.blockId,
+          completed: sql<boolean>`true`, // Assuming past assignments were completed
+        })
+        .from(shiftOccurrences)
+        .where(and(
+          eq(shiftOccurrences.tenantId, tenantId),
+          sql`${shiftOccurrences.driver_id} IS NOT NULL`
+        ))
+        .limit(1000);
+
+      const startTime = Date.now();
+      const { predictAssignments } = await import("./python-bridge");
+      const pythonResult = await predictAssignments({
+        action: 'predict',
+        blocks,
+        drivers: allDrivers,
+        constraints: constraints || {},
+        historical: historicalAssignments,
+      });
+      const executionTime = Date.now() - startTime;
+
+      if (!pythonResult.success || !pythonResult.data) {
+        return res.status(400).json({ 
+          message: "Failed to generate predictions", 
+          error: pythonResult.error 
+        });
+      }
+
+      // Store analysis result
+      const { analysisResults } = await import("@shared/schema");
+      await db.insert(analysisResults).values({
+        tenantId,
+        analysisType: 'assignment_prediction',
+        inputData: { blocksCount: blocks.length, driversCount: allDrivers.length },
+        result: pythonResult.data as any,
+        success: true,
+        executionTimeMs: executionTime,
+        createdBy: userId,
+      });
+
+      res.json({
+        success: true,
+        recommendations: pythonResult.data.recommendations,
+        executionTimeMs: executionTime,
+      });
+    } catch (error: any) {
+      console.error("Python prediction error:", error);
+      res.status(500).json({ message: "Failed to generate predictions", error: error.message });
+    }
+  });
+
+  // POST /api/analysis/coverage - Analyze schedule coverage and gaps
+  app.post("/api/analysis/coverage", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const userId = req.session.userId!;
+      
+      const { weekStart, weekEnd } = req.body;
+      
+      if (!weekStart || !weekEnd) {
+        return res.status(400).json({ message: "Missing required fields: weekStart, weekEnd" });
+      }
+
+      // Get schedule for the week
+      const schedule = await db
+        .select({
+          id: shiftOccurrences.id,
+          blockId: shiftOccurrences.blockId,
+          driverId: shiftOccurrences.driverId,
+          date: shiftOccurrences.shiftDate,
+          contractType: shiftOccurrences.contractType,
+        })
+        .from(shiftOccurrences)
+        .where(and(
+          eq(shiftOccurrences.tenantId, tenantId),
+          sql`${shiftOccurrences.shift_date} >= ${weekStart}`,
+          sql`${shiftOccurrences.shift_date} <= ${weekEnd}`
+        ));
+
+      const startTime = Date.now();
+      const { analyzeCoverage } = await import("./python-bridge");
+      const pythonResult = await analyzeCoverage({
+        action: 'analyze_coverage',
+        schedule: schedule.map(s => ({
+          blockId: s.blockId,
+          driverId: s.driverId,
+          date: s.date?.toISOString(),
+          contractType: s.contractType,
+        })),
+        date_range: { start: weekStart, end: weekEnd },
+      });
+      const executionTime = Date.now() - startTime;
+
+      if (!pythonResult.success || !pythonResult.data) {
+        return res.status(400).json({ 
+          message: "Failed to analyze coverage", 
+          error: pythonResult.error 
+        });
+      }
+
+      // Store analysis result
+      const { analysisResults } = await import("@shared/schema");
+      await db.insert(analysisResults).values({
+        tenantId,
+        analysisType: 'coverage_analysis',
+        inputData: { weekStart, weekEnd, scheduleCount: schedule.length },
+        result: pythonResult.data as any,
+        success: true,
+        executionTimeMs: executionTime,
+        createdBy: userId,
+      });
+
+      res.json({
+        success: true,
+        analysis: pythonResult.data.analysis,
+        executionTimeMs: executionTime,
+      });
+    } catch (error: any) {
+      console.error("Python coverage analysis error:", error);
+      res.status(500).json({ message: "Failed to analyze coverage", error: error.message });
+    }
+  });
+
+  // ==================== AI ASSISTANT ====================
+
+  // POST /api/ai/query - Ask AI assistant about schedules and data
+  app.post("/api/ai/query", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const userId = req.session.userId!;
+      
+      const { query, context } = req.body;
+      
+      if (!query) {
+        return res.status(400).json({ message: "Missing required field: query" });
+      }
+
+      // Check if OpenAI key is available
+      if (!process.env.OPENAI_API_KEY) {
+        return res.status(503).json({ 
+          message: "AI assistant not configured. Please add OPENAI_API_KEY to environment variables." 
+        });
+      }
+
+      // TODO: Implement OpenAI integration
+      // For now, return a placeholder response
+      res.json({
+        success: false,
+        message: "AI assistant feature coming soon. OpenAI integration in progress.",
+        query,
+      });
+    } catch (error: any) {
+      console.error("AI query error:", error);
+      res.status(500).json({ message: "Failed to process AI query", error: error.message });
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }
