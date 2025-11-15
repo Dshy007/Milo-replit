@@ -31,13 +31,13 @@ const CANONICAL_COLUMN_MAP: Record<string, string> = {
   "block id": "blockId",
   "driver name": "driverName",
   "operator id": "operatorId",
-  
+
   // Stop 1 timing (handles both "Arrival" and "Departure" variations with single/double spaces)
   "stop 1 planned arrival date": "stop1PlannedStartDate",
   "stop 1 planned departure date": "stop1PlannedStartDate",
   "stop 1 planned arrival time": "stop1PlannedStartTime",
   "stop 1 planned departure time": "stop1PlannedStartTime",
-  
+
   // Stop 2 timing
   "stop 2 planned arrival date": "stop2PlannedArrivalDate",
   "stop 2 planned arrival time": "stop2PlannedArrivalTime",
@@ -55,16 +55,16 @@ function normalizeHeader(header: string): string {
  */
 function createColumnMap(rawHeaders: string[]): Map<string, string> {
   const map = new Map<string, string>();
-  
+
   for (const header of rawHeaders) {
     const normalized = normalizeHeader(header);
     const canonicalKey = CANONICAL_COLUMN_MAP[normalized];
-    
+
     if (canonicalKey) {
       map.set(header, canonicalKey); // raw header → canonical key
     }
   }
-  
+
   return map;
 }
 
@@ -76,14 +76,14 @@ function createColumnMap(rawHeaders: string[]): Map<string, string> {
 function normalizeRows(rawRows: any[], columnMap: Map<string, string>): ExcelRow[] {
   return rawRows.map(rawRow => {
     const normalized: any = {};
-    
+
     for (const [rawHeader, value] of Object.entries(rawRow)) {
       const canonicalKey = columnMap.get(rawHeader);
       if (canonicalKey) {
         normalized[canonicalKey] = value;
       }
     }
-    
+
     return normalized as ExcelRow;
   });
 }
@@ -97,13 +97,13 @@ function validateRequiredColumns(
 ): { valid: boolean; missing: string[] } {
   const missing: string[] = [];
   const canonicalValues = new Set(columnMap.values());
-  
+
   for (const required of requiredCanonicalKeys) {
     if (!canonicalValues.has(required)) {
       missing.push(required);
     }
   }
-  
+
   return {
     valid: missing.length === 0,
     missing,
@@ -146,29 +146,29 @@ interface DebugLogger {
  */
 function detectPatternGroup(startDate: Date, contractStartTime: string): "sunWed" | "wedSat" {
   const [hours, minutes] = contractStartTime.split(":").map(Number);
-  
+
   // Amazon's 4-day cycle windows (contract-local time):
   // - sunWed: Sunday, Monday, Tuesday (all day) + Wednesday before contract time
   // - wedSat: Wednesday (at/after contract time), Thursday, Friday, Saturday
-  
+
   const localDayOfWeek = startDate.getDay(); // 0=Sunday, 1=Monday, ..., 6=Saturday
-  
+
   // Sunday (0), Monday (1), Tuesday (2) → sunWed
   if (localDayOfWeek >= 0 && localDayOfWeek <= 2) {
     return "sunWed";
   }
-  
+
   // Thursday (4), Friday (5), Saturday (6) → wedSat
   if (localDayOfWeek >= 4 && localDayOfWeek <= 6) {
     return "wedSat";
   }
-  
+
   // Wednesday (3) - special case: check if before or after contract time
   // If before contract time → sunWed (end of Sun-Wed cycle)
   // If at/after contract time → wedSat (start of Wed-Sat cycle)
   const contractHour = hours + minutes / 60;
   const actualHour = startDate.getHours() + startDate.getMinutes() / 60;
-  
+
   return actualHour < contractHour ? "sunWed" : "wedSat";
 }
 
@@ -200,22 +200,22 @@ function calculateCanonicalStart(
 ): Date {
   // Parse contract time (HH:MM format)
   const [hours, minutes] = contractStartTime.split(":").map(Number);
-  
+
   // Create canonical start: same day as block, but at contract time
   const canonicalDate = new Date(startTimestamp);
   canonicalDate.setHours(hours, minutes, 0, 0);
-  
+
   // Handle midnight crossings:
   // If canonical is in the future (more than 12 hours ahead), shift to previous day
   // This catches cases where block starts 00:06 and contract is 23:30
   const bumpMilliseconds = startTimestamp.getTime() - canonicalDate.getTime();
   const bumpHours = bumpMilliseconds / (1000 * 60 * 60);
-  
+
   if (bumpHours < -12) {
     // Shift canonical to previous day to avoid negative multi-day bumps
     canonicalDate.setDate(canonicalDate.getDate() - 1);
   }
-  
+
   return canonicalDate;
 }
 
@@ -250,34 +250,34 @@ function generateCycleId(patternGroup: "sunWed" | "wedSat", canonicalStart: Date
  */
 function normalizeDriverName(name: string): string {
   const original = name.trim().toLowerCase();
-  
+
   // Check if original had punctuation before/after full-word suffixes
   // Only needed for "junior" and "senior" which could be legitimate names
   const hasFullWordSuffixWithPunctuation = /[,;:.][\s]*(junior|senior)[,;:.]?$/i.test(original);
-  
+
   // Remove common punctuation (commas, periods, semicolons, colons)
   let normalized = original.replace(/[,;:.]/g, " ");
-  
+
   // Collapse multiple spaces
   normalized = normalized.replace(/\s+/g, " ").trim();
-  
+
   const words = normalized.split(" ");
-  
+
   if (words.length > 1) {
     // Abbreviated suffixes - ALWAYS remove (almost never legitimate surnames)
     const abbreviatedSuffixes = ["jr", "sr", "ii", "iii", "iv", "v", "2nd", "3rd", "4th"];
-    
+
     // Full-word suffixes - ONLY remove if punctuation detected (could be real names)
     const fullWordSuffixes = hasFullWordSuffixWithPunctuation ? ["junior", "senior"] : [];
-    
+
     const allSuffixes = [...abbreviatedSuffixes, ...fullWordSuffixes];
-    
+
     // Remove trailing suffixes
     while (words.length > 1 && allSuffixes.includes(words[words.length - 1])) {
       words.pop();
     }
   }
-  
+
   return words.join(" ").trim();
 }
 
@@ -294,22 +294,22 @@ function normalizeDriverName(name: string): string {
 function parseOperatorId(operatorId: string): { type: string; tractorId: string } | null {
   // Normalize: collapse multiple spaces to single space for consistent matching
   const normalized = operatorId.replace(/\s+/g, " ").trim();
-  
+
   // Comprehensive pattern that handles Amazon variations:
   // - Contract type: Solo1, Solo 1, SOLO1, Solo2, Solo 2, SOLO2, Team, TEAM
   // - Tractor delimiter: _, -, or space
   // - Tractor format: Tractor_2, TRACTOR-02, Tractor 2, tractor02
   const pattern = /_(Solo\s*1|Solo\s*2|Team)[_\s-]+(Tractor|TRACTOR)[_\s-]*(\d+)/i;
-  
+
   const match = normalized.match(pattern);
   if (!match) {
     // Failed to parse - return null so caller can log and skip
     return null;
   }
-  
+
   const contractType = match[1].replace(/\s+/g, "").toLowerCase(); // "solo1", "solo2", "team"
   const tractorNumberRaw = match[3]; // Extracted digit(s)
-  
+
   // Normalize tractor number: remove leading zeros to match existing contracts/blocks
   // "02" → "2", "10" → "10"
   // Special case: "00" is invalid, treat as parse failure
@@ -318,9 +318,9 @@ function parseOperatorId(operatorId: string): { type: string; tractorId: string 
     // Invalid tractor number (e.g., "00")
     return null;
   }
-  
+
   const tractorNumber = String(tractorNumberParsed);
-  
+
   return {
     type: contractType,
     tractorId: `Tractor_${tractorNumber}`,
@@ -396,21 +396,21 @@ export async function parseExcelSchedule(
     }
 
     const worksheet = workbook.Sheets[sheetName];
-    
+
     // Extract true header row directly from worksheet (not from data rows)
     // This ensures we get all column headers even if first data row has blank cells
     const allRows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-    
+
     if (allRows.length < 2) {
       throw new Error("Excel file is empty or has no data rows");
     }
-    
+
     const rawHeaders: string[] = allRows[0] as string[];
     const rawRows: any[] = XLSX.utils.sheet_to_json(worksheet);
 
     // ========== COLUMN NORMALIZATION ==========
     const columnMap = createColumnMap(rawHeaders);
-    
+
     // Validate required columns can be resolved
     const requiredCanonicalKeys = [
       "blockId",
@@ -421,7 +421,7 @@ export async function parseExcelSchedule(
       "stop2PlannedArrivalDate",
       "stop2PlannedArrivalTime",
     ];
-    
+
     const validation = validateRequiredColumns(columnMap, requiredCanonicalKeys);
     if (!validation.valid) {
       const friendlyNames = validation.missing.map(key => {
@@ -433,7 +433,7 @@ export async function parseExcelSchedule(
         `"Stop 1 Planned Arrival Date/Time", and "Stop 2 Planned Arrival Date/Time".`
       );
     }
-    
+
     // Normalize all rows to use canonical column names
     const rows: ExcelRow[] = normalizeRows(rawRows, columnMap);
 
@@ -443,7 +443,7 @@ export async function parseExcelSchedule(
     for (const row of rows) {
       const blockId = row.blockId?.trim();
       if (!blockId) continue;
-      
+
       if (!blockGroups.has(blockId)) {
         blockGroups.set(blockId, []);
       }
@@ -456,7 +456,7 @@ export async function parseExcelSchedule(
     // Process each block tour: find/create contract, then create daily block occurrences
     for (const [blockId, blockRows] of Array.from(blockGroups.entries())) {
       const firstRow = blockRows[0];
-      
+
       // Parse Operator ID to extract contract info (same for all days of the tour)
       const parsedOperator = parseOperatorId(firstRow.operatorId);
       if (!parsedOperator) {
@@ -467,7 +467,7 @@ export async function parseExcelSchedule(
       // Find or create contract (shared across all daily occurrences of this tour)
       const contractKey = `${parsedOperator.type}:${parsedOperator.tractorId}`;
       let contract = contractCache.get(contractKey);
-      
+
       if (!contract) {
         // Look up existing contract by (type + tractorId)
         const existingContracts = await db
@@ -495,21 +495,21 @@ export async function parseExcelSchedule(
 
           const startTimestamp = excelDateToJSDate(startDate, startTime);
           const endTimestamp = excelDateToJSDate(endDate, endTime);
-          
+
           // Calculate duration from first block's timing data
           const duration = Math.round((endTimestamp.getTime() - startTimestamp.getTime()) / (1000 * 60 * 60));
-          
+
           // Extract canonical start time from Excel (will be used as benchmark)
           const startHour = startTimestamp.getHours();
           const startMinute = startTimestamp.getMinutes();
           const startTimeStr = `${String(startHour).padStart(2, '0')}:${String(startMinute).padStart(2, '0')}`;
-          
+
           // Determine baseRoutes based on contract type
           const baseRoutes = parsedOperator.type === "solo1" ? 10 : parsedOperator.type === "solo2" ? 7 : 5;
-          
+
           // Construct contract name
           const contractName = `${parsedOperator.type.toUpperCase()} ${startTimeStr} ${parsedOperator.tractorId}`;
-          
+
           // Create and persist contract to database
           const [newContract] = await db.insert(contracts).values({
             tenantId,
@@ -524,13 +524,13 @@ export async function parseExcelSchedule(
             daysPerWeek: 6, // Standard rolling 6-day pattern
             protectedDrivers: false,
           }).returning();
-          
+
           // Log warning after successful creation
           result.warnings.push(
             `Block ${blockId}: Auto-created contract for ${parsedOperator.type.toUpperCase()} ${parsedOperator.tractorId} ` +
             `using timing data from Excel. Consider seeding this contract as a benchmark.`
           );
-          
+
           // Use the newly created and persisted contract
           contract = newContract;
         } else {
@@ -563,12 +563,12 @@ export async function parseExcelSchedule(
       const sortedRows = blockRows.slice().sort((a, b) => {
         const dateA = a.stop1PlannedStartDate;
         const dateB = b.stop1PlannedStartDate;
-        
+
         // If both have dates, sort by date
         if (dateA && dateB) {
           return dateA - dateB;
         }
-        
+
         // If either lacks a date, preserve original order (stable sort)
         // This keeps pre-baseline stubs before the anchor row
         return 0;
@@ -625,7 +625,7 @@ export async function parseExcelSchedule(
       for (let i = 0; i < sortedRows.length; i++) {
         const row = sortedRows[i];
         const canonicalStart = canonicalStarts[i];
-        
+
         // Service date is always start of canonical day
         const serviceDate = new Date(canonicalStart);
         serviceDate.setHours(0, 0, 0, 0);
@@ -657,7 +657,7 @@ export async function parseExcelSchedule(
           result.warnings.push(
             `Block ${blockId}, day ${i + 1}: Missing timing data - synthesizing from canonical timeline`
           );
-          
+
           startTimestamp = canonicalStart; // Already at contract start time
           endTimestamp = new Date(startTimestamp.getTime() + contract.duration * 60 * 60 * 1000);
         }
@@ -756,7 +756,7 @@ export async function parseExcelSchedule(
       .select()
       .from(blockAssignments)
       .where(eq(blockAssignments.tenantId, tenantId));
-    
+
     // Separate active assignments for conflict detection
     const existingAssignments = allAssignments.filter(a => a.isActive);
 
@@ -769,7 +769,7 @@ export async function parseExcelSchedule(
     const assignedBlocksInImport = new Set<string>();
     const driverBlocksInImport = new Map<string, string[]>(); // driverId -> blockIds
     const processedBlockIds = new Set<string>(); // Track which block IDs we've seen in this import
-    
+
     // Collect all valid assignments to commit atomically
     const assignmentsToCommit: Array<{
       rowNum: number;
@@ -812,7 +812,7 @@ export async function parseExcelSchedule(
         debug.log(`⊗ SKIPPED: Duplicate block ID in this import (multiple stops)`);
         continue; // Silently skip - not an error, just multiple stops for same block
       }
-      
+
       processedBlockIds.add(row.blockId.trim());
 
       // Find block by Block ID
@@ -840,7 +840,7 @@ export async function parseExcelSchedule(
       // For now, just remove from in-memory array so validation doesn't see conflicts
       if (existingAssignment) {
         debug.log(`⚠ Block already has assignment: ID=${existingAssignment.id}, will replace after validation`);
-        
+
         // CRITICAL: Remove existing assignment from in-memory array to prevent validation conflicts
         // Archive will happen in Phase 2 (commit) only if new assignment passes validation
         const assignmentIndex = existingAssignments.findIndex(a => a.id === existingAssignment.id);
@@ -848,7 +848,7 @@ export async function parseExcelSchedule(
           existingAssignments.splice(assignmentIndex, 1);
           debug.log(`  → Removed from in-memory array to prevent conflict detection`);
         }
-        
+
         result.warnings.push(
           `Row ${rowNum}: Block ${row.blockId} was already assigned - will replace after validation`
         );
@@ -868,31 +868,31 @@ export async function parseExcelSchedule(
       // Normalize both Excel name and DB names to remove suffixes (Jr, Sr, III, etc.)
       const excelNameNormalized = normalizeDriverName(row.driverName);
       const excelNameLower = row.driverName.trim().toLowerCase().replace(/\s+/g, " ");
-      
+
       debug.log(`Looking for driver: "${row.driverName}" (normalized: "${excelNameNormalized}")`);
-      
+
       const driver = allDrivers.find((d) => {
         const first = d.firstName.toLowerCase();
         const last = d.lastName.toLowerCase();
-        
+
         // Normalize DB driver name (First Last)
         const dbNameNormalized = normalizeDriverName(`${d.firstName} ${d.lastName}`);
-        
+
         // Try exact match after normalization (handles suffixes)
         if (dbNameNormalized === excelNameNormalized) return true;
-        
+
         // Try exact match without normalization: "First Last"
         if (`${first} ${last}` === excelNameLower) return true;
-        
+
         // Try "Last, First" format (common in Excel exports)
         if (`${last}, ${first}` === excelNameLower) return true;
         if (`${last},${first}` === excelNameLower) return true;
-        
+
         // Try with middle names/suffixes: contains both first AND last (after normalization)
         const hasFirst = excelNameNormalized.includes(first);
         const hasLast = excelNameNormalized.includes(last);
         if (!hasFirst || !hasLast) return false;
-        
+
         // Ensure proper ordering (First...Last or Last...First)
         const firstIndex = excelNameNormalized.indexOf(first);
         const lastIndex = excelNameNormalized.indexOf(last);
@@ -918,10 +918,10 @@ export async function parseExcelSchedule(
         const parts = operatorId.split("_");
         if (parts.length >= 4 && parts[0] === "FTIM") {
           const contractType = parts[2].toLowerCase();
-          
+
           // Normalize block solo type for comparison
           const blockType = block.soloType.toLowerCase().replace(/[\s-_]/g, "");
-          
+
           // Warn if mismatch (but don't fail - blockId is authoritative)
           if (!blockType.includes(contractType.toLowerCase())) {
             result.warnings.push(
@@ -950,7 +950,7 @@ export async function parseExcelSchedule(
         driverImportBlockIds.includes(b.id)
       );
 
-      // CRITICAL FIX: Fetch blocks for ALL driver assignments (active + archived)
+      // CRITICAL: Fetch blocks for ALL driver assignments (active + archived)
       // This ensures rolling-6 calculations use correct historical block data
       // EXCLUDE the block being replaced to prevent false overlap detection during re-imports
       const allDriverAssignmentIds = allAssignments
@@ -960,7 +960,7 @@ export async function parseExcelSchedule(
           a.id !== existingAssignment?.id // Exclude the assignment we're replacing
         )
         .map(a => a.blockId!); // Filter nulls above, so ! is safe
-      
+
       const assignmentBlocks = allDriverAssignmentIds.length > 0
         ? await db.select().from(blocks).where(inArray(blocks.id, allDriverAssignmentIds))
         : [];
@@ -980,7 +980,7 @@ export async function parseExcelSchedule(
       // Check for time overlaps
       debug.log(`Checking time overlaps against ${allDriverBlocks.length} existing blocks for this driver`);
       debug.log(`  New block: ${block.blockId} (${block.startTimestamp} → ${block.endTimestamp})`);
-      
+
       let hasOverlap = false;
       for (const existingBlock of allDriverBlocks) {
         const overlap =
@@ -1004,7 +1004,7 @@ export async function parseExcelSchedule(
         debug.log(`⊗ Skipping row due to overlap`);
         continue;
       }
-      
+
       debug.log(`✓ No time overlaps detected`);
 
       // Run full validation (DOT compliance, rolling-6, protected rules)
@@ -1025,7 +1025,7 @@ export async function parseExcelSchedule(
       // parameters instead of relying on single existingAssignments array. This will make the distinction
       // clear for all callers and prevent confusion. Update all 7 callers: excel-import, auto-assignment,
       // routes, auto-build-engine, csv-import, workload-calculator, rolling6-calculator itself.
-      
+
       const validation = await validateBlockAssignment(
         driver,
         blockToAssignmentSubject(block), // Convert Block to AssignmentSubject
@@ -1051,13 +1051,13 @@ export async function parseExcelSchedule(
         }
 
         result.errors.push(`Row ${rowNum}: ${errorMessages.join("; ")}`);
-        
+
         // CRITICAL: Restore existing assignment to array if validation fails
         // This ensures later rows in the same import can still see this active assignment
         if (existingAssignment) {
           existingAssignments.push(existingAssignment);
         }
-        
+
         continue;
       }
 
@@ -1105,7 +1105,7 @@ export async function parseExcelSchedule(
               })
               .where(eq(blockAssignments.id, assignment.existingAssignmentId));
           }
-          
+
           await tx.insert(blockAssignments).values({
             tenantId,
             blockId: assignment.blockId,
@@ -1125,7 +1125,7 @@ export async function parseExcelSchedule(
             .where(eq(blocks.id, assignment.blockId));
 
           result.created++;
-          
+
           if (assignment.validationStatus === "warning") {
             result.committedWithWarnings++;
           }
@@ -1202,11 +1202,11 @@ export async function parseExcelScheduleShiftBased(
 
     const worksheet = workbook.Sheets[sheetName];
     const allRows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-    
+
     if (allRows.length < 2) {
       throw new Error("Excel file is empty or has no data rows");
     }
-    
+
     const rawHeaders: string[] = allRows[0] as string[];
     const rawRows: any[] = XLSX.utils.sheet_to_json(worksheet);
 
@@ -1221,7 +1221,7 @@ export async function parseExcelScheduleShiftBased(
       "stop2PlannedArrivalDate",
       "stop2PlannedArrivalTime",
     ];
-    
+
     const validation = validateRequiredColumns(columnMap, requiredCanonicalKeys);
     if (!validation.valid) {
       const friendlyNames = validation.missing.map(key => {
@@ -1231,14 +1231,14 @@ export async function parseExcelScheduleShiftBased(
         `Missing required columns in Excel file. Could not find columns for: ${friendlyNames.join(", ")}.`
       );
     }
-    
+
     let rows: ExcelRow[] = normalizeRows(rawRows, columnMap);
 
     // Apply start date filter if provided
     if (startDateFilter) {
       const filterDateOnly = new Date(startDateFilter);
       filterDateOnly.setHours(0, 0, 0, 0);
-      
+
       const originalCount = rows.length;
       rows = rows.filter(row => {
         if (!row.stop1PlannedStartDate) return false;
@@ -1246,7 +1246,7 @@ export async function parseExcelScheduleShiftBased(
         rowDate.setHours(0, 0, 0, 0);
         return rowDate >= filterDateOnly;
       });
-      
+
       const filtered = originalCount - rows.length;
       result.warnings.push(`Date filter: ${filtered} shifts before ${format(filterDateOnly, "MMM d, yyyy")} were skipped`);
     }
@@ -1257,7 +1257,7 @@ export async function parseExcelScheduleShiftBased(
     for (const row of rows) {
       const operatorId = row.operatorId?.trim();
       if (!operatorId) continue;
-      
+
       if (!shiftGroups.has(operatorId)) {
         shiftGroups.set(operatorId, []);
       }
@@ -1271,7 +1271,7 @@ export async function parseExcelScheduleShiftBased(
     // Process each shift tour (by operatorId)
     for (const [operatorId, shiftRows] of Array.from(shiftGroups.entries())) {
       const firstRow = shiftRows[0];
-      
+
       // Parse Operator ID to extract contract info
       const parsedOperator = parseOperatorId(operatorId);
       if (!parsedOperator) {
@@ -1283,7 +1283,7 @@ export async function parseExcelScheduleShiftBased(
       // Find or create contract (same as before)
       const contractKey = `${parsedOperator.type}:${parsedOperator.tractorId}`;
       let contract = contractCache.get(contractKey);
-      
+
       if (!contract) {
         const existingContracts = await db
           .select()
@@ -1323,7 +1323,7 @@ export async function parseExcelScheduleShiftBased(
           const startTimeStr = `${String(startHour).padStart(2, '0')}:${String(startMinute).padStart(2, '0')}`;
           const baseRoutes = parsedOperator.type === "solo1" ? 10 : parsedOperator.type === "solo2" ? 7 : 5;
           const contractName = `${parsedOperator.type.toUpperCase()} ${startTimeStr} ${parsedOperator.tractorId}`;
-          
+
           const [newContract] = await db.insert(contracts).values({
             tenantId,
             name: contractName,
@@ -1337,11 +1337,11 @@ export async function parseExcelScheduleShiftBased(
             daysPerWeek: 6,
             protectedDrivers: false,
           }).returning();
-          
+
           result.warnings.push(
             `Operator ${operatorId}: Auto-created contract ${contractName} from Excel timing data`
           );
-          
+
           contract = newContract;
         } else {
           if (existingContracts.length > 1) {
@@ -1358,7 +1358,7 @@ export async function parseExcelScheduleShiftBased(
       // ========== UPSERT SHIFT TEMPLATE (IDEMPOTENT) ==========
       // Use proper upsert to handle re-imports gracefully
       let template = templateCache.get(operatorId);
-      
+
       if (!template) {
         if (!contract.duration || !contract.startTime) {
           failedOperatorIds.set(operatorId, `Contract "${contract.name}" missing duration or startTime`);
@@ -1458,7 +1458,7 @@ export async function parseExcelScheduleShiftBased(
       for (let i = 0; i < sortedRows.length; i++) {
         const row = sortedRows[i];
         const canonicalStart = canonicalStarts[i];
-        
+
         // Service date as string (YYYY-MM-DD format for date type)
         const serviceDateObj = new Date(canonicalStart);
         serviceDateObj.setHours(0, 0, 0, 0);
@@ -1510,12 +1510,12 @@ export async function parseExcelScheduleShiftBased(
           }
         });
       }
-      
+
       console.log(`📦 Operator ${operatorId}: Created ${sortedRows.length} shift occurrences`);
     }
 
     // ========== PHASE 2: ASSIGN DRIVERS TO SHIFT OCCURRENCES ==========
-    
+
     // Fetch all drivers for driver name matching
     const allDrivers = await db
       .select()
@@ -1532,7 +1532,7 @@ export async function parseExcelScheduleShiftBased(
           eq(shiftOccurrences.importBatchId, importBatchId)
         )
       );
-    
+
     console.log(`📋 Phase 2: Found ${allOccurrences.length} shift occurrences for assignment (import batch: ${importBatchId})`);
     console.log(`📋 Block IDs in occurrences: ${allOccurrences.map(o => o.externalBlockId).filter(Boolean).join(', ')}`);
 
@@ -1541,7 +1541,7 @@ export async function parseExcelScheduleShiftBased(
       .select()
       .from(blockAssignments)
       .where(eq(blockAssignments.tenantId, tenantId));
-    
+
     const existingAssignments = allAssignments.filter(a => a.isActive);
 
     const protectedRules = await db
@@ -1583,10 +1583,29 @@ export async function parseExcelScheduleShiftBased(
         continue;
       }
 
-      // Find shift occurrence by externalBlockId (Amazon's block ID)
-      const occurrence = allOccurrences.find(
-        o => o.externalBlockId === row.blockId.trim()
-      );
+      // CRITICAL FIX: Find shift occurrence by BOTH externalBlockId AND service date
+      // Amazon reuses Block IDs across multiple days, so we need to match on date too
+      let occurrence;
+
+      // First, try to derive service date from Excel timing data
+      if (row.stop1PlannedStartDate) {
+        const startTimestamp = excelDateToJSDate(row.stop1PlannedStartDate, row.stop1PlannedStartTime || 0);
+        const serviceDate = new Date(startTimestamp);
+        serviceDate.setHours(0, 0, 0, 0);
+        const serviceDateStr = format(serviceDate, "yyyy-MM-dd");
+
+        // Match on BOTH Block ID and service date
+        occurrence = allOccurrences.find(
+          o => o.externalBlockId === row.blockId.trim() && o.serviceDate === serviceDateStr
+        );
+      }
+
+      // Fallback: if no timing data, try to find ANY occurrence with this Block ID
+      if (!occurrence) {
+        occurrence = allOccurrences.find(
+          o => o.externalBlockId === row.blockId.trim()
+        );
+      }
 
       if (!occurrence) {
         result.failed++;
@@ -1594,7 +1613,7 @@ export async function parseExcelScheduleShiftBased(
         continue;
       }
 
-      // Skip duplicates within this import
+      // Skip duplicates within this import (use occurrence.id which is unique)
       if (processedOccurrences.has(occurrence.id)) {
         continue;
       }
@@ -1622,21 +1641,21 @@ export async function parseExcelScheduleShiftBased(
       // Find driver by name (same matching logic as legacy)
       const excelNameNormalized = normalizeDriverName(row.driverName);
       const excelNameLower = row.driverName.trim().toLowerCase().replace(/\s+/g, " ");
-      
+
       const driver = allDrivers.find((d) => {
         const first = d.firstName.toLowerCase();
         const last = d.lastName.toLowerCase();
         const dbNameNormalized = normalizeDriverName(`${d.firstName} ${d.lastName}`);
-        
+
         if (dbNameNormalized === excelNameNormalized) return true;
         if (`${first} ${last}` === excelNameLower) return true;
         if (`${last}, ${first}` === excelNameLower) return true;
         if (`${last},${first}` === excelNameLower) return true;
-        
+
         const hasFirst = excelNameNormalized.includes(first);
         const hasLast = excelNameNormalized.includes(last);
         if (!hasFirst || !hasLast) return false;
-        
+
         const firstIndex = excelNameNormalized.indexOf(first);
         const lastIndex = excelNameNormalized.indexOf(last);
         return (firstIndex < lastIndex) || (excelNameNormalized.startsWith(last));
@@ -1650,7 +1669,7 @@ export async function parseExcelScheduleShiftBased(
 
       // Get driver's existing assignments with block data for validation
       const driverAssignmentsWithBlocks: Array<typeof blockAssignments.$inferSelect & { block: typeof blocks.$inferSelect }> = [];
-      
+
       for (const assignment of existingAssignments.filter(a => a.driverId === driver.id && a.blockId !== null)) {
         const block = await db.select().from(blocks).where(eq(blocks.id, assignment.blockId!)).limit(1);
         if (block.length > 0) {
@@ -1703,7 +1722,7 @@ export async function parseExcelScheduleShiftBased(
       // Stage for commit
       // Safe Block ID handling: trim if string exists, otherwise null
       const amazonBlockId = typeof row.blockId === 'string' ? row.blockId.trim() || null : null;
-      
+
       assignmentsToCommit.push({
         rowNum,
         occurrenceId: occurrence.id,
@@ -1736,7 +1755,7 @@ export async function parseExcelScheduleShiftBased(
               })
               .where(eq(blockAssignments.id, assignment.existingAssignmentId));
           }
-          
+
           // Create new assignment with shiftOccurrenceId
           await tx.insert(blockAssignments).values({
             tenantId,
@@ -1759,7 +1778,7 @@ export async function parseExcelScheduleShiftBased(
             .where(eq(shiftOccurrences.id, assignment.occurrenceId));
 
           result.created++;
-          
+
           if (assignment.validationStatus === "warning") {
             result.committedWithWarnings++;
           }
