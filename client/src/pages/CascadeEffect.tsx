@@ -34,6 +34,7 @@ interface CascadeAnalysisResult {
   hasWarnings: boolean;
   blockingIssues: string[];
   warnings: string[];
+  targetAssignmentId?: string; // Added for swap drift detection
 }
 
 interface DriverWorkload {
@@ -94,6 +95,26 @@ export default function CascadeEffect() {
       return response as CascadeAnalysisResult;
     },
     onSuccess: (data: CascadeAnalysisResult) => {
+      // Add null checks for frontend crash
+      if (!data.before) {
+        data.before = { sourceDriverWorkload: {} as DriverWorkload };
+      }
+      if (!data.after) {
+        data.after = { sourceDriverWorkload: {} as DriverWorkload };
+      }
+      if (!data.before.sourceDriverWorkload) {
+        data.before.sourceDriverWorkload = {} as DriverWorkload;
+      }
+      if (!data.after.sourceDriverWorkload) {
+        data.after.sourceDriverWorkload = {} as DriverWorkload;
+      }
+      if (data.before.targetDriverWorkload === undefined) {
+        data.before.targetDriverWorkload = {} as DriverWorkload;
+      }
+      if (data.after.targetDriverWorkload === undefined) {
+        data.after.targetDriverWorkload = {} as DriverWorkload;
+      }
+      
       setAnalysisResult(data);
     },
     onError: (error: Error) => {
@@ -404,7 +425,7 @@ export default function CascadeEffect() {
                 {analysisResult && (
                   <div className="space-y-4 mt-6">
                     <Separator />
-                    
+
                     {/* Status Banner */}
                     {analysisResult.hasViolations && (
                       <div className="p-4 bg-destructive/10 border border-destructive/20 rounded-md">
@@ -450,8 +471,8 @@ export default function CascadeEffect() {
                         <Card>
                           <CardHeader>
                             <CardTitle className="text-sm">
-                              {analysisResult.before.sourceDriverWorkload.driver?.firstName}{" "}
-                              {analysisResult.before.sourceDriverWorkload.driver?.lastName}
+                              {analysisResult.before.sourceDriverWorkload?.driver?.firstName}{" "}
+                              {analysisResult.before.sourceDriverWorkload?.driver?.lastName}
                             </CardTitle>
                             <CardDescription className="text-xs">Source Driver</CardDescription>
                           </CardHeader>
@@ -515,8 +536,8 @@ function WorkloadComparison({ before, after }: { before: DriverWorkload; after: 
     return delta;
   };
 
-  const hours24Delta = getDelta(before.totalHours24h, after.totalHours24h);
-  const hours48Delta = getDelta(before.totalHours48h, after.totalHours48h);
+  const hours24Delta = getDelta(before?.totalHours24h ?? 0, after?.totalHours24h ?? 0);
+  const hours48Delta = getDelta(before?.totalHours48h ?? 0, after?.totalHours48h ?? 0);
 
   return (
     <>
@@ -524,9 +545,9 @@ function WorkloadComparison({ before, after }: { before: DriverWorkload; after: 
         <div className="flex items-center justify-between text-sm">
           <span className="text-muted-foreground">24h Hours:</span>
           <div className="flex items-center gap-2">
-            <span className="font-mono">{before.totalHours24h.toFixed(1)}h</span>
+            <span className="font-mono">{(before?.totalHours24h ?? 0).toFixed(1)}h</span>
             <span className="text-muted-foreground">→</span>
-            <span className="font-mono font-medium">{after.totalHours24h.toFixed(1)}h</span>
+            <span className="font-mono font-medium">{(after?.totalHours24h ?? 0).toFixed(1)}h</span>
             {hours24Delta !== 0 && (
               <Badge variant={hours24Delta > 0 ? "destructive" : "secondary"} className="text-xs">
                 {hours24Delta > 0 ? <TrendingUp className="w-3 h-3 mr-1" /> : <TrendingDown className="w-3 h-3 mr-1" />}
@@ -539,9 +560,9 @@ function WorkloadComparison({ before, after }: { before: DriverWorkload; after: 
         <div className="flex items-center justify-between text-sm">
           <span className="text-muted-foreground">48h Hours:</span>
           <div className="flex items-center gap-2">
-            <span className="font-mono">{before.totalHours48h.toFixed(1)}h</span>
+            <span className="font-mono">{(before?.totalHours48h ?? 0).toFixed(1)}h</span>
             <span className="text-muted-foreground">→</span>
-            <span className="font-mono font-medium">{after.totalHours48h.toFixed(1)}h</span>
+            <span className="font-mono font-medium">{(after?.totalHours48h ?? 0).toFixed(1)}h</span>
             {hours48Delta !== 0 && (
               <Badge variant={hours48Delta > 0 ? "destructive" : "secondary"} className="text-xs">
                 {hours48Delta > 0 ? <TrendingUp className="w-3 h-3 mr-1" /> : <TrendingDown className="w-3 h-3 mr-1" />}
@@ -559,28 +580,28 @@ function WorkloadComparison({ before, after }: { before: DriverWorkload; after: 
           <div className="flex items-center gap-2">
             <Badge
               variant={
-                before.complianceStatus === "violation" ? "destructive" :
-                before.complianceStatus === "warning" ? "secondary" :
+                before?.complianceStatus === "violation" ? "destructive" :
+                before?.complianceStatus === "warning" ? "secondary" :
                 "secondary"
               }
               className="text-xs"
             >
-              {before.complianceStatus}
+              {before?.complianceStatus ?? "unknown"}
             </Badge>
             <Minus className="w-3 h-3 text-muted-foreground" />
             <Badge
               variant={
-                after.complianceStatus === "violation" ? "destructive" :
-                after.complianceStatus === "warning" ? "secondary" :
+                after?.complianceStatus === "violation" ? "destructive" :
+                after?.complianceStatus === "warning" ? "secondary" :
                 "secondary"
               }
               className="text-xs"
             >
-              {after.complianceStatus}
+              {after?.complianceStatus ?? "unknown"}
             </Badge>
           </div>
         </div>
-        {after.complianceMessages.length > 0 && (
+        {after?.complianceMessages && after.complianceMessages.length > 0 && (
           <div className="mt-2 text-xs text-muted-foreground">
             {after.complianceMessages.map((msg, i) => (
               <div key={i}>• {msg}</div>

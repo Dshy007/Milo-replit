@@ -32,15 +32,17 @@ const CANONICAL_COLUMN_MAP: Record<string, string> = {
   "driver name": "driverName",
   "operator id": "operatorId",
 
-  // Stop 1 timing (handles both "Arrival" and "Departure" variations with single/double spaces)
+  // Stop 1 timing - Departure is the actual start time
   "stop 1 planned arrival date": "stop1PlannedStartDate",
   "stop 1 planned departure date": "stop1PlannedStartDate",
   "stop 1 planned arrival time": "stop1PlannedStartTime",
   "stop 1 planned departure time": "stop1PlannedStartTime",
 
-  // Stop 2 timing
+  // Stop 2 timing - Arrival is the actual end time
   "stop 2 planned arrival date": "stop2PlannedArrivalDate",
   "stop 2 planned arrival time": "stop2PlannedArrivalTime",
+  "stop 2 planned departure date": "stop2PlannedArrivalDate",
+  "stop 2 planned departure time": "stop2PlannedArrivalTime",
 };
 
 /**
