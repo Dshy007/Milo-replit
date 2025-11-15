@@ -1003,3 +1003,80 @@ export const updateDriverAvailabilityPreferenceSchema = insertDriverAvailability
 export type InsertDriverAvailabilityPreference = z.infer<typeof insertDriverAvailabilityPreferenceSchema>;
 export type UpdateDriverAvailabilityPreference = z.infer<typeof updateDriverAvailabilityPreferenceSchema>;
 export type DriverAvailabilityPreference = typeof driverAvailabilityPreferences.$inferSelect;
+
+// Python Analysis Results
+export const analysisResults = pgTable("analysis_results", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+  analysisType: text("analysis_type").notNull(), // excel_parse, coverage_analysis, assignment_prediction
+  inputData: jsonb("input_data"), // The input parameters/data used
+  result: jsonb("result").notNull(), // JSON result from Python script
+  success: boolean("success").notNull().default(true),
+  errorMessage: text("error_message"),
+  executionTimeMs: integer("execution_time_ms"), // How long Python script took
+  createdBy: varchar("created_by").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  typeIdx: index("analysis_results_type_idx").on(table.analysisType),
+  createdAtIdx: index("analysis_results_created_at_idx").on(table.createdAt),
+}));
+
+export const insertAnalysisResultSchema = createInsertSchema(analysisResults).omit({ 
+  id: true, 
+  createdAt: true 
+});
+export type InsertAnalysisResult = z.infer<typeof insertAnalysisResultSchema>;
+export type AnalysisResult = typeof analysisResults.$inferSelect;
+
+// AI Assistant Query History
+export const aiQueryHistory = pgTable("ai_query_history", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  query: text("query").notNull(), // User's natural language query
+  context: jsonb("context"), // Additional context provided to AI (current week, filters, etc.)
+  response: text("response").notNull(), // AI's response
+  tokensUsed: integer("tokens_used"), // Track API usage
+  responseTimeMs: integer("response_time_ms"),
+  helpful: boolean("helpful"), // User feedback (thumbs up/down)
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  userIdx: index("ai_query_user_idx").on(table.userId),
+  createdAtIdx: index("ai_query_created_at_idx").on(table.createdAt),
+}));
+
+export const insertAiQueryHistorySchema = createInsertSchema(aiQueryHistory).omit({ 
+  id: true, 
+  createdAt: true 
+});
+export type InsertAiQueryHistory = z.infer<typeof insertAiQueryHistorySchema>;
+export type AiQueryHistory = typeof aiQueryHistory.$inferSelect;
+
+// Assignment Predictions
+export const assignmentPredictions = pgTable("assignment_predictions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+  shiftOccurrenceId: varchar("shift_occurrence_id").references(() => shiftOccurrences.id),
+  blockId: text("block_id"),
+  recommendedDriverId: varchar("recommended_driver_id").references(() => drivers.id),
+  confidenceScore: decimal("confidence_score", { precision: 5, scale: 2 }), // 0.00 to 100.00
+  reasons: text("reasons").array(), // Reasons for recommendation
+  alternativeDrivers: jsonb("alternative_drivers"), // Top 3-5 alternatives with scores
+  appliedToSchedule: boolean("applied_to_schedule").default(false), // Was this recommendation accepted?
+  appliedAt: timestamp("applied_at"),
+  appliedBy: varchar("applied_by").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  occurrenceIdx: index("predictions_occurrence_idx").on(table.shiftOccurrenceId),
+  driverIdx: index("predictions_driver_idx").on(table.recommendedDriverId),
+  appliedIdx: index("predictions_applied_idx").on(table.appliedToSchedule),
+}));
+
+export const insertAssignmentPredictionSchema = createInsertSchema(assignmentPredictions, {
+  appliedAt: z.coerce.date().optional().nullable(),
+}).omit({ 
+  id: true, 
+  createdAt: true 
+});
+export type InsertAssignmentPrediction = z.infer<typeof insertAssignmentPredictionSchema>;
+export type AssignmentPrediction = typeof assignmentPredictions.$inferSelect;
