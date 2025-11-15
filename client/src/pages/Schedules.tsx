@@ -293,8 +293,11 @@ export default function Schedules() {
   };
 
   const formatTime = (timeStr: string) => {
-    // Return military time (24-hour format) as-is
-    return timeStr;
+    // Parse time string (HH:mm format) and convert to h:mm (12-hour format)
+    const [hours, minutes] = timeStr.split(':').map(Number);
+    const period = hours >= 12 ? 'PM' : 'AM';
+    const displayHours = hours === 0 ? 12 : hours > 12 ? hours - 12 : hours;
+    return `${displayHours}:${minutes.toString().padStart(2, '0')} ${period}`;
   };
 
   const getBlockTypeColor = (soloType: string) => {
@@ -564,7 +567,7 @@ export default function Schedules() {
                         {/* Start Time & Status */}
                         <div className="flex items-center justify-between">
                           <span className="text-base font-mono font-semibold text-foreground">
-                            {formatTime(contract.startTime)} CT
+                            {formatTime(contract.startTime)}
                           </span>
                           <Badge 
                             variant={contract.status === "active" ? "default" : "secondary"}
