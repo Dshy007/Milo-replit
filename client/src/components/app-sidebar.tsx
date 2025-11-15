@@ -77,12 +77,6 @@ const navItems = [
     icon: CalendarCheck,
     testId: "nav-driver-availability",
   },
-  {
-    title: "Cascade Effect",
-    url: "/cascade-effect",
-    icon: GitBranch,
-    testId: "nav-cascade-effect",
-  },
 ];
 
 export function AppSidebar() {
