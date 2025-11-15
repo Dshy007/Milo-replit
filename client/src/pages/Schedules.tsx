@@ -61,6 +61,7 @@ export default function Schedules() {
   const [importStartDate, setImportStartDate] = useState<string>("2025-11-03"); // Sunday, Nov 3, 2024
   const [sortBy, setSortBy] = useState<"time" | "type">("time");
   const [filterType, setFilterType] = useState<"all" | "solo1" | "solo2" | "team">("all");
+  const [showClearAllDialog, setShowClearAllDialog] = useState(false);
 
   // Fetch contracts to get static start times
   const { data: contracts = [] } = useQuery<Contract[]>({
@@ -204,6 +205,45 @@ export default function Schedules() {
     }
 
     importMutation.mutate({ file: importFile, startDate: importStartDate });
+  };
+
+  const clearAllMutation = useMutation({
+    mutationFn: async ({ weekStart, weekEnd }: { weekStart: string; weekEnd: string }) => {
+      const response = await fetch('/api/shift-occurrences/clear-week', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ weekStart, weekEnd }),
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Failed to clear shifts');
+      }
+      
+      return response.json();
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
+      toast({
+        title: "Shifts Cleared",
+        description: `Successfully deleted ${result.count || 0} shifts from this week`,
+      });
+      setShowClearAllDialog(false);
+    },
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Clear Failed",
+        description: error.message || "Failed to clear shifts",
+      });
+    },
+  });
+
+  const handleClearAll = () => {
+    const weekStart = format(weekRange.weekStart, "yyyy-MM-dd");
+    const weekEnd = format(addDays(weekRange.weekStart, 6), "yyyy-MM-dd");
+    clearAllMutation.mutate({ weekStart, weekEnd });
   };
 
   // Calculate week range (Sunday to Saturday)
@@ -443,6 +483,16 @@ export default function Schedules() {
               </div>
             </DialogContent>
           </Dialog>
+
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => setShowClearAllDialog(true)}
+                data-testid="button-clear-all"
+              >
+                <X className="w-4 h-4 mr-2" />
+                Clear All
+              </Button>
 
               <Button
                 variant="outline"
@@ -730,6 +780,30 @@ export default function Schedules() {
                 className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               >
                 {deleteMutation.isPending ? "Deleting..." : "Delete"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Clear All Confirmation Dialog */}
+        <AlertDialog open={showClearAllDialog} onOpenChange={setShowClearAllDialog}>
+          <AlertDialogContent data-testid="dialog-confirm-clear-all">
+            <AlertDialogHeader>
+              <AlertDialogTitle>Clear All Shifts for This Week?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This will permanently delete ALL shift occurrences for the week of {format(weekRange.weekStart, "MMM d")} - {format(addDays(weekRange.weekStart, 6), "MMM d, yyyy")}. 
+                This action cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel data-testid="button-cancel-clear-all">Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={handleClearAll}
+                disabled={clearAllMutation.isPending}
+                data-testid="button-confirm-clear-all"
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                {clearAllMutation.isPending ? "Clearing..." : "Clear All"}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

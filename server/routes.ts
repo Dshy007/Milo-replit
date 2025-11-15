@@ -18,7 +18,7 @@ import {
   blocks, blockAssignments, assignmentHistory, driverContractStats, drivers, protectedDriverRules,
   shiftOccurrences, shiftTemplates, contracts
 } from "@shared/schema";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, sql, gte, lte } from "drizzle-orm";
 import session from "express-session";
 import { fromZodError } from "zod-validation-error";
 import bcrypt from "bcryptjs";
@@ -2033,6 +2033,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ message: "Shift occurrence deleted successfully" });
     } catch (error: any) {
       res.status(500).json({ message: "Failed to delete shift occurrence", error: error.message });
+    }
+  });
+
+  // POST /api/shift-occurrences/clear-week - Clear all shift occurrences for a given week
+  app.post("/api/shift-occurrences/clear-week", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { weekStart, weekEnd } = req.body;
+      
+      if (!weekStart || !weekEnd) {
+        return res.status(400).json({ message: "Missing required fields: weekStart, weekEnd" });
+      }
+      
+      // Get all shift occurrences for the week
+      const occurrences = await db
+        .select()
+        .from(shiftOccurrences)
+        .where(and(
+          eq(shiftOccurrences.tenantId, tenantId),
+          gte(shiftOccurrences.serviceDate, weekStart),
+          lte(shiftOccurrences.serviceDate, weekEnd)
+        ));
+      
+      // Delete all occurrences (skip in_progress or completed)
+      let deletedCount = 0;
+      for (const occ of occurrences) {
+        if (occ.status !== "in_progress" && occ.status !== "completed") {
+          const deleted = await dbStorage.deleteShiftOccurrence(occ.id, tenantId);
+          if (deleted) {
+            deletedCount++;
+          }
+        }
+      }
+      
+      res.json({ 
+        message: `Deleted ${deletedCount} shift occurrences`,
+        count: deletedCount,
+        total: occurrences.length
+      });
+    } catch (error: any) {
+      console.error("Error clearing shifts:", error);
+      res.status(500).json({ message: "Failed to clear shifts", error: error.message });
     }
   });
 
