@@ -1612,7 +1612,25 @@ export async function parseExcelScheduleShiftBased(
         return 0;
       });
 
-      const baselineIndex = sortedRows.findIndex(
+      // Deduplicate by service date - keep first row (earliest trip) for each date
+      // This ensures one shift per operator per day and uses the first block ID
+      const seenDates = new Set<string>();
+      const deduplicatedRows = sortedRows.filter(row => {
+        if (!row.stop1PlannedStartDate) return false;
+        try {
+          const rowDate = excelDateToJSDate(row.stop1PlannedStartDate, 0);
+          const dateKey = format(rowDate, "yyyy-MM-dd");
+          if (seenDates.has(dateKey)) {
+            return false; // Skip duplicate dates - keep the first (earliest) one
+          }
+          seenDates.add(dateKey);
+          return true;
+        } catch {
+          return true; // Keep rows we can't parse
+        }
+      });
+
+      const baselineIndex = deduplicatedRows.findIndex(
         r => r.stop1PlannedStartDate && r.stop1PlannedStartTime !== undefined && 
              r.stop2PlannedArrivalDate && r.stop2PlannedArrivalTime !== undefined
       );
@@ -1622,7 +1640,7 @@ export async function parseExcelScheduleShiftBased(
         continue;
       }
 
-      const baselineRow = sortedRows[baselineIndex];
+      const baselineRow = deduplicatedRows[baselineIndex];
       let baselineActualStart: Date;
       try {
         baselineActualStart = excelDateToJSDate(
@@ -1640,16 +1658,31 @@ export async function parseExcelScheduleShiftBased(
         baselinePatternGroup
       );
 
-      // Build canonical timeline
-      const canonicalStarts: Date[] = sortedRows.map((_, i) => {
+      // Build canonical timeline from ACTUAL dates in each row (not sequential days)
+      // This correctly handles gaps and multiple weeks
+      const canonicalStarts: Date[] = deduplicatedRows.map((row, i) => {
+        // If row has actual timing data, use it to calculate canonical start
+        if (row.stop1PlannedStartDate && row.stop1PlannedStartTime !== undefined) {
+          try {
+            const actualStart = excelDateToJSDate(row.stop1PlannedStartDate, row.stop1PlannedStartTime);
+            const patternGroup = detectPatternGroup(actualStart, contract.startTime);
+            return calculateCanonicalStart(actualStart, contract.startTime, patternGroup);
+          } catch {
+            // Fall back to baseline-based calculation
+            const dayCanonicalStart = new Date(baselineCanonicalStart);
+            dayCanonicalStart.setDate(dayCanonicalStart.getDate() + (i - baselineIndex));
+            return dayCanonicalStart;
+          }
+        }
+        // Fall back to baseline-based calculation for rows without timing
         const dayCanonicalStart = new Date(baselineCanonicalStart);
         dayCanonicalStart.setDate(dayCanonicalStart.getDate() + (i - baselineIndex));
         return dayCanonicalStart;
       });
 
       // Create shift occurrences for each day
-      for (let i = 0; i < sortedRows.length; i++) {
-        const row = sortedRows[i];
+      for (let i = 0; i < deduplicatedRows.length; i++) {
+        const row = deduplicatedRows[i];
         const canonicalStart = canonicalStarts[i];
 
         // Validate canonicalStart is a valid date
@@ -1723,7 +1756,7 @@ export async function parseExcelScheduleShiftBased(
         });
       }
 
-      console.log(`📦 Operator ${operatorId}: Created ${sortedRows.length} shift occurrences`);
+      console.log(`📦 Operator ${operatorId}: Created ${deduplicatedRows.length} shift occurrences`);
     }
 
     // ========== PHASE 2: ASSIGN DRIVERS TO SHIFT OCCURRENCES ==========
