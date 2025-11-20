@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format, startOfWeek, addWeeks, subWeeks, eachDayOfInterval, addDays } from "date-fns";
-import { ChevronLeft, ChevronRight, Calendar, User, Upload, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Calendar, User, Upload, X, LayoutGrid, List } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -27,6 +27,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient } from "@/lib/queryClient";
 import { DriverAssignmentModal } from "@/components/DriverAssignmentModal";
+import { ScheduleListView } from "@/components/ScheduleListView";
 import type { Block, BlockAssignment, Driver, Contract } from "@shared/schema";
 
 // Simplified occurrence from new calendar API
@@ -61,6 +62,7 @@ export default function Schedules() {
   const [sortBy, setSortBy] = useState<"time" | "type">("time");
   const [filterType, setFilterType] = useState<"all" | "solo1" | "solo2" | "team">("all");
   const [showClearAllDialog, setShowClearAllDialog] = useState(false);
+  const [viewMode, setViewMode] = useState<"calendar" | "list">("calendar");
 
   // Fetch contracts to get static start times
   const { data: contracts = [] } = useQuery<Contract[]>({
@@ -505,73 +507,103 @@ export default function Schedules() {
             </div>
           </div>
 
-          {/* Sort & Filter Controls - Right side */}
+          {/* View Toggle & Sort/Filter Controls - Right side */}
           <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2">
-              <label className="text-sm font-medium text-muted-foreground">Sort by:</label>
-              <div className="flex gap-1">
-                <Button
-                  variant={sortBy === "time" ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setSortBy("time")}
-                  data-testid="button-sort-time"
-                >
-                  Time
-                </Button>
-                <Button
-                  variant={sortBy === "type" ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setSortBy("type")}
-                  data-testid="button-sort-type"
-                >
-                  Type
-                </Button>
-              </div>
+            {/* View Toggle */}
+            <div className="flex items-center gap-2 border rounded-md p-1">
+              <Button
+                variant={viewMode === "calendar" ? "default" : "ghost"}
+                size="sm"
+                onClick={() => setViewMode("calendar")}
+                data-testid="button-view-calendar"
+                className="gap-2"
+              >
+                <LayoutGrid className="w-4 h-4" />
+                Calendar
+              </Button>
+              <Button
+                variant={viewMode === "list" ? "default" : "ghost"}
+                size="sm"
+                onClick={() => setViewMode("list")}
+                data-testid="button-view-list"
+                className="gap-2"
+              >
+                <List className="w-4 h-4" />
+                List
+              </Button>
             </div>
 
-            <div className="flex items-center gap-2">
-              <label className="text-sm font-medium text-muted-foreground">Filter:</label>
-              <div className="flex gap-1">
-                <Button
-                  variant={filterType === "all" ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setFilterType("all")}
-                  data-testid="button-filter-all"
-                >
-                  All
-                </Button>
-                <Button
-                  variant={filterType === "solo1" ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setFilterType("solo1")}
-                  data-testid="button-filter-solo1"
-                >
-                  Solo1
-                </Button>
-                <Button
-                  variant={filterType === "solo2" ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setFilterType("solo2")}
-                  data-testid="button-filter-solo2"
-                >
-                  Solo2
-                </Button>
-                <Button
-                  variant={filterType === "team" ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setFilterType("team")}
-                  data-testid="button-filter-team"
-                >
-                  Team
-                </Button>
-              </div>
-            </div>
+            {/* Sort & Filter - Only show in Calendar view */}
+            {viewMode === "calendar" && (
+              <>
+                <div className="flex items-center gap-2">
+                  <label className="text-sm font-medium text-muted-foreground">Sort by:</label>
+                  <div className="flex gap-1">
+                    <Button
+                      variant={sortBy === "time" ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => setSortBy("time")}
+                      data-testid="button-sort-time"
+                    >
+                      Time
+                    </Button>
+                    <Button
+                      variant={sortBy === "type" ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => setSortBy("type")}
+                      data-testid="button-sort-type"
+                    >
+                      Type
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <label className="text-sm font-medium text-muted-foreground">Filter:</label>
+                  <div className="flex gap-1">
+                    <Button
+                      variant={filterType === "all" ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => setFilterType("all")}
+                      data-testid="button-filter-all"
+                    >
+                      All
+                    </Button>
+                    <Button
+                      variant={filterType === "solo1" ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => setFilterType("solo1")}
+                      data-testid="button-filter-solo1"
+                    >
+                      Solo1
+                    </Button>
+                    <Button
+                      variant={filterType === "solo2" ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => setFilterType("solo2")}
+                      data-testid="button-filter-solo2"
+                    >
+                      Solo2
+                    </Button>
+                    <Button
+                      variant={filterType === "team" ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => setFilterType("team")}
+                      data-testid="button-filter-team"
+                    >
+                      Team
+                    </Button>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
 
-      {/* Contract Grid Table */}
-      <Card className="flex-1 overflow-hidden">
-        <CardContent className="p-0 h-full overflow-auto">
+      {/* Calendar View */}
+      {viewMode === "calendar" && (
+        <Card className="flex-1 overflow-hidden">
+          <CardContent className="p-0 h-full overflow-auto">
           <table className="w-full border-collapse text-sm">
             <thead className="sticky top-0 z-10 bg-card border-b shadow-md">
               <tr>
@@ -755,6 +787,18 @@ export default function Schedules() {
           </table>
         </CardContent>
       </Card>
+      )}
+
+      {/* List View */}
+      {viewMode === "list" && calendarData && (
+        <Card className="flex-1 overflow-hidden">
+          <CardContent className="p-4 h-full">
+            <ScheduleListView
+              occurrences={calendarData.occurrences}
+            />
+          </CardContent>
+        </Card>
+      )}
 
         {/* Driver Assignment Modal - Temporarily disabled until modal is updated for occurrences */}
         {/* TODO: Update DriverAssignmentModal to work with occurrenceId instead of blockId */}
