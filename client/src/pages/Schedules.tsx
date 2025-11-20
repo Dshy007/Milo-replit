@@ -332,11 +332,8 @@ export default function Schedules() {
   };
 
   const formatTime = (timeStr: string) => {
-    // Parse time string (HH:mm format) and convert to h:mm (12-hour format)
-    const [hours, minutes] = timeStr.split(':').map(Number);
-    const period = hours >= 12 ? 'PM' : 'AM';
-    const displayHours = hours === 0 ? 12 : hours > 12 ? hours - 12 : hours;
-    return `${displayHours}:${minutes.toString().padStart(2, '0')} ${period}`;
+    // Return time in military format (HH:mm)
+    return timeStr;
   };
 
   const getBlockTypeColor = (soloType: string) => {
