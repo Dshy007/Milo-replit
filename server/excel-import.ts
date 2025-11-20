@@ -15,6 +15,7 @@ import {
 
 interface ExcelRow {
   blockId: string;
+  tripId?: string;  // Rows with Trip ID are from previous weeks - filter them out
   driverName: string;
   operatorId: string;
   stop1PlannedStartDate?: number | string;  // Excel serial or text date from CSV
@@ -29,6 +30,7 @@ interface ExcelRow {
  */
 const CANONICAL_COLUMN_MAP: Record<string, string> = {
   "block id": "blockId",
+  "trip id": "tripId", // Rows with Trip ID are from previous weeks - filter them out
   "driver name": "driverName",
   "operator id": "operatorId",
 
@@ -98,6 +100,7 @@ function normalizeRows(rawRows: any[], columnMap: Map<string, string>): ExcelRow
     // Prefer Departure for Stop 1 (shift start), Arrival for Stop 2 (shift end)
     const normalized: any = {
       blockId: intermediate.blockId,
+      tripId: intermediate.tripId, // Used to filter out previous week data
       driverName: intermediate.driverName,
       operatorId: intermediate.operatorId,
 
@@ -1387,6 +1390,18 @@ export async function parseExcelScheduleShiftBased(
     }
 
     let rows: ExcelRow[] = normalizeRows(rawRows, columnMap);
+
+    // Filter out rows with Trip ID (they are from previous weeks)
+    const originalRowCount = rows.length;
+    rows = rows.filter(row => {
+      // Keep rows that don't have a Trip ID (current week blocks)
+      // Skip rows that have a Trip ID (previous week trips)
+      return !row.tripId || row.tripId === '';
+    });
+    const tripIdFiltered = originalRowCount - rows.length;
+    if (tripIdFiltered > 0) {
+      console.log(`[SHIFT-IMPORT] Filtered out ${tripIdFiltered} rows with Trip ID (previous week data)`);
+    }
 
     // Apply start date filter if provided
     if (startDateFilter) {
