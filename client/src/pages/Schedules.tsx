@@ -330,24 +330,12 @@ export default function Schedules() {
 
       return response.json();
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
-      toast({
-        title: "Assignment Updated",
-        description: "Driver assignment has been updated successfully",
-      });
-    },
-    onError: (error: Error) => {
-      toast({
-        variant: "destructive",
-        title: "Update Failed",
-        description: error.message || "Failed to update assignment",
-      });
-    },
+    // Note: onSuccess removed to prevent multiple invalidations and toasts
+    // We'll handle this manually in handleDragEnd after all mutations complete
   });
 
   // Handle drag end event
-  const handleDragEnd = (event: DragEndEvent) => {
+  const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
 
     if (!over) return;
@@ -382,37 +370,57 @@ export default function Schedules() {
 
     const targetOccurrence = targetCell[0];
 
-    // If target has a driver, swap assignments
-    if (targetOccurrence.driverId) {
-      // Swap: assign dragged driver to target, and target driver to source
-      const draggedDriverId = draggedOccurrence.driverId;
-      const targetDriverId = targetOccurrence.driverId;
+    try {
+      // If target has a driver, swap assignments
+      if (targetOccurrence.driverId) {
+        // Swap: assign dragged driver to target, and target driver to source
+        const draggedDriverId = draggedOccurrence.driverId;
+        const targetDriverId = targetOccurrence.driverId;
 
-      // Update both assignments
-      updateAssignmentMutation.mutate({
-        occurrenceId: targetOccurrence.occurrenceId,
-        driverId: draggedDriverId,
-      });
+        // Execute mutations sequentially to prevent race conditions
+        await updateAssignmentMutation.mutateAsync({
+          occurrenceId: targetOccurrence.occurrenceId,
+          driverId: draggedDriverId,
+        });
 
-      updateAssignmentMutation.mutate({
-        occurrenceId: draggedOccurrence.occurrenceId,
-        driverId: targetDriverId,
-      });
+        await updateAssignmentMutation.mutateAsync({
+          occurrenceId: draggedOccurrence.occurrenceId,
+          driverId: targetDriverId,
+        });
 
+        // Invalidate and show success message after both mutations complete
+        await queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
+
+        toast({
+          title: "Drivers Swapped",
+          description: `${draggedOccurrence.driverName} and ${targetOccurrence.driverName} have been swapped`,
+        });
+      } else {
+        // Target is unassigned, just move the driver
+        await updateAssignmentMutation.mutateAsync({
+          occurrenceId: targetOccurrence.occurrenceId,
+          driverId: draggedOccurrence.driverId,
+        });
+
+        await updateAssignmentMutation.mutateAsync({
+          occurrenceId: draggedOccurrence.occurrenceId,
+          driverId: null,
+        });
+
+        // Invalidate and show success message after both mutations complete
+        await queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
+
+        toast({
+          title: "Driver Moved",
+          description: `${draggedOccurrence.driverName} has been moved successfully`,
+        });
+      }
+    } catch (error: any) {
+      // Handle errors from mutations
       toast({
-        title: "Drivers Swapped",
-        description: `${draggedOccurrence.driverName} and ${targetOccurrence.driverName} have been swapped`,
-      });
-    } else {
-      // Target is unassigned, just move the driver
-      updateAssignmentMutation.mutate({
-        occurrenceId: targetOccurrence.occurrenceId,
-        driverId: draggedOccurrence.driverId,
-      });
-
-      updateAssignmentMutation.mutate({
-        occurrenceId: draggedOccurrence.occurrenceId,
-        driverId: null,
+        variant: "destructive",
+        title: "Update Failed",
+        description: error.message || "Failed to update assignment",
       });
     }
   };
