@@ -1341,6 +1341,12 @@ export async function parseExcelScheduleShiftBased(
     const rawHeaders: string[] = allRows[0] as string[];
     const rawRows: any[] = XLSX.utils.sheet_to_json(worksheet);
 
+    // Log column headers for debugging
+    console.log(`[SHIFT-IMPORT] Found ${rawHeaders.length} columns: ${rawHeaders.join(', ')}`);
+    if (rawRows.length > 0) {
+      console.log(`[SHIFT-IMPORT] First row sample:`, JSON.stringify(rawRows[0], null, 2));
+    }
+
     // Column normalization
     const columnMap = createColumnMap(rawHeaders);
     const requiredCanonicalKeys = [
@@ -1353,13 +1359,19 @@ export async function parseExcelScheduleShiftBased(
       "stop2PlannedArrivalTime",
     ];
 
+    // Log which columns were mapped
+    console.log(`[SHIFT-IMPORT] Column mapping:`, Object.fromEntries(columnMap));
+
     const validation = validateRequiredColumns(columnMap, requiredCanonicalKeys);
     if (!validation.valid) {
       const friendlyNames = validation.missing.map(key => {
         return Object.entries(CANONICAL_COLUMN_MAP).find(([_, v]) => v === key)?.[0] || key;
       });
+      // Log the actual headers we received for better debugging
+      console.error(`[SHIFT-IMPORT] Missing columns. Headers found: ${rawHeaders.join(', ')}`);
       throw new Error(
-        `Missing required columns in Excel file. Could not find columns for: ${friendlyNames.join(", ")}.`
+        `Missing required columns in Excel file. Could not find columns for: ${friendlyNames.join(", ")}. ` +
+        `Headers found: ${rawHeaders.slice(0, 10).join(', ')}${rawHeaders.length > 10 ? '...' : ''}`
       );
     }
 
@@ -1572,7 +1584,20 @@ export async function parseExcelScheduleShiftBased(
       const sortedRows = shiftRows.slice().sort((a, b) => {
         const dateA = a.stop1PlannedStartDate;
         const dateB = b.stop1PlannedStartDate;
-        if (dateA && dateB) return dateA - dateB;
+        if (dateA && dateB) {
+          // Handle both numeric (Excel serial) and string (CSV) dates
+          if (typeof dateA === 'number' && typeof dateB === 'number') {
+            return dateA - dateB;
+          }
+          // For string dates, convert to Date objects for comparison
+          try {
+            const parsedA = excelDateToJSDate(dateA, 0);
+            const parsedB = excelDateToJSDate(dateB, 0);
+            return parsedA.getTime() - parsedB.getTime();
+          } catch {
+            return 0; // Keep original order if parsing fails
+          }
+        }
         return 0;
       });
 
@@ -1616,10 +1641,23 @@ export async function parseExcelScheduleShiftBased(
         const row = sortedRows[i];
         const canonicalStart = canonicalStarts[i];
 
+        // Validate canonicalStart is a valid date
+        if (!canonicalStart || isNaN(canonicalStart.getTime())) {
+          result.warnings.push(`Operator ${operatorId}, day ${i + 1}: Invalid canonical date - skipping`);
+          continue;
+        }
+
         // Service date as string (YYYY-MM-DD format for date type)
         const serviceDateObj = new Date(canonicalStart);
         serviceDateObj.setHours(0, 0, 0, 0);
-        const serviceDateStr = format(serviceDateObj, "yyyy-MM-dd");
+
+        let serviceDateStr: string;
+        try {
+          serviceDateStr = format(serviceDateObj, "yyyy-MM-dd");
+        } catch (err: any) {
+          result.warnings.push(`Operator ${operatorId}, day ${i + 1}: Cannot format date - ${err.message}`);
+          continue;
+        }
 
         const hasActualTiming =
           row.stop1PlannedStartDate && row.stop1PlannedStartTime !== undefined &&
