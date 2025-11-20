@@ -83,14 +83,17 @@ function DraggableOccurrence({ occurrence, children }: { occurrence: ShiftOccurr
 function DroppableCell({
   id,
   children,
-  className
+  className,
+  isDroppable = true,
 }: {
   id: string;
   children: React.ReactNode;
   className?: string;
+  isDroppable?: boolean;
 }) {
   const { isOver, setNodeRef } = useDroppable({
     id,
+    disabled: !isDroppable,
   });
 
   const style = {
@@ -857,6 +860,7 @@ export default function Schedules() {
                           key={day.toISOString()}
                           id={`cell-${dayISO}-${contract.tractorId}`}
                           className="p-1.5 border-r last:border-r-0 align-top"
+                          isDroppable={dayOccurrences.length > 0}
                         >
                           {dayOccurrences.length > 0 ? (
                             <div className="space-y-1">
