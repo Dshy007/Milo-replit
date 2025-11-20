@@ -560,7 +560,20 @@ export async function parseExcelSchedule(
     }
 
     // Normalize all rows to use canonical column names
-    const rows: ExcelRow[] = normalizeRows(rawRows, columnMap);
+    let rows: ExcelRow[] = normalizeRows(rawRows, columnMap);
+
+    // Filter out rows with Trip ID (they are from previous weeks)
+    const originalRowCount = rows.length;
+    rows = rows.filter(row => {
+      // Keep rows that don't have a Trip ID (current week blocks)
+      // Skip rows that have a Trip ID (previous week trips)
+      return !row.tripId || row.tripId === '';
+    });
+    const tripIdFiltered = originalRowCount - rows.length;
+    if (tripIdFiltered > 0) {
+      debug.log(`Filtered out ${tripIdFiltered} rows with Trip ID (previous week data)`);
+      result.warnings.push(`Filtered out ${tripIdFiltered} rows with Trip ID (previous week data)`);
+    }
 
     // ========== PREPROCESSING STAGE: Auto-create missing blocks ==========
     // Group rows by Block ID to extract contract metadata (shared across all days)
