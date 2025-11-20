@@ -1059,9 +1059,8 @@ export async function parseExcelSchedule(
       // Find driver by name (robust matching: handles "Last, First", "First Last", middle names, suffixes)
       // If no driver name, skip assignment (block will remain unassigned)
       if (!row.driverName || !row.driverName.trim()) {
-        result.created++;
-        debug.log(`✓ Block imported without driver assignment (unassigned)`);
-        continue;
+        debug.log(`⊘ Block ${row.blockId} skipped - no driver name (unassigned)`);
+        continue; // Don't count as success or failure - block exists but unassigned
       }
 
       // Normalize both Excel name and DB names to remove suffixes (Jr, Sr, III, etc.)
@@ -2007,9 +2006,10 @@ export async function parseExcelScheduleShiftBased(
 
       // If no driver name, skip assignment (block will remain unassigned)
       if (!row.driverName || !row.driverName.trim()) {
-        result.created++;
         assignedOccurrencesInImport.add(occurrence.id);
-        continue; // Skip driver assignment, occurrence already exists
+        // Don't count as created - occurrence already exists from Phase 1
+        // Don't count as failed - unassigned is valid
+        continue;
       }
 
       // Find driver by name (same matching logic as legacy)
@@ -2162,6 +2162,14 @@ export async function parseExcelScheduleShiftBased(
       result.errors.push(`Database commit failed (transaction rolled back): ${error.message}`);
       result.failed = assignmentsToCommit.length - result.created;
     }
+
+    // Add summary of unassigned occurrences to warnings
+    const unassignedCount = allOccurrences.length - result.created;
+    if (unassignedCount > 0) {
+      result.warnings.push(`${unassignedCount} shift(s) imported without driver assignment (unassigned)`);
+    }
+
+    console.log(`✅ Shift Import Complete: ${allOccurrences.length} occurrences created (${result.created} assigned, ${unassignedCount} unassigned)`);
 
     return result;
   } catch (error: any) {
