@@ -2,6 +2,7 @@ import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format, startOfWeek, addWeeks, subWeeks, eachDayOfInterval, addDays } from "date-fns";
 import { ChevronLeft, ChevronRight, Calendar, User, Upload, X, LayoutGrid, List } from "lucide-react";
+import { DndContext, DragEndEvent, useDraggable, useDroppable } from "@dnd-kit/core";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -39,6 +40,7 @@ type ShiftOccurrence = {
   startTime: string; // HH:mm (canonical)
   blockId: string;
   driverName: string | null;
+  driverId: string | null;
   contractType: string | null;
   status: string;
   tractorId: string | null;
@@ -52,6 +54,55 @@ type CalendarResponse = {
   range: { start: string; end: string };
   occurrences: ShiftOccurrence[];
 };
+
+// Draggable occurrence component
+function DraggableOccurrence({ occurrence, children }: { occurrence: ShiftOccurrence; children: React.ReactNode }) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+    id: occurrence.occurrenceId,
+    data: {
+      occurrence,
+    },
+  });
+
+  const style = transform
+    ? {
+        transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
+        opacity: isDragging ? 0.5 : 1,
+        cursor: isDragging ? 'grabbing' : 'grab',
+      }
+    : { cursor: 'grab' };
+
+  return (
+    <div ref={setNodeRef} style={style} {...listeners} {...attributes}>
+      {children}
+    </div>
+  );
+}
+
+// Droppable cell component
+function DroppableCell({
+  id,
+  children,
+  className
+}: {
+  id: string;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  const { isOver, setNodeRef } = useDroppable({
+    id,
+  });
+
+  const style = {
+    backgroundColor: isOver ? 'rgba(59, 130, 246, 0.1)' : undefined,
+  };
+
+  return (
+    <td ref={setNodeRef} style={style} className={className}>
+      {children}
+    </td>
+  );
+}
 
 export default function Schedules() {
   const { toast } = useToast();
@@ -257,6 +308,114 @@ export default function Schedules() {
     const weekStart = format(weekRange.weekStart, "yyyy-MM-dd");
     const weekEnd = format(addDays(weekRange.weekStart, 6), "yyyy-MM-dd");
     clearAllMutation.mutate({ weekStart, weekEnd });
+  };
+
+  // Assignment update mutation for drag-and-drop
+  const updateAssignmentMutation = useMutation({
+    mutationFn: async ({ occurrenceId, driverId }: { occurrenceId: string; driverId: string | null }) => {
+      const response = await fetch(`/api/shift-occurrences/${occurrenceId}/assignment`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ driverId }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Failed to update assignment');
+      }
+
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
+      toast({
+        title: "Assignment Updated",
+        description: "Driver assignment has been updated successfully",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Update Failed",
+        description: error.message || "Failed to update assignment",
+      });
+    },
+  });
+
+  // Handle drag end event
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+
+    if (!over) return;
+
+    const draggedOccurrence = active.data.current?.occurrence as ShiftOccurrence;
+    const targetCellId = over.id as string;
+
+    // Only allow dragging if the occurrence has a driver assigned
+    if (!draggedOccurrence.driverId) return;
+
+    // Parse target cell ID to extract date and contractId (format: "cell-{date}-{contractId}")
+    if (!targetCellId.startsWith('cell-')) return;
+
+    const parts = targetCellId.split('-');
+    if (parts.length < 3) return;
+
+    const targetDate = parts[1];
+    const targetContractId = parts.slice(2).join('-'); // Handle tractorIds with hyphens
+
+    // Don't allow dropping on the same cell
+    if (draggedOccurrence.serviceDate === targetDate && draggedOccurrence.tractorId === targetContractId) {
+      return;
+    }
+
+    // Find target occurrence in the target cell
+    const targetCell = occurrencesByContract[targetContractId]?.[targetDate] || [];
+
+    if (targetCell.length === 0) {
+      toast({
+        variant: "destructive",
+        title: "Invalid Drop",
+        description: "Cannot assign driver to an empty cell. There must be a shift to assign to.",
+      });
+      return;
+    }
+
+    const targetOccurrence = targetCell[0];
+
+    // If target has a driver, swap assignments
+    if (targetOccurrence.driverId) {
+      // Swap: assign dragged driver to target, and target driver to source
+      const draggedDriverId = draggedOccurrence.driverId;
+      const targetDriverId = targetOccurrence.driverId;
+
+      // Update both assignments
+      updateAssignmentMutation.mutate({
+        occurrenceId: targetOccurrence.occurrenceId,
+        driverId: draggedDriverId,
+      });
+
+      updateAssignmentMutation.mutate({
+        occurrenceId: draggedOccurrence.occurrenceId,
+        driverId: targetDriverId,
+      });
+
+      toast({
+        title: "Drivers Swapped",
+        description: `${draggedOccurrence.driverName} and ${targetOccurrence.driverName} have been swapped`,
+      });
+    } else {
+      // Target is unassigned, just move the driver
+      updateAssignmentMutation.mutate({
+        occurrenceId: targetOccurrence.occurrenceId,
+        driverId: draggedOccurrence.driverId,
+      });
+
+      updateAssignmentMutation.mutate({
+        occurrenceId: draggedOccurrence.occurrenceId,
+        driverId: null,
+      });
+    }
   };
 
   // Calculate week range (Sunday to Saturday)
@@ -619,6 +778,7 @@ export default function Schedules() {
       {viewMode === "calendar" && (
         <Card className="flex-1 overflow-hidden">
           <CardContent className="p-0 h-full overflow-auto">
+          <DndContext onDragEnd={handleDragEnd}>
           <table className="w-full border-collapse text-sm">
             <thead className="sticky top-0 z-10 bg-card border-b shadow-md">
               <tr>
@@ -693,19 +853,21 @@ export default function Schedules() {
                         .filter(occ => occ.startTime === contract.startTime);
 
                       return (
-                        <td
+                        <DroppableCell
                           key={day.toISOString()}
+                          id={`cell-${dayISO}-${contract.tractorId}`}
                           className="p-1.5 border-r last:border-r-0 align-top"
                         >
                           {dayOccurrences.length > 0 ? (
                             <div className="space-y-1">
-                              {dayOccurrences.map((occ) => (
-                                <div key={occ.occurrenceId} className="relative group">
-                                  <button
-                                    onClick={() => handleOccurrenceClick(occ)}
-                                    className="w-full p-1 rounded-md bg-muted/50 text-xs space-y-0.5 text-left hover-elevate active-elevate-2 transition-colors"
-                                    data-testid={`occurrence-${occ.occurrenceId}`}
-                                  >
+                              {dayOccurrences.map((occ) => {
+                                const occurrenceContent = (
+                                  <div className="relative group">
+                                    <button
+                                      onClick={() => handleOccurrenceClick(occ)}
+                                      className="w-full p-1 rounded-md bg-muted/50 text-xs space-y-0.5 text-left hover-elevate active-elevate-2 transition-colors"
+                                      data-testid={`occurrence-${occ.occurrenceId}`}
+                                    >
                                     {/* Block ID (Prominent) */}
                                     <div className="font-mono font-medium text-foreground pr-4">
                                       {occ.blockId}
@@ -768,31 +930,43 @@ export default function Schedules() {
                                         </span>
                                       )}
                                     </div>
-                                  </button>
-                                  
-                                  {/* Delete Button */}
-                                  <button
-                                    onClick={(e) => handleDeleteShift(e, occ.occurrenceId)}
-                                    disabled={deleteMutation.isPending}
-                                    className="absolute top-0.5 right-0.5 p-0.5 rounded hover:bg-destructive/20 opacity-0 group-hover:opacity-100 transition-opacity"
-                                    data-testid={`button-delete-shift-${occ.occurrenceId}`}
-                                    aria-label="Delete shift"
-                                  >
-                                    {deleteMutation.isPending ? (
-                                      <div className="w-3 h-3 border-2 border-destructive border-t-transparent rounded-full animate-spin" />
-                                    ) : (
-                                      <X className="w-3 h-3 text-destructive" />
-                                    )}
-                                  </button>
-                                </div>
-                              ))}
+                                    </button>
+
+                                    {/* Delete Button */}
+                                    <button
+                                      onClick={(e) => handleDeleteShift(e, occ.occurrenceId)}
+                                      disabled={deleteMutation.isPending}
+                                      className="absolute top-0.5 right-0.5 p-0.5 rounded hover:bg-destructive/20 opacity-0 group-hover:opacity-100 transition-opacity"
+                                      data-testid={`button-delete-shift-${occ.occurrenceId}`}
+                                      aria-label="Delete shift"
+                                    >
+                                      {deleteMutation.isPending ? (
+                                        <div className="w-3 h-3 border-2 border-destructive border-t-transparent rounded-full animate-spin" />
+                                      ) : (
+                                        <X className="w-3 h-3 text-destructive" />
+                                      )}
+                                    </button>
+                                  </div>
+                                );
+
+                                // Only make draggable if there's a driver assigned
+                                return occ.driverId ? (
+                                  <DraggableOccurrence key={occ.occurrenceId} occurrence={occ}>
+                                    {occurrenceContent}
+                                  </DraggableOccurrence>
+                                ) : (
+                                  <div key={occ.occurrenceId}>
+                                    {occurrenceContent}
+                                  </div>
+                                );
+                              })}
                             </div>
                           ) : (
                             <div className="text-center text-muted-foreground text-xs py-1">
                               -
                             </div>
                           )}
-                        </td>
+                        </DroppableCell>
                       );
                     })}
                   </tr>
@@ -800,6 +974,7 @@ export default function Schedules() {
               )}
             </tbody>
           </table>
+          </DndContext>
         </CardContent>
       </Card>
       )}

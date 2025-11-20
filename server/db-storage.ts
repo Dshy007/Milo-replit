@@ -332,6 +332,14 @@ export class DbStorage implements IStorage {
       );
   }
 
+  async updateShiftOccurrence(id: string, updates: Partial<ShiftOccurrence>): Promise<ShiftOccurrence | undefined> {
+    const result = await db.update(shiftOccurrences)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(shiftOccurrences.id, id))
+      .returning();
+    return result[0];
+  }
+
   async deleteShiftOccurrence(id: string, tenantId: string): Promise<boolean> {
     // Delete in transaction with tenant scoping for multi-tenant safety
     const result = await db.transaction(async (tx) => {
@@ -372,6 +380,13 @@ export class DbStorage implements IStorage {
   async getBlockAssignmentByBlock(blockId: string): Promise<BlockAssignment | undefined> {
     const result = await db.select().from(blockAssignments)
       .where(eq(blockAssignments.blockId, blockId))
+      .limit(1);
+    return result[0];
+  }
+
+  async getBlockAssignmentByShiftOccurrence(shiftOccurrenceId: string): Promise<BlockAssignment | undefined> {
+    const result = await db.select().from(blockAssignments)
+      .where(eq(blockAssignments.shiftOccurrenceId, shiftOccurrenceId))
       .limit(1);
     return result[0];
   }
