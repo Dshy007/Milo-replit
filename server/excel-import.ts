@@ -17,10 +17,10 @@ interface ExcelRow {
   blockId: string;
   driverName: string;
   operatorId: string;
-  stop1PlannedStartDate?: number;
-  stop1PlannedStartTime?: number;
-  stop2PlannedArrivalDate?: number;
-  stop2PlannedArrivalTime?: number;
+  stop1PlannedStartDate?: number | string;  // Excel serial or text date from CSV
+  stop1PlannedStartTime?: number | string;  // Excel fraction or text time from CSV
+  stop2PlannedArrivalDate?: number | string;
+  stop2PlannedArrivalTime?: number | string;
 }
 
 /**
@@ -330,16 +330,78 @@ function parseOperatorId(operatorId: string): { type: string; tractorId: string 
 }
 
 /**
- * Convert Excel serial number to JavaScript Date
- * Excel stores dates as days since Jan 1, 1900
- * Times are stored as fractions of a day (0.5 = noon)
+ * Convert Excel serial number OR text date string to JavaScript Date
+ * Handles both:
+ * - Excel serial numbers (e.g., 45678.5) - days since Jan 1, 1900
+ * - Text date strings from CSV (e.g., "2025-11-17", "11/17/2025", "Nov 17, 2025")
+ * - Text time strings (e.g., "16:30", "4:30 PM")
  */
-function excelDateToJSDate(excelDate: number, excelTime?: number): Date {
-  // Excel epoch: January 1, 1900 (but Excel incorrectly treats 1900 as a leap year)
-  const excelEpoch = new Date(1899, 11, 30); // Dec 30, 1899 to account for Excel bug
-  const days = excelDate + (excelTime || 0);
-  const milliseconds = days * 24 * 60 * 60 * 1000;
-  return new Date(excelEpoch.getTime() + milliseconds);
+function excelDateToJSDate(excelDate: number | string, excelTime?: number | string): Date {
+  let resultDate: Date;
+
+  // Handle date part
+  if (typeof excelDate === 'number') {
+    // Excel serial number format
+    const excelEpoch = new Date(1899, 11, 30); // Dec 30, 1899 to account for Excel bug
+    const days = excelDate;
+    const milliseconds = days * 24 * 60 * 60 * 1000;
+    resultDate = new Date(excelEpoch.getTime() + milliseconds);
+  } else if (typeof excelDate === 'string') {
+    // Text date string from CSV
+    const dateStr = excelDate.trim();
+
+    // Try parsing various date formats
+    let parsed = new Date(dateStr);
+
+    // If that fails, try MM/DD/YYYY format
+    if (isNaN(parsed.getTime())) {
+      const parts = dateStr.split(/[\/\-]/);
+      if (parts.length === 3) {
+        // Try MM/DD/YYYY
+        parsed = new Date(parseInt(parts[2]), parseInt(parts[0]) - 1, parseInt(parts[1]));
+        if (isNaN(parsed.getTime())) {
+          // Try YYYY-MM-DD
+          parsed = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+        }
+      }
+    }
+
+    resultDate = isNaN(parsed.getTime()) ? new Date() : parsed;
+  } else {
+    resultDate = new Date();
+  }
+
+  // Handle time part
+  if (excelTime !== undefined) {
+    if (typeof excelTime === 'number') {
+      // Excel time as fraction of day (0.5 = noon = 12:00)
+      const totalMinutes = excelTime * 24 * 60;
+      const hours = Math.floor(totalMinutes / 60);
+      const minutes = Math.round(totalMinutes % 60);
+      resultDate.setHours(hours, minutes, 0, 0);
+    } else if (typeof excelTime === 'string') {
+      // Text time string from CSV (e.g., "16:30", "4:30 PM")
+      const timeStr = excelTime.trim();
+
+      // Parse HH:MM or H:MM format
+      const timeMatch = timeStr.match(/^(\d{1,2}):(\d{2})(?:\s*(AM|PM))?$/i);
+      if (timeMatch) {
+        let hours = parseInt(timeMatch[1]);
+        const minutes = parseInt(timeMatch[2]);
+        const ampm = timeMatch[3];
+
+        // Handle AM/PM
+        if (ampm) {
+          if (ampm.toUpperCase() === 'PM' && hours !== 12) hours += 12;
+          if (ampm.toUpperCase() === 'AM' && hours === 12) hours = 0;
+        }
+
+        resultDate.setHours(hours, minutes, 0, 0);
+      }
+    }
+  }
+
+  return resultDate;
 }
 
 /**
