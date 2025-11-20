@@ -375,12 +375,8 @@ export default function Schedules() {
     // Find target occurrence in the target cell
     const targetCell = occurrencesByContract[targetContractId]?.[targetDate] || [];
 
+    // Silently ignore drops on empty cells (they should be disabled anyway)
     if (targetCell.length === 0) {
-      toast({
-        variant: "destructive",
-        title: "Invalid Drop",
-        description: "Cannot assign driver to an empty cell. There must be a shift to assign to.",
-      });
       return;
     }
 
