@@ -32,15 +32,19 @@ const CANONICAL_COLUMN_MAP: Record<string, string> = {
   "driver name": "driverName",
   "operator id": "operatorId",
 
-  // Stop 1 timing - Departure is when driver LEAVES depot (shift start)
-  // Only map Departure, not Arrival (arrival is when they get to depot before shift)
-  "stop 1 planned departure date": "stop1PlannedStartDate",
-  "stop 1 planned departure time": "stop1PlannedStartTime",
+  // Stop 1 timing - map both Arrival and Departure to separate fields
+  // Processing logic will prefer Departure (when driver leaves) for shift start
+  "stop 1 planned arrival date": "stop1ArrivalDate",
+  "stop 1 planned arrival time": "stop1ArrivalTime",
+  "stop 1 planned departure date": "stop1DepartureDate",
+  "stop 1 planned departure time": "stop1DepartureTime",
 
-  // Stop 2 timing - Arrival is when driver RETURNS to depot (shift end)
-  // Only map Arrival, not Departure (departure is when they leave again - irrelevant)
-  "stop 2 planned arrival date": "stop2PlannedArrivalDate",
-  "stop 2 planned arrival time": "stop2PlannedArrivalTime",
+  // Stop 2 timing - map both Arrival and Departure to separate fields
+  // Processing logic will prefer Arrival (when driver returns) for shift end
+  "stop 2 planned arrival date": "stop2ArrivalDate",
+  "stop 2 planned arrival time": "stop2ArrivalTime",
+  "stop 2 planned departure date": "stop2DepartureDate",
+  "stop 2 planned departure time": "stop2DepartureTime",
 };
 
 /**
@@ -72,17 +76,39 @@ function createColumnMap(rawHeaders: string[]): Map<string, string> {
  * Normalize Excel rows to use canonical column names
  * This allows downstream logic to work with consistent property names
  * regardless of spacing variations or Arrival/Departure column naming
+ *
+ * For timing fields, prefers:
+ * - Stop 1: Departure (when driver leaves depot) for shift START
+ * - Stop 2: Arrival (when driver returns to depot) for shift END
+ * Falls back to the other if preferred isn't available
  */
 function normalizeRows(rawRows: any[], columnMap: Map<string, string>): ExcelRow[] {
   return rawRows.map(rawRow => {
-    const normalized: any = {};
+    const intermediate: any = {};
 
+    // First pass: map all raw columns to intermediate canonical keys
     for (const [rawHeader, value] of Object.entries(rawRow)) {
       const canonicalKey = columnMap.get(rawHeader);
       if (canonicalKey) {
-        normalized[canonicalKey] = value;
+        intermediate[canonicalKey] = value;
       }
     }
+
+    // Second pass: merge Arrival/Departure into final canonical fields
+    // Prefer Departure for Stop 1 (shift start), Arrival for Stop 2 (shift end)
+    const normalized: any = {
+      blockId: intermediate.blockId,
+      driverName: intermediate.driverName,
+      operatorId: intermediate.operatorId,
+
+      // Stop 1: Prefer Departure (when driver leaves), fall back to Arrival
+      stop1PlannedStartDate: intermediate.stop1DepartureDate ?? intermediate.stop1ArrivalDate,
+      stop1PlannedStartTime: intermediate.stop1DepartureTime ?? intermediate.stop1ArrivalTime,
+
+      // Stop 2: Prefer Arrival (when driver returns), fall back to Departure
+      stop2PlannedArrivalDate: intermediate.stop2ArrivalDate ?? intermediate.stop2DepartureDate,
+      stop2PlannedArrivalTime: intermediate.stop2ArrivalTime ?? intermediate.stop2DepartureTime,
+    };
 
     return normalized as ExcelRow;
   });
@@ -90,19 +116,30 @@ function normalizeRows(rawRows: any[], columnMap: Map<string, string>): ExcelRow
 
 /**
  * Validate that required canonical columns can be resolved from Excel headers
+ * For timing fields, accepts either Arrival OR Departure columns
  */
 function validateRequiredColumns(
-  columnMap: Map<string, string>,
-  requiredCanonicalKeys: string[]
+  columnMap: Map<string, string>
 ): { valid: boolean; missing: string[] } {
   const missing: string[] = [];
   const canonicalValues = new Set(columnMap.values());
 
-  for (const required of requiredCanonicalKeys) {
-    if (!canonicalValues.has(required)) {
-      missing.push(required);
-    }
-  }
+  // Basic required fields
+  if (!canonicalValues.has("blockId")) missing.push("blockId");
+  if (!canonicalValues.has("driverName")) missing.push("driverName");
+  if (!canonicalValues.has("operatorId")) missing.push("operatorId");
+
+  // Stop 1 timing: need either Arrival OR Departure
+  const hasStop1Date = canonicalValues.has("stop1DepartureDate") || canonicalValues.has("stop1ArrivalDate");
+  const hasStop1Time = canonicalValues.has("stop1DepartureTime") || canonicalValues.has("stop1ArrivalTime");
+  if (!hasStop1Date) missing.push("stop1 date (Arrival or Departure)");
+  if (!hasStop1Time) missing.push("stop1 time (Arrival or Departure)");
+
+  // Stop 2 timing: need either Arrival OR Departure
+  const hasStop2Date = canonicalValues.has("stop2ArrivalDate") || canonicalValues.has("stop2DepartureDate");
+  const hasStop2Time = canonicalValues.has("stop2ArrivalTime") || canonicalValues.has("stop2DepartureTime");
+  if (!hasStop2Date) missing.push("stop2 date (Arrival or Departure)");
+  if (!hasStop2Time) missing.push("stop2 time (Arrival or Departure)");
 
   return {
     valid: missing.length === 0,
@@ -509,26 +546,13 @@ export async function parseExcelSchedule(
     // ========== COLUMN NORMALIZATION ==========
     const columnMap = createColumnMap(rawHeaders);
 
-    // Validate required columns can be resolved
-    const requiredCanonicalKeys = [
-      "blockId",
-      "driverName",
-      "operatorId",
-      "stop1PlannedStartDate",
-      "stop1PlannedStartTime",
-      "stop2PlannedArrivalDate",
-      "stop2PlannedArrivalTime",
-    ];
-
-    const validation = validateRequiredColumns(columnMap, requiredCanonicalKeys);
+    // Validate required columns can be resolved (accepts Arrival OR Departure for timing)
+    const validation = validateRequiredColumns(columnMap);
     if (!validation.valid) {
-      const friendlyNames = validation.missing.map(key => {
-        return Object.entries(CANONICAL_COLUMN_MAP).find(([_, v]) => v === key)?.[0] || key;
-      });
       throw new Error(
-        `Missing required columns in Excel file. Could not find columns for: ${friendlyNames.join(", ")}. ` +
+        `Missing required columns in Excel file. Could not find columns for: ${validation.missing.join(", ")}. ` +
         `Please ensure your Excel file has columns like "Block ID", "Driver Name", "Operator ID", ` +
-        `"Stop 1 Planned Arrival Date/Time", and "Stop 2 Planned Arrival Date/Time".`
+        `"Stop 1 Planned Arrival/Departure Date/Time", and "Stop 2 Planned Arrival/Departure Date/Time".`
       );
     }
 
@@ -1347,28 +1371,17 @@ export async function parseExcelScheduleShiftBased(
 
     // Column normalization
     const columnMap = createColumnMap(rawHeaders);
-    const requiredCanonicalKeys = [
-      "blockId", // Still needed for reference/debugging
-      "driverName",
-      "operatorId", // PRIMARY KEY for shift templates
-      "stop1PlannedStartDate",
-      "stop1PlannedStartTime",
-      "stop2PlannedArrivalDate",
-      "stop2PlannedArrivalTime",
-    ];
 
     // Log which columns were mapped
     console.log(`[SHIFT-IMPORT] Column mapping:`, Object.fromEntries(columnMap));
 
-    const validation = validateRequiredColumns(columnMap, requiredCanonicalKeys);
+    // Validate required columns (accepts Arrival OR Departure for timing)
+    const validation = validateRequiredColumns(columnMap);
     if (!validation.valid) {
-      const friendlyNames = validation.missing.map(key => {
-        return Object.entries(CANONICAL_COLUMN_MAP).find(([_, v]) => v === key)?.[0] || key;
-      });
       // Log the actual headers we received for better debugging
       console.error(`[SHIFT-IMPORT] Missing columns. Headers found: ${rawHeaders.join(', ')}`);
       throw new Error(
-        `Missing required columns in Excel file. Could not find columns for: ${friendlyNames.join(", ")}. ` +
+        `Missing required columns in Excel file. Could not find columns for: ${validation.missing.join(", ")}. ` +
         `Headers found: ${rawHeaders.slice(0, 10).join(', ')}${rawHeaders.length > 10 ? '...' : ''}`
       );
     }
