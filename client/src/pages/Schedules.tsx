@@ -635,7 +635,9 @@ export default function Schedules() {
                     {/* Day Cells */}
                     {weekRange.weekDays.map((day) => {
                       const dayISO = format(day, "yyyy-MM-dd");
-                      const dayOccurrences = occurrencesByContract[contract.tractorId]?.[dayISO] || [];
+                      // Filter occurrences by both tractorId AND startTime to match the correct contract
+                      const dayOccurrences = (occurrencesByContract[contract.tractorId]?.[dayISO] || [])
+                        .filter(occ => occ.startTime === contract.startTime);
 
                       return (
                         <td
