@@ -58,7 +58,6 @@ export default function Schedules() {
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [shiftToDelete, setShiftToDelete] = useState<string | null>(null);
-  const [importStartDate, setImportStartDate] = useState<string>("2025-11-03"); // Sunday, Nov 3, 2024
   const [sortBy, setSortBy] = useState<"time" | "type">("time");
   const [filterType, setFilterType] = useState<"all" | "solo1" | "solo2" | "team">("all");
   const [showClearAllDialog, setShowClearAllDialog] = useState(false);
@@ -136,12 +135,12 @@ export default function Schedules() {
   };
 
   const importMutation = useMutation({
-    mutationFn: async ({ file, startDate }: { file: File; startDate: string }) => {
+    mutationFn: async ({ file }: { file: File }) => {
       const formData = new FormData();
       formData.append("file", file);
       formData.append("importMode", "shift"); // Use shift-based import (Operator ID mapping)
-      
-      const url = `/api/schedules/excel-import?startDate=${encodeURIComponent(startDate)}`;
+
+      const url = `/api/schedules/excel-import`;
       const response = await fetch(url, {
         method: "POST",
         body: formData,
@@ -204,7 +203,7 @@ export default function Schedules() {
       return;
     }
 
-    importMutation.mutate({ file: importFile, startDate: importStartDate });
+    importMutation.mutate({ file: importFile });
   };
 
   const clearAllMutation = useMutation({
@@ -427,32 +426,17 @@ export default function Schedules() {
                   </AlertDescription>
                 </Alert>
 
-                <div className="space-y-3">
-                  <div>
-                    <label className="text-sm font-medium mb-1.5 block">
-                      Import shifts starting from:
-                    </label>
-                    <input
-                      type="date"
-                      value={importStartDate}
-                      onChange={(e) => setImportStartDate(e.target.value)}
-                      className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm"
-                      data-testid="input-start-date"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-sm font-medium mb-1.5 block">
-                      Select Excel file:
-                    </label>
-                    <input
-                      type="file"
-                      accept=".xlsx,.xls,.csv"
-                      onChange={handleFileSelect}
-                      className="w-full text-sm"
-                      data-testid="input-import-file"
-                    />
-                  </div>
+                <div>
+                  <label className="text-sm font-medium mb-1.5 block">
+                    Select Excel file:
+                  </label>
+                  <input
+                    type="file"
+                    accept=".xlsx,.xls,.csv"
+                    onChange={handleFileSelect}
+                    className="w-full text-sm"
+                    data-testid="input-import-file"
+                  />
                 </div>
 
                 {importFile && (
