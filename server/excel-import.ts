@@ -32,17 +32,15 @@ const CANONICAL_COLUMN_MAP: Record<string, string> = {
   "driver name": "driverName",
   "operator id": "operatorId",
 
-  // Stop 1 timing - Departure is the actual start time
-  "stop 1 planned arrival date": "stop1PlannedStartDate",
+  // Stop 1 timing - Departure is when driver LEAVES depot (shift start)
+  // Only map Departure, not Arrival (arrival is when they get to depot before shift)
   "stop 1 planned departure date": "stop1PlannedStartDate",
-  "stop 1 planned arrival time": "stop1PlannedStartTime",
   "stop 1 planned departure time": "stop1PlannedStartTime",
 
-  // Stop 2 timing - Arrival is the actual end time
+  // Stop 2 timing - Arrival is when driver RETURNS to depot (shift end)
+  // Only map Arrival, not Departure (departure is when they leave again - irrelevant)
   "stop 2 planned arrival date": "stop2PlannedArrivalDate",
   "stop 2 planned arrival time": "stop2PlannedArrivalTime",
-  "stop 2 planned departure date": "stop2PlannedArrivalDate",
-  "stop 2 planned departure time": "stop2PlannedArrivalTime",
 };
 
 /**
