@@ -1,5 +1,6 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
+import { randomUUID } from "crypto";
 import { dbStorage } from "./db-storage";
 import { db } from "./db";
 import { 
@@ -1276,6 +1277,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           startTime, // HH:mm from template canonical time
           blockId,
           driverName: driver ? `${driver.firstName} ${driver.lastName}` : null,
+          driverId: driver?.id || null,
           contractType: contract?.type || null,
           status: occ.status,
           tractorId: occ.tractorId || null,
@@ -2041,11 +2043,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const tenantId = req.session.tenantId!;
       const { weekStart, weekEnd } = req.body;
-      
+
       if (!weekStart || !weekEnd) {
         return res.status(400).json({ message: "Missing required fields: weekStart, weekEnd" });
       }
-      
+
       // Get all shift occurrences for the week
       const occurrences = await db
         .select()
@@ -2055,7 +2057,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           gte(shiftOccurrences.serviceDate, weekStart),
           lte(shiftOccurrences.serviceDate, weekEnd)
         ));
-      
+
       // Delete all occurrences (skip in_progress or completed)
       let deletedCount = 0;
       for (const occ of occurrences) {
@@ -2066,8 +2068,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         }
       }
-      
-      res.json({ 
+
+      res.json({
         message: `Deleted ${deletedCount} shift occurrences`,
         count: deletedCount,
         total: occurrences.length
@@ -2075,6 +2077,67 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error("Error clearing shifts:", error);
       res.status(500).json({ message: "Failed to clear shifts", error: error.message });
+    }
+  });
+
+  // PATCH /api/shift-occurrences/:id/assignment - Update driver assignment for a shift occurrence
+  app.patch("/api/shift-occurrences/:id/assignment", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const occurrenceId = req.params.id;
+      const { driverId } = req.body; // driverId can be null to unassign
+
+      // Verify the shift occurrence exists and belongs to this tenant
+      const occurrence = await dbStorage.getShiftOccurrence(occurrenceId, tenantId);
+      if (!occurrence) {
+        return res.status(404).json({ message: "Shift occurrence not found" });
+      }
+
+      // Get existing assignment for this shift occurrence
+      const existingAssignment = await dbStorage.getBlockAssignmentByShiftOccurrence(occurrenceId);
+
+      // If driverId is null or empty, remove the assignment
+      if (!driverId) {
+        if (existingAssignment) {
+          await dbStorage.deleteBlockAssignment(existingAssignment.id);
+          // Update occurrence status to unassigned
+          await dbStorage.updateShiftOccurrence(occurrenceId, { status: "unassigned" });
+        }
+        return res.json({ message: "Driver unassigned successfully" });
+      }
+
+      // Verify the driver exists and belongs to this tenant
+      const driver = await dbStorage.getDriver(driverId);
+      if (!driver || driver.tenantId !== tenantId) {
+        return res.status(400).json({ message: "Invalid driver ID" });
+      }
+
+      // Update or create the assignment
+      if (existingAssignment) {
+        // Update existing assignment
+        await dbStorage.updateBlockAssignment(existingAssignment.id, {
+          driverId,
+          assignedAt: new Date(),
+        });
+      } else {
+        // Create new assignment
+        await dbStorage.createBlockAssignment({
+          id: randomUUID(),
+          tenantId,
+          shiftOccurrenceId: occurrenceId,
+          driverId,
+          assignedAt: new Date(),
+          isActive: true,
+        });
+      }
+
+      // Update occurrence status to assigned
+      await dbStorage.updateShiftOccurrence(occurrenceId, { status: "assigned" });
+
+      res.json({ message: "Driver assigned successfully" });
+    } catch (error: any) {
+      console.error("Error updating assignment:", error);
+      res.status(500).json({ message: "Failed to update assignment", error: error.message });
     }
   });
 
