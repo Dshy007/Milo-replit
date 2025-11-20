@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { format, parseISO } from "date-fns";
-import { Search, Download, CheckSquare } from "lucide-react";
+import { Search, Download, CheckSquare, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -56,7 +56,20 @@ export function ScheduleListView({
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedDomicile, setSelectedDomicile] = useState<string>("all");
   const [showUnassignedOnly, setShowUnassignedOnly] = useState(false);
-  const [sortBy, setSortBy] = useState<"startDate" | "blockId" | "driver">("startDate");
+  const [sortColumn, setSortColumn] = useState<string | null>(null);
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+
+  // Handle column header click for sorting
+  const handleSort = (column: string) => {
+    if (sortColumn === column) {
+      // Toggle direction if same column
+      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
+    } else {
+      // New column, default to ascending
+      setSortColumn(column);
+      setSortDirection("asc");
+    }
+  };
 
   // Extract unique domiciles from occurrences
   const domiciles = useMemo(() => {
@@ -96,14 +109,51 @@ export function ScheduleListView({
       filtered = filtered.filter(occ => !occ.driverName);
     }
 
-    // Sort - use parent sortBy if it's "time" or "type", otherwise use local sortBy
-    filtered.sort((a, b) => {
-      if (parentSortBy === "time" || sortBy === "startDate") {
+    // Sort by column if specified
+    if (sortColumn) {
+      filtered.sort((a, b) => {
+        let compareResult = 0;
+
+        switch (sortColumn) {
+          case "blockId":
+            compareResult = a.blockId.localeCompare(b.blockId);
+            break;
+          case "starts":
+            const dateA = `${a.serviceDate} ${a.startTime}`;
+            const dateB = `${b.serviceDate} ${b.startTime}`;
+            compareResult = dateA.localeCompare(dateB);
+            break;
+          case "type":
+            const typeA = a.contractType || "zzz";
+            const typeB = b.contractType || "zzz";
+            compareResult = typeA.localeCompare(typeB);
+            break;
+          case "driver":
+            const nameA = a.driverName || "zzz"; // Unassigned at end
+            const nameB = b.driverName || "zzz";
+            compareResult = nameA.localeCompare(nameB);
+            break;
+          case "tractor":
+            const tractorA = a.tractorId || "zzz";
+            const tractorB = b.tractorId || "zzz";
+            compareResult = tractorA.localeCompare(tractorB);
+            break;
+          default:
+            compareResult = 0;
+        }
+
+        return sortDirection === "asc" ? compareResult : -compareResult;
+      });
+    } else if (parentSortBy === "time") {
+      // Default sorting by time from parent
+      filtered.sort((a, b) => {
         const dateA = `${a.serviceDate} ${a.startTime}`;
         const dateB = `${b.serviceDate} ${b.startTime}`;
         return dateA.localeCompare(dateB);
-      } else if (parentSortBy === "type") {
-        // Sort by type first, then by date
+      });
+    } else if (parentSortBy === "type") {
+      // Sort by type from parent
+      filtered.sort((a, b) => {
         const typeA = a.contractType || "zzz";
         const typeB = b.contractType || "zzz";
         if (typeA !== typeB) {
@@ -112,18 +162,11 @@ export function ScheduleListView({
         const dateA = `${a.serviceDate} ${a.startTime}`;
         const dateB = `${b.serviceDate} ${b.startTime}`;
         return dateA.localeCompare(dateB);
-      } else if (sortBy === "blockId") {
-        return a.blockId.localeCompare(b.blockId);
-      } else {
-        // Sort by driver name
-        const nameA = a.driverName || "zzz"; // Unassigned at end
-        const nameB = b.driverName || "zzz";
-        return nameA.localeCompare(nameB);
-      }
-    });
+      });
+    }
 
     return filtered;
-  }, [occurrences, searchQuery, selectedDomicile, parentFilterType, showUnassignedOnly, sortBy, parentSortBy]);
+  }, [occurrences, searchQuery, selectedDomicile, parentFilterType, showUnassignedOnly, sortColumn, sortDirection, parentSortBy]);
 
   const getTypeColor = (type: string | null) => {
     if (!type) return "bg-gray-500/20 text-gray-700";
@@ -137,6 +180,15 @@ export function ScheduleListView({
   const formatDuration = (bumpMinutes: number) => {
     // This is a placeholder - we'd need actual duration from the block data
     return "14h"; // Default duration
+  };
+
+  const getSortIcon = (column: string) => {
+    if (sortColumn !== column) {
+      return <ArrowUpDown className="w-4 h-4 ml-1 inline-block opacity-40" />;
+    }
+    return sortDirection === "asc"
+      ? <ArrowUp className="w-4 h-4 ml-1 inline-block" />
+      : <ArrowDown className="w-4 h-4 ml-1 inline-block" />;
   };
 
   const handleExport = () => {
@@ -230,7 +282,7 @@ export function ScheduleListView({
         </div>
       </div>
 
-      {/* Results Count and Sort */}
+      {/* Results Count */}
       <div className="flex items-center justify-between px-4">
         <div className="text-sm text-muted-foreground">
           {filteredOccurrences.length} of {occurrences.length} results
@@ -241,7 +293,6 @@ export function ScheduleListView({
               onClick={() => {
                 setSearchQuery("");
                 setSelectedDomicile("all");
-                setSelectedWorkType("all");
                 setShowUnassignedOnly(false);
               }}
               className="ml-2"
@@ -250,19 +301,6 @@ export function ScheduleListView({
             </Button>
           )}
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-muted-foreground">Sort by:</span>
-          <Select value={sortBy} onValueChange={(val) => setSortBy(val as any)}>
-            <SelectTrigger className="w-[140px]" data-testid="sort-by">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="startDate">Start date</SelectItem>
-              <SelectItem value="blockId">Block ID</SelectItem>
-              <SelectItem value="driver">Driver</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
       </div>
 
       {/* List Table */}
@@ -270,15 +308,55 @@ export function ScheduleListView({
         <Table>
           <TableHeader className="sticky top-0 bg-card z-10">
             <TableRow>
-              <TableHead className="w-[140px]">Block ID</TableHead>
-              <TableHead>Starts</TableHead>
+              <TableHead className="w-[140px]">
+                <button
+                  className="flex items-center hover:text-foreground transition-colors"
+                  onClick={() => handleSort("blockId")}
+                >
+                  Block ID
+                  {getSortIcon("blockId")}
+                </button>
+              </TableHead>
+              <TableHead>
+                <button
+                  className="flex items-center hover:text-foreground transition-colors"
+                  onClick={() => handleSort("starts")}
+                >
+                  Starts
+                  {getSortIcon("starts")}
+                </button>
+              </TableHead>
               <TableHead>Destination</TableHead>
-              <TableHead className="text-center">Type</TableHead>
+              <TableHead className="text-center">
+                <button
+                  className="flex items-center justify-center hover:text-foreground transition-colors mx-auto"
+                  onClick={() => handleSort("type")}
+                >
+                  Type
+                  {getSortIcon("type")}
+                </button>
+              </TableHead>
               <TableHead className="text-center">Duration</TableHead>
               <TableHead>Trailer</TableHead>
               {showRate && <TableHead>Rate</TableHead>}
-              <TableHead className="w-[200px]">Driver</TableHead>
-              <TableHead className="w-[100px]">Tractor</TableHead>
+              <TableHead className="w-[200px]">
+                <button
+                  className="flex items-center hover:text-foreground transition-colors"
+                  onClick={() => handleSort("driver")}
+                >
+                  Driver
+                  {getSortIcon("driver")}
+                </button>
+              </TableHead>
+              <TableHead className="w-[100px]">
+                <button
+                  className="flex items-center hover:text-foreground transition-colors"
+                  onClick={() => handleSort("tractor")}
+                >
+                  Tractor
+                  {getSortIcon("tractor")}
+                </button>
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
