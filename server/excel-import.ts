@@ -560,7 +560,55 @@ export async function parseExcelSchedule(
     }
 
     // Normalize all rows to use canonical column names
-    const rows: ExcelRow[] = normalizeRows(rawRows, columnMap);
+    let rows: ExcelRow[] = normalizeRows(rawRows, columnMap);
+
+    // Filter to keep only the most recent week's data
+    // Find the latest date in the file and keep only rows from that week (Sunday-Saturday)
+    const originalRowCount = rows.length;
+    if (rows.length > 0) {
+      // Find latest date in all rows
+      let latestDate: Date | null = null;
+      for (const row of rows) {
+        if (row.stop1PlannedStartDate) {
+          try {
+            const rowDate = excelDateToJSDate(row.stop1PlannedStartDate, 0);
+            if (!latestDate || rowDate > latestDate) {
+              latestDate = rowDate;
+            }
+          } catch {
+            // Skip invalid dates
+          }
+        }
+      }
+
+      if (latestDate) {
+        // Calculate the Sunday of the week containing the latest date
+        const weekStartSunday = new Date(latestDate);
+        weekStartSunday.setDate(latestDate.getDate() - latestDate.getDay());
+        weekStartSunday.setHours(0, 0, 0, 0);
+
+        debug.log(`Latest date found: ${format(latestDate, "MMM d, yyyy")}`);
+        debug.log(`Filtering to week starting: ${format(weekStartSunday, "MMM d, yyyy")} (Sunday)`);
+
+        // Keep only rows from this Sunday forward (the most recent week)
+        rows = rows.filter(row => {
+          if (!row.stop1PlannedStartDate) return false;
+          try {
+            const rowDate = excelDateToJSDate(row.stop1PlannedStartDate, 0);
+            rowDate.setHours(0, 0, 0, 0);
+            return rowDate >= weekStartSunday;
+          } catch {
+            return false;
+          }
+        });
+
+        const filtered = originalRowCount - rows.length;
+        if (filtered > 0) {
+          debug.log(`Filtered out ${filtered} rows from previous weeks`);
+          result.warnings.push(`Filtered out ${filtered} rows from previous weeks (keeping only week of ${format(weekStartSunday, "MMM d, yyyy")})`);
+        }
+      }
+    }
 
     // ========== PREPROCESSING STAGE: Auto-create missing blocks ==========
     // Group rows by Block ID to extract contract metadata (shared across all days)
