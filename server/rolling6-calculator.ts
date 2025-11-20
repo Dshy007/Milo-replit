@@ -124,7 +124,8 @@ export async function calculateDutyHours(
     }
   }
 
-  return totalHours;
+  // Round to 4 decimal places to eliminate floating-point precision errors
+  return Number(totalHours.toFixed(4));
 }
 
 /**
@@ -176,10 +177,10 @@ export async function validateRolling6Compliance(
         validationStatus: "violation",
         messages: [
           `Rolling-6 VIOLATION: Driver ${driver.firstName} ${driver.lastName} would exceed 14-hour limit for Solo1.`,
-          `Current duty hours in past 24h: ${totalHoursIn24h}h`,
-          `Proposed block duration: ${proposedDuration}h`,
-          `Total would be: ${newTotal}h (limit: ${limit}h)`,
-          `Violation amount: ${newTotal - limit}h over limit`,
+          `Current duty hours in past 24h: ${Number(totalHoursIn24h.toFixed(2))}h`,
+          `Proposed block duration: ${Number(proposedDuration.toFixed(2))}h`,
+          `Total would be: ${Number(newTotal.toFixed(2))}h (limit: ${limit}h)`,
+          `Violation amount: ${Number((newTotal - limit).toFixed(2))}h over limit`,
         ],
         metrics: {
           totalHoursIn24h,
@@ -197,10 +198,10 @@ export async function validateRolling6Compliance(
         validationStatus: "warning",
         messages: [
           `WARNING: Driver ${driver.firstName} ${driver.lastName} approaching 14-hour limit for Solo1.`,
-          `Current duty hours in past 24h: ${totalHoursIn24h}h`,
-          `Proposed block duration: ${proposedDuration}h`,
-          `Total would be: ${newTotal}h (limit: ${limit}h)`,
-          `Remaining capacity: ${limit - newTotal}h`,
+          `Current duty hours in past 24h: ${Number(totalHoursIn24h.toFixed(2))}h`,
+          `Proposed block duration: ${Number(proposedDuration.toFixed(2))}h`,
+          `Total would be: ${Number(newTotal.toFixed(2))}h (limit: ${limit}h)`,
+          `Remaining capacity: ${Number((limit - newTotal).toFixed(2))}h`,
         ],
         metrics: {
           totalHoursIn24h,
@@ -217,9 +218,9 @@ export async function validateRolling6Compliance(
       validationStatus: "valid",
       messages: [
         `✓ Rolling-6 compliant for Solo1`,
-        `Duty hours in past 24h: ${totalHoursIn24h}h`,
-        `Proposed block: ${proposedDuration}h`,
-        `Total: ${newTotal}h / ${limit}h`,
+        `Duty hours in past 24h: ${Number(totalHoursIn24h.toFixed(2))}h`,
+        `Proposed block: ${Number(proposedDuration.toFixed(2))}h`,
+        `Total: ${Number(newTotal.toFixed(2))}h / ${limit}h`,
       ],
       metrics: {
         totalHoursIn24h,
@@ -249,10 +250,10 @@ export async function validateRolling6Compliance(
         validationStatus: "violation",
         messages: [
           `Rolling-6 VIOLATION: Driver ${driver.firstName} ${driver.lastName} would exceed 38-hour limit for Solo2.`,
-          `Current duty hours in past 48h: ${totalHoursIn48h}h`,
-          `Proposed block duration: ${proposedDuration}h`,
-          `Total would be: ${newTotal}h (limit: ${limit}h)`,
-          `Violation amount: ${newTotal - limit}h over limit`,
+          `Current duty hours in past 48h: ${Number(totalHoursIn48h.toFixed(2))}h`,
+          `Proposed block duration: ${Number(proposedDuration.toFixed(2))}h`,
+          `Total would be: ${Number(newTotal.toFixed(2))}h (limit: ${limit}h)`,
+          `Violation amount: ${Number((newTotal - limit).toFixed(2))}h over limit`,
         ],
         metrics: {
           totalHoursIn48h,
@@ -270,10 +271,10 @@ export async function validateRolling6Compliance(
         validationStatus: "warning",
         messages: [
           `WARNING: Driver ${driver.firstName} ${driver.lastName} approaching 38-hour limit for Solo2.`,
-          `Current duty hours in past 48h: ${totalHoursIn48h}h`,
-          `Proposed block duration: ${proposedDuration}h`,
-          `Total would be: ${newTotal}h (limit: ${limit}h)`,
-          `Remaining capacity: ${limit - newTotal}h`,
+          `Current duty hours in past 48h: ${Number(totalHoursIn48h.toFixed(2))}h`,
+          `Proposed block duration: ${Number(proposedDuration.toFixed(2))}h`,
+          `Total would be: ${Number(newTotal.toFixed(2))}h (limit: ${limit}h)`,
+          `Remaining capacity: ${Number((limit - newTotal).toFixed(2))}h`,
         ],
         metrics: {
           totalHoursIn48h,
@@ -290,9 +291,9 @@ export async function validateRolling6Compliance(
       validationStatus: "valid",
       messages: [
         `✓ Rolling-6 compliant for Solo2`,
-        `Duty hours in past 48h: ${totalHoursIn48h}h`,
-        `Proposed block: ${proposedDuration}h`,
-        `Total: ${newTotal}h / ${limit}h`,
+        `Duty hours in past 48h: ${Number(totalHoursIn48h.toFixed(2))}h`,
+        `Proposed block: ${Number(proposedDuration.toFixed(2))}h`,
+        `Total: ${Number(newTotal.toFixed(2))}h / ${limit}h`,
       ],
       metrics: {
         totalHoursIn48h,
