@@ -1403,6 +1403,57 @@ export async function parseExcelScheduleShiftBased(
       console.log(`[SHIFT-IMPORT] Filtered out ${tripIdFiltered} rows with Trip ID (previous week data)`);
     }
 
+    // Filter to only include the target week (Sunday-Saturday)
+    // Find earliest date and calculate its Sunday, then filter to 7 days
+    if (rows.length > 0) {
+      // Find earliest date in remaining rows
+      let earliestDate: Date | null = null;
+      for (const row of rows) {
+        if (row.stop1PlannedStartDate) {
+          try {
+            const rowDate = excelDateToJSDate(row.stop1PlannedStartDate, 0);
+            if (!earliestDate || rowDate < earliestDate) {
+              earliestDate = rowDate;
+            }
+          } catch {
+            // Skip invalid dates
+          }
+        }
+      }
+
+      if (earliestDate) {
+        // Calculate the Sunday of the week containing the earliest date
+        // getDay() returns 0 for Sunday, 1 for Monday, etc.
+        const weekStartSunday = new Date(earliestDate);
+        weekStartSunday.setDate(earliestDate.getDate() - earliestDate.getDay());
+        weekStartSunday.setHours(0, 0, 0, 0);
+
+        // Saturday is 6 days after Sunday
+        const weekEndSaturday = new Date(weekStartSunday);
+        weekEndSaturday.setDate(weekStartSunday.getDate() + 6);
+        weekEndSaturday.setHours(23, 59, 59, 999);
+
+        console.log(`[SHIFT-IMPORT] Target week: ${format(weekStartSunday, "MMM d")} - ${format(weekEndSaturday, "MMM d, yyyy")}`);
+
+        // Filter to only include rows within this week
+        const beforeWeekFilter = rows.length;
+        rows = rows.filter(row => {
+          if (!row.stop1PlannedStartDate) return false;
+          try {
+            const rowDate = excelDateToJSDate(row.stop1PlannedStartDate, 0);
+            return rowDate >= weekStartSunday && rowDate <= weekEndSaturday;
+          } catch {
+            return false;
+          }
+        });
+
+        const weekFiltered = beforeWeekFilter - rows.length;
+        if (weekFiltered > 0) {
+          console.log(`[SHIFT-IMPORT] Filtered out ${weekFiltered} rows outside target week`);
+        }
+      }
+    }
+
     // Apply start date filter if provided
     if (startDateFilter) {
       const filterDateOnly = new Date(startDateFilter);
