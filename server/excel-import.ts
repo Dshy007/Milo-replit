@@ -1458,50 +1458,55 @@ export async function parseExcelScheduleShiftBased(
       console.log(`[SHIFT-IMPORT] Filtered out ${tripIdFiltered} rows with Trip ID (previous week data)`);
     }
 
-    // Filter to only include the LATEST week (Sunday-Saturday)
-    // Find latest date and calculate its Sunday, keep only that week
+    // Filter to keep only the week with the MOST data
+    // Group rows by week and keep the week with the most entries
     if (rows.length > 0) {
-      // Find LATEST date in remaining rows (not earliest - we want the most recent week)
-      let latestDate: Date | null = null;
+      // Group rows by their week (Sunday start)
+      const weekGroups = new Map<string, ExcelRow[]>();
+
       for (const row of rows) {
         if (row.stop1PlannedStartDate) {
           try {
             const rowDate = excelDateToJSDate(row.stop1PlannedStartDate, 0);
-            if (!latestDate || rowDate > latestDate) {
-              latestDate = rowDate;
+            const weekStartSunday = new Date(rowDate);
+            weekStartSunday.setDate(rowDate.getDate() - rowDate.getDay());
+            weekStartSunday.setHours(0, 0, 0, 0);
+            const weekKey = format(weekStartSunday, "yyyy-MM-dd");
+
+            if (!weekGroups.has(weekKey)) {
+              weekGroups.set(weekKey, []);
             }
+            weekGroups.get(weekKey)!.push(row);
           } catch {
             // Skip invalid dates
           }
         }
       }
 
-      if (latestDate) {
-        // Calculate the Sunday of the week containing the LATEST date
-        // getDay() returns 0 for Sunday, 1 for Monday, etc.
-        const weekStartSunday = new Date(latestDate);
-        weekStartSunday.setDate(latestDate.getDate() - latestDate.getDay());
-        weekStartSunday.setHours(0, 0, 0, 0);
+      // Find the week with the most data
+      let targetWeekKey: string | null = null;
+      let maxCount = 0;
 
-        console.log(`[SHIFT-IMPORT] Latest date found: ${format(latestDate, "MMM d, yyyy")}`);
-        console.log(`[SHIFT-IMPORT] Keeping only week of: ${format(weekStartSunday, "MMM d, yyyy")} (Sunday)`);
+      for (const [weekKey, weekRows] of weekGroups.entries()) {
+        if (weekRows.length > maxCount) {
+          maxCount = weekRows.length;
+          targetWeekKey = weekKey;
+        }
+      }
 
-        // Filter to only include rows from this Sunday to Saturday (7 days)
+      if (targetWeekKey) {
+        const targetWeekRows = weekGroups.get(targetWeekKey)!;
+        const weekStartSunday = new Date(targetWeekKey);
+
+        console.log(`[SHIFT-IMPORT] Found ${weekGroups.size} week(s) in file`);
+        console.log(`[SHIFT-IMPORT] Keeping week of ${format(weekStartSunday, "MMM d, yyyy")} (Sunday) with ${maxCount} rows`);
+
         const beforeWeekFilter = rows.length;
-        rows = rows.filter(row => {
-          if (!row.stop1PlannedStartDate) return false;
-          try {
-            const rowDate = excelDateToJSDate(row.stop1PlannedStartDate, 0);
-            rowDate.setHours(0, 0, 0, 0);
-            return rowDate >= weekStartSunday;
-          } catch {
-            return false;
-          }
-        });
+        rows = targetWeekRows;
 
         const weekFiltered = beforeWeekFilter - rows.length;
         if (weekFiltered > 0) {
-          console.log(`[SHIFT-IMPORT] Filtered out ${weekFiltered} rows from previous weeks`);
+          console.log(`[SHIFT-IMPORT] Filtered out ${weekFiltered} rows from other weeks`);
         }
       }
     }
