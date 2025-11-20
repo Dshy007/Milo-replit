@@ -2,7 +2,7 @@ import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format, startOfWeek, addWeeks, subWeeks, eachDayOfInterval, addDays } from "date-fns";
 import { ChevronLeft, ChevronRight, Calendar, User, Upload, X, LayoutGrid, List } from "lucide-react";
-import { DndContext, DragEndEvent, useDraggable, useDroppable } from "@dnd-kit/core";
+import { DndContext, DragEndEvent, DragStartEvent, useDraggable, useDroppable, DragOverlay } from "@dnd-kit/core";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -120,6 +120,7 @@ export default function Schedules() {
   const [showClearAllDialog, setShowClearAllDialog] = useState(false);
   const [viewMode, setViewMode] = useState<"calendar" | "list">("calendar");
   const [showRate, setShowRate] = useState(true);
+  const [activeOccurrence, setActiveOccurrence] = useState<ShiftOccurrence | null>(null);
 
   // Fetch contracts to get static start times
   const { data: contracts = [] } = useQuery<Contract[]>({
@@ -334,9 +335,18 @@ export default function Schedules() {
     // We'll handle this manually in handleDragEnd after all mutations complete
   });
 
+  // Handle drag start event
+  const handleDragStart = (event: DragStartEvent) => {
+    const draggedOccurrence = event.active.data.current?.occurrence as ShiftOccurrence;
+    setActiveOccurrence(draggedOccurrence);
+  };
+
   // Handle drag end event
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
+
+    // Clear the active dragged item
+    setActiveOccurrence(null);
 
     if (!over) return;
 
@@ -785,7 +795,7 @@ export default function Schedules() {
       {viewMode === "calendar" && (
         <Card className="flex-1 overflow-hidden">
           <CardContent className="p-0 h-full overflow-auto">
-          <DndContext onDragEnd={handleDragEnd}>
+          <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
           <table className="w-full border-collapse text-sm">
             <thead className="sticky top-0 z-10 bg-card border-b shadow-md">
               <tr>
@@ -982,6 +992,69 @@ export default function Schedules() {
               )}
             </tbody>
           </table>
+
+          {/* DragOverlay shows a floating clone while dragging */}
+          <DragOverlay>
+            {activeOccurrence ? (
+              <div className="relative group opacity-80">
+                <div className="w-full p-1 rounded-md bg-muted/50 text-xs space-y-0.5 text-left shadow-lg border-2 border-primary">
+                  {/* Block ID */}
+                  <div className="font-mono font-medium text-foreground pr-4">
+                    {activeOccurrence.blockId}
+                  </div>
+
+                  {/* Driver Name + Tractor ID */}
+                  {activeOccurrence.driverName ? (
+                    <div className="flex items-center gap-1 text-muted-foreground text-xs">
+                      <User className="w-2.5 h-2.5" />
+                      <span>{activeOccurrence.driverName}</span>
+                      {activeOccurrence.tractorId && (
+                        <span className="text-blue-600 dark:text-blue-400 font-medium">
+                          [{activeOccurrence.tractorId}]
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1 text-muted-foreground text-xs">
+                      <Badge variant="secondary" className="text-xs px-1 py-0">
+                        Unassigned
+                      </Badge>
+                      {activeOccurrence.tractorId && (
+                        <span className="text-blue-600 dark:text-blue-400 font-medium">
+                          [{activeOccurrence.tractorId}]
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Status & Bump Indicators */}
+                  <div className="flex items-center gap-1 flex-wrap">
+                    {activeOccurrence.contractType && (
+                      <Badge
+                        variant="outline"
+                        className={`${getBlockTypeColor(activeOccurrence.contractType)} text-xs px-1 py-0`}
+                      >
+                        {activeOccurrence.contractType.toUpperCase()}
+                      </Badge>
+                    )}
+                    {activeOccurrence.isCarryover && (
+                      <Badge
+                        variant="outline"
+                        className="text-xs px-1 py-0 bg-orange-500/20 text-orange-700 dark:text-orange-300"
+                      >
+                        Carryover
+                      </Badge>
+                    )}
+                    {activeOccurrence.bumpMinutes !== 0 && (
+                      <span className={`text-xs font-medium ${getBumpIndicatorColor(activeOccurrence.bumpMinutes)}`}>
+                        {formatBumpTime(activeOccurrence.bumpMinutes)}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </DragOverlay>
           </DndContext>
         </CardContent>
       </Card>
