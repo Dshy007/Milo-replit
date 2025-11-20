@@ -3447,9 +3447,20 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
         })();
       }
       
+      // Build success message with breakdown
+      let message = '';
+      if (result.totalOccurrences !== undefined) {
+        // Shift-based import: show total occurrences and breakdown
+        const unassigned = result.totalOccurrences - result.created;
+        message = `Successfully imported ${result.totalOccurrences} shift(s): ${result.created} assigned, ${unassigned} unassigned${result.failed > 0 ? `, ${result.failed} failed` : ''}. Pattern recompute ${patternRecomputeStatus}.`;
+      } else {
+        // Block-based import: traditional message
+        message = `Successfully imported ${result.created} assignments${result.failed > 0 ? `, ${result.failed} failed` : ''}. Pattern recompute ${patternRecomputeStatus}.`;
+      }
+
       res.json({
         success: true,
-        message: `Successfully imported ${result.created} assignments${result.failed > 0 ? `, ${result.failed} failed` : ''}. Pattern recompute ${patternRecomputeStatus}.`,
+        message,
         patternRecomputeStatus,
         ...result,
       });

@@ -158,6 +158,7 @@ interface ImportResult {
   warnings: string[];
   committedWithWarnings: number;
   debugLog?: string[]; // Optional debug logging for troubleshooting
+  totalOccurrences?: number; // Total shift occurrences created (shift-based import only)
 }
 
 interface DebugLogger {
@@ -1457,17 +1458,17 @@ export async function parseExcelScheduleShiftBased(
       console.log(`[SHIFT-IMPORT] Filtered out ${tripIdFiltered} rows with Trip ID (previous week data)`);
     }
 
-    // Filter to only include the target week (Sunday-Saturday)
-    // Find earliest date and calculate its Sunday, then filter to 7 days
+    // Filter to only include the LATEST week (Sunday-Saturday)
+    // Find latest date and calculate its Sunday, keep only that week
     if (rows.length > 0) {
-      // Find earliest date in remaining rows
-      let earliestDate: Date | null = null;
+      // Find LATEST date in remaining rows (not earliest - we want the most recent week)
+      let latestDate: Date | null = null;
       for (const row of rows) {
         if (row.stop1PlannedStartDate) {
           try {
             const rowDate = excelDateToJSDate(row.stop1PlannedStartDate, 0);
-            if (!earliestDate || rowDate < earliestDate) {
-              earliestDate = rowDate;
+            if (!latestDate || rowDate > latestDate) {
+              latestDate = rowDate;
             }
           } catch {
             // Skip invalid dates
@@ -1475,22 +1476,23 @@ export async function parseExcelScheduleShiftBased(
         }
       }
 
-      if (earliestDate) {
-        // Calculate the Sunday of the week containing the earliest date
+      if (latestDate) {
+        // Calculate the Sunday of the week containing the LATEST date
         // getDay() returns 0 for Sunday, 1 for Monday, etc.
-        const weekStartSunday = new Date(earliestDate);
-        weekStartSunday.setDate(earliestDate.getDate() - earliestDate.getDay());
+        const weekStartSunday = new Date(latestDate);
+        weekStartSunday.setDate(latestDate.getDate() - latestDate.getDay());
         weekStartSunday.setHours(0, 0, 0, 0);
 
-        console.log(`[SHIFT-IMPORT] Week starts: ${format(weekStartSunday, "MMM d, yyyy")} (Sunday)`);
+        console.log(`[SHIFT-IMPORT] Latest date found: ${format(latestDate, "MMM d, yyyy")}`);
+        console.log(`[SHIFT-IMPORT] Keeping only week of: ${format(weekStartSunday, "MMM d, yyyy")} (Sunday)`);
 
-        // Filter to only include rows from this Sunday forward
-        // No end date - Amazon may send data on Friday for upcoming week
+        // Filter to only include rows from this Sunday to Saturday (7 days)
         const beforeWeekFilter = rows.length;
         rows = rows.filter(row => {
           if (!row.stop1PlannedStartDate) return false;
           try {
             const rowDate = excelDateToJSDate(row.stop1PlannedStartDate, 0);
+            rowDate.setHours(0, 0, 0, 0);
             return rowDate >= weekStartSunday;
           } catch {
             return false;
@@ -1499,7 +1501,7 @@ export async function parseExcelScheduleShiftBased(
 
         const weekFiltered = beforeWeekFilter - rows.length;
         if (weekFiltered > 0) {
-          console.log(`[SHIFT-IMPORT] Filtered out ${weekFiltered} rows before ${format(weekStartSunday, "MMM d")}`);
+          console.log(`[SHIFT-IMPORT] Filtered out ${weekFiltered} rows from previous weeks`);
         }
       }
     }
@@ -2165,6 +2167,8 @@ export async function parseExcelScheduleShiftBased(
 
     // Add summary of unassigned occurrences to warnings
     const unassignedCount = allOccurrences.length - result.created;
+    result.totalOccurrences = allOccurrences.length; // Track total occurrences for message
+
     if (unassignedCount > 0) {
       result.warnings.push(`${unassignedCount} shift(s) imported without driver assignment (unassigned)`);
     }
