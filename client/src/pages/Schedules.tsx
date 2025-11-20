@@ -157,15 +157,24 @@ export default function Schedules() {
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
       
+      // Log full result for debugging
+      console.log("Import result:", result);
+
       // Show errors if any
       if (result.errors && result.errors.length > 0) {
         const errorPreview = result.errors.slice(0, 5).join("\n");
         const moreErrors = result.errors.length > 5 ? `\n...and ${result.errors.length - 5} more errors` : "";
-        
+
         toast({
           variant: result.created > 0 ? "default" : "destructive",
           title: result.created > 0 ? "Partial Import" : "Import Failed",
           description: `${result.message}\n\nErrors:\n${errorPreview}${moreErrors}`,
+        });
+      } else if (result.warnings && result.warnings.length > 0) {
+        // Show warnings only if no errors
+        toast({
+          title: "Import Successful with Warnings",
+          description: `${result.message}\n\nWarnings:\n${result.warnings.slice(0, 3).join("\n")}`,
         });
       } else {
         toast({

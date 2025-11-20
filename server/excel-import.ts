@@ -981,11 +981,11 @@ export async function parseExcelSchedule(
       debug.log(`\n--- Row ${rowNum} ---`);
       debug.log(`Block ID: ${row.blockId}, Driver: ${row.driverName}, Operator ID: ${row.operatorId}`);
 
-      // Validate required fields
-      if (!row.blockId || !row.driverName || !row.operatorId) {
+      // Validate required fields (driverName is optional - blocks can be unassigned)
+      if (!row.blockId || !row.operatorId) {
         result.failed++;
         result.errors.push(
-          `Row ${rowNum}: Missing required fields (Block ID, Driver Name, or Operator ID)`
+          `Row ${rowNum}: Missing required fields (Block ID or Operator ID)`
         );
         debug.log(`❌ FAILED: Missing required fields`);
         continue;
@@ -1057,6 +1057,13 @@ export async function parseExcelSchedule(
       }
 
       // Find driver by name (robust matching: handles "Last, First", "First Last", middle names, suffixes)
+      // If no driver name, skip assignment (block will remain unassigned)
+      if (!row.driverName || !row.driverName.trim()) {
+        result.created++;
+        debug.log(`✓ Block imported without driver assignment (unassigned)`);
+        continue;
+      }
+
       // Normalize both Excel name and DB names to remove suffixes (Jr, Sr, III, etc.)
       const excelNameNormalized = normalizeDriverName(row.driverName);
       const excelNameLower = row.driverName.trim().toLowerCase().replace(/\s+/g, " ");
@@ -1924,9 +1931,10 @@ export async function parseExcelScheduleShiftBased(
       const row = rows[i];
       const rowNum = i + 2;
 
-      if (!row.blockId || !row.driverName || !row.operatorId) {
+      // Validate required fields (driverName is optional - blocks can be unassigned)
+      if (!row.blockId || !row.operatorId) {
         result.failed++;
-        result.errors.push(`Row ${rowNum}: Missing required fields`);
+        result.errors.push(`Row ${rowNum}: Missing required fields (Block ID or Operator ID)`);
         continue;
       }
 
@@ -1995,6 +2003,13 @@ export async function parseExcelScheduleShiftBased(
         result.failed++;
         result.errors.push(`Row ${rowNum}: Shift ${row.blockId} assigned multiple times in import`);
         continue;
+      }
+
+      // If no driver name, skip assignment (block will remain unassigned)
+      if (!row.driverName || !row.driverName.trim()) {
+        result.created++;
+        assignedOccurrencesInImport.add(occurrence.id);
+        continue; // Skip driver assignment, occurrence already exists
       }
 
       // Find driver by name (same matching logic as legacy)
