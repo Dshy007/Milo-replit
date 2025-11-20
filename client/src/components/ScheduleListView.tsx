@@ -40,28 +40,27 @@ interface ScheduleListViewProps {
   occurrences: ShiftOccurrence[];
   onAssignDriver?: (occurrenceId: string, driverName: string) => void;
   onExport?: () => void;
+  showRate?: boolean;
+  sortBy?: "time" | "type";
+  filterType?: "all" | "solo1" | "solo2" | "team";
 }
 
 export function ScheduleListView({
   occurrences,
   onAssignDriver,
-  onExport
+  onExport,
+  showRate = true,
+  sortBy: parentSortBy = "time",
+  filterType: parentFilterType = "all"
 }: ScheduleListViewProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedDomicile, setSelectedDomicile] = useState<string>("all");
-  const [selectedWorkType, setSelectedWorkType] = useState<string>("all");
   const [showUnassignedOnly, setShowUnassignedOnly] = useState(false);
   const [sortBy, setSortBy] = useState<"startDate" | "blockId" | "driver">("startDate");
 
   // Extract unique domiciles from occurrences
   const domiciles = useMemo(() => {
     const unique = new Set(occurrences.map(occ => "MKC")); // Default to MKC for now
-    return Array.from(unique);
-  }, [occurrences]);
-
-  // Extract unique work types
-  const workTypes = useMemo(() => {
-    const unique = new Set(occurrences.map(occ => occ.contractType).filter(Boolean));
     return Array.from(unique);
   }, [occurrences]);
 
@@ -85,10 +84,10 @@ export function ScheduleListView({
       // For now, all are MKC
     }
 
-    // Work type filter
-    if (selectedWorkType !== "all") {
+    // Work type filter (from parent)
+    if (parentFilterType !== "all") {
       filtered = filtered.filter(occ =>
-        occ.contractType?.toLowerCase() === selectedWorkType.toLowerCase()
+        occ.contractType?.toLowerCase() === parentFilterType.toLowerCase()
       );
     }
 
@@ -97,9 +96,19 @@ export function ScheduleListView({
       filtered = filtered.filter(occ => !occ.driverName);
     }
 
-    // Sort
+    // Sort - use parent sortBy if it's "time" or "type", otherwise use local sortBy
     filtered.sort((a, b) => {
-      if (sortBy === "startDate") {
+      if (parentSortBy === "time" || sortBy === "startDate") {
+        const dateA = `${a.serviceDate} ${a.startTime}`;
+        const dateB = `${b.serviceDate} ${b.startTime}`;
+        return dateA.localeCompare(dateB);
+      } else if (parentSortBy === "type") {
+        // Sort by type first, then by date
+        const typeA = a.contractType || "zzz";
+        const typeB = b.contractType || "zzz";
+        if (typeA !== typeB) {
+          return typeA.localeCompare(typeB);
+        }
         const dateA = `${a.serviceDate} ${a.startTime}`;
         const dateB = `${b.serviceDate} ${b.startTime}`;
         return dateA.localeCompare(dateB);
@@ -114,7 +123,7 @@ export function ScheduleListView({
     });
 
     return filtered;
-  }, [occurrences, searchQuery, selectedDomicile, selectedWorkType, showUnassignedOnly, sortBy]);
+  }, [occurrences, searchQuery, selectedDomicile, parentFilterType, showUnassignedOnly, sortBy, parentSortBy]);
 
   const getTypeColor = (type: string | null) => {
     if (!type) return "bg-gray-500/20 text-gray-700";
@@ -194,19 +203,6 @@ export function ScheduleListView({
           </SelectContent>
         </Select>
 
-        {/* Work Types Filter */}
-        <Select value={selectedWorkType} onValueChange={setSelectedWorkType}>
-          <SelectTrigger className="w-[150px]" data-testid="filter-work-types">
-            <SelectValue placeholder="Work types" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Types</SelectItem>
-            <SelectItem value="solo1">Solo1</SelectItem>
-            <SelectItem value="solo2">Solo2</SelectItem>
-            <SelectItem value="team">Team</SelectItem>
-          </SelectContent>
-        </Select>
-
         {/* Show Unassigned Only Toggle */}
         <div className="flex items-center gap-2 px-3 py-2 border rounded-md">
           <Switch
@@ -280,7 +276,7 @@ export function ScheduleListView({
               <TableHead className="text-center">Type</TableHead>
               <TableHead className="text-center">Duration</TableHead>
               <TableHead>Trailer</TableHead>
-              <TableHead>Rate</TableHead>
+              {showRate && <TableHead>Rate</TableHead>}
               <TableHead className="w-[200px]">Driver</TableHead>
               <TableHead className="w-[100px]">Tractor</TableHead>
             </TableRow>
@@ -288,7 +284,7 @@ export function ScheduleListView({
           <TableBody>
             {filteredOccurrences.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} className="text-center py-12 text-muted-foreground">
+                <TableCell colSpan={showRate ? 9 : 8} className="text-center py-12 text-muted-foreground">
                   No blocks found
                 </TableCell>
               </TableRow>
@@ -338,10 +334,12 @@ export function ScheduleListView({
                   <TableCell className="text-sm text-muted-foreground">
                     53' Trailer
                   </TableCell>
-                  <TableCell className="text-sm">
-                    <div className="font-medium">$498.42</div>
-                    <div className="text-xs text-muted-foreground">+ Accessorials</div>
-                  </TableCell>
+                  {showRate && (
+                    <TableCell className="text-sm">
+                      <div className="font-medium">$498.42</div>
+                      <div className="text-xs text-muted-foreground">+ Accessorials</div>
+                    </TableCell>
+                  )}
                   <TableCell>
                     {occ.driverName ? (
                       <div className="flex items-center gap-2">

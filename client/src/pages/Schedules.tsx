@@ -5,6 +5,8 @@ import { ChevronLeft, ChevronRight, Calendar, User, Upload, X, LayoutGrid, List 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import {
   Dialog,
   DialogContent,
@@ -63,6 +65,7 @@ export default function Schedules() {
   const [filterType, setFilterType] = useState<"all" | "solo1" | "solo2" | "team">("all");
   const [showClearAllDialog, setShowClearAllDialog] = useState(false);
   const [viewMode, setViewMode] = useState<"calendar" | "list">("calendar");
+  const [showRate, setShowRate] = useState(true);
 
   // Fetch contracts to get static start times
   const { data: contracts = [] } = useQuery<Contract[]>({
@@ -394,9 +397,10 @@ export default function Schedules() {
   return (
     <div className="flex flex-col h-full bg-background">
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col p-6 gap-6 overflow-hidden">
+      <div className="flex-1 flex flex-col p-6 gap-4 overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex flex-col gap-4">
+          {/* Title Section */}
           <div className="flex items-center gap-3">
             <div className="flex items-center justify-center w-10 h-10 rounded-full bg-primary/10">
               <Calendar className="w-5 h-5 text-primary" data-testid="schedules-icon" />
@@ -409,9 +413,12 @@ export default function Schedules() {
                 Week of {format(weekRange.weekStart, "MMM d")} - {format(addDays(weekRange.weekStart, 6), "MMM d, yyyy")}
               </p>
             </div>
+          </div>
 
-            {/* Navigation & Import - Moved to left */}
-            <div className="flex items-center gap-2 ml-4">
+          {/* Toolbar - All controls under headline */}
+          <div className="flex items-center gap-3 flex-wrap">
+            {/* Navigation & Import */}
+            <div className="flex items-center gap-2">
               <Dialog open={isImportDialogOpen} onOpenChange={setIsImportDialogOpen}>
                 <DialogTrigger asChild>
                   <Button variant="default" size="sm" data-testid="button-import-schedule">
@@ -505,10 +512,7 @@ export default function Schedules() {
                 <ChevronRight className="w-4 h-4" />
               </Button>
             </div>
-          </div>
 
-          {/* View Toggle & Sort/Filter Controls - Right side */}
-          <div className="flex items-center gap-3">
             {/* View Toggle */}
             <div className="flex items-center gap-2 border rounded-md p-1">
               <Button
@@ -533,69 +537,80 @@ export default function Schedules() {
               </Button>
             </div>
 
-            {/* Sort & Filter - Only show in Calendar view */}
-            {viewMode === "calendar" && (
-              <>
-                <div className="flex items-center gap-2">
-                  <label className="text-sm font-medium text-muted-foreground">Sort by:</label>
-                  <div className="flex gap-1">
-                    <Button
-                      variant={sortBy === "time" ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => setSortBy("time")}
-                      data-testid="button-sort-time"
-                    >
-                      Time
-                    </Button>
-                    <Button
-                      variant={sortBy === "type" ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => setSortBy("type")}
-                      data-testid="button-sort-type"
-                    >
-                      Type
-                    </Button>
-                  </div>
-                </div>
+            {/* Sort & Filter Controls - Show for both views */}
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-medium text-muted-foreground">Sort by:</label>
+              <div className="flex gap-1">
+                <Button
+                  variant={sortBy === "time" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setSortBy("time")}
+                  data-testid="button-sort-time"
+                >
+                  Time
+                </Button>
+                <Button
+                  variant={sortBy === "type" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setSortBy("type")}
+                  data-testid="button-sort-type"
+                >
+                  Type
+                </Button>
+              </div>
+            </div>
 
-                <div className="flex items-center gap-2">
-                  <label className="text-sm font-medium text-muted-foreground">Filter:</label>
-                  <div className="flex gap-1">
-                    <Button
-                      variant={filterType === "all" ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => setFilterType("all")}
-                      data-testid="button-filter-all"
-                    >
-                      All
-                    </Button>
-                    <Button
-                      variant={filterType === "solo1" ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => setFilterType("solo1")}
-                      data-testid="button-filter-solo1"
-                    >
-                      Solo1
-                    </Button>
-                    <Button
-                      variant={filterType === "solo2" ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => setFilterType("solo2")}
-                      data-testid="button-filter-solo2"
-                    >
-                      Solo2
-                    </Button>
-                    <Button
-                      variant={filterType === "team" ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => setFilterType("team")}
-                      data-testid="button-filter-team"
-                    >
-                      Team
-                    </Button>
-                  </div>
-                </div>
-              </>
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-medium text-muted-foreground">Filter:</label>
+              <div className="flex gap-1">
+                <Button
+                  variant={filterType === "all" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setFilterType("all")}
+                  data-testid="button-filter-all"
+                >
+                  All
+                </Button>
+                <Button
+                  variant={filterType === "solo1" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setFilterType("solo1")}
+                  data-testid="button-filter-solo1"
+                >
+                  Solo1
+                </Button>
+                <Button
+                  variant={filterType === "solo2" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setFilterType("solo2")}
+                  data-testid="button-filter-solo2"
+                >
+                  Solo2
+                </Button>
+                <Button
+                  variant={filterType === "team" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setFilterType("team")}
+                  data-testid="button-filter-team"
+                >
+                  Team
+                </Button>
+              </div>
+            </div>
+
+            {/* Rate Toggle - Only show in List view */}
+            {viewMode === "list" && (
+              <div className="flex items-center gap-2 px-3 py-2 border rounded-md">
+                <Switch
+                  id="show-rate"
+                  checked={showRate}
+                  onCheckedChange={setShowRate}
+                  data-testid="toggle-rate"
+                />
+                <Label htmlFor="show-rate" className="text-sm cursor-pointer">
+                  Show Rate
+                </Label>
+              </div>
             )}
           </div>
         </div>
@@ -795,6 +810,9 @@ export default function Schedules() {
           <CardContent className="p-4 h-full">
             <ScheduleListView
               occurrences={calendarData.occurrences}
+              showRate={showRate}
+              sortBy={sortBy}
+              filterType={filterType}
             />
           </CardContent>
         </Card>
