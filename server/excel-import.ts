@@ -1428,20 +1428,16 @@ export async function parseExcelScheduleShiftBased(
         weekStartSunday.setDate(earliestDate.getDate() - earliestDate.getDay());
         weekStartSunday.setHours(0, 0, 0, 0);
 
-        // Saturday is 6 days after Sunday
-        const weekEndSaturday = new Date(weekStartSunday);
-        weekEndSaturday.setDate(weekStartSunday.getDate() + 6);
-        weekEndSaturday.setHours(23, 59, 59, 999);
+        console.log(`[SHIFT-IMPORT] Week starts: ${format(weekStartSunday, "MMM d, yyyy")} (Sunday)`);
 
-        console.log(`[SHIFT-IMPORT] Target week: ${format(weekStartSunday, "MMM d")} - ${format(weekEndSaturday, "MMM d, yyyy")}`);
-
-        // Filter to only include rows within this week
+        // Filter to only include rows from this Sunday forward
+        // No end date - Amazon may send data on Friday for upcoming week
         const beforeWeekFilter = rows.length;
         rows = rows.filter(row => {
           if (!row.stop1PlannedStartDate) return false;
           try {
             const rowDate = excelDateToJSDate(row.stop1PlannedStartDate, 0);
-            return rowDate >= weekStartSunday && rowDate <= weekEndSaturday;
+            return rowDate >= weekStartSunday;
           } catch {
             return false;
           }
@@ -1449,7 +1445,7 @@ export async function parseExcelScheduleShiftBased(
 
         const weekFiltered = beforeWeekFilter - rows.length;
         if (weekFiltered > 0) {
-          console.log(`[SHIFT-IMPORT] Filtered out ${weekFiltered} rows outside target week`);
+          console.log(`[SHIFT-IMPORT] Filtered out ${weekFiltered} rows before ${format(weekStartSunday, "MMM d")}`);
         }
       }
     }
