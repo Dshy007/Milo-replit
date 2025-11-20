@@ -667,13 +667,20 @@ export default function Schedules() {
                                         )}
                                       </div>
                                     ) : (
-                                      <Badge 
-                                        variant="secondary" 
-                                        className="text-xs px-1 py-0"
-                                        data-testid={`badge-unassigned-${occ.occurrenceId}`}
-                                      >
-                                        Unassigned
-                                      </Badge>
+                                      <div className="flex items-center gap-1 text-muted-foreground text-xs">
+                                        <Badge
+                                          variant="secondary"
+                                          className="text-xs px-1 py-0"
+                                          data-testid={`badge-unassigned-${occ.occurrenceId}`}
+                                        >
+                                          Unassigned
+                                        </Badge>
+                                        {occ.tractorId && (
+                                          <span className="text-blue-600 dark:text-blue-400 font-medium">
+                                            [{occ.tractorId}]
+                                          </span>
+                                        )}
+                                      </div>
                                     )}
 
                                     {/* Status & Bump Indicators (Subtle) */}
