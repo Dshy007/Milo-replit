@@ -336,8 +336,13 @@ function parseOperatorId(operatorId: string): { type: string; tractorId: string 
  * - Text date strings from CSV (e.g., "2025-11-17", "11/17/2025", "Nov 17, 2025")
  * - Text time strings (e.g., "16:30", "4:30 PM")
  */
-function excelDateToJSDate(excelDate: number | string, excelTime?: number | string): Date {
+function excelDateToJSDate(excelDate: number | string | undefined | null, excelTime?: number | string | undefined | null): Date {
   let resultDate: Date;
+
+  // Handle empty/null/undefined date values
+  if (excelDate === undefined || excelDate === null || excelDate === '') {
+    throw new Error(`Invalid date value: ${excelDate}`);
+  }
 
   // Handle date part
   if (typeof excelDate === 'number') {
@@ -349,6 +354,11 @@ function excelDateToJSDate(excelDate: number | string, excelTime?: number | stri
   } else if (typeof excelDate === 'string') {
     // Text date string from CSV
     const dateStr = excelDate.trim();
+
+    // Check for empty string after trim
+    if (!dateStr) {
+      throw new Error(`Empty date string`);
+    }
 
     // Try parsing various date formats
     let parsed = new Date(dateStr);
@@ -366,13 +376,17 @@ function excelDateToJSDate(excelDate: number | string, excelTime?: number | stri
       }
     }
 
-    resultDate = isNaN(parsed.getTime()) ? new Date() : parsed;
+    if (isNaN(parsed.getTime())) {
+      throw new Error(`Could not parse date: "${dateStr}"`);
+    }
+
+    resultDate = parsed;
   } else {
-    resultDate = new Date();
+    throw new Error(`Unexpected date type: ${typeof excelDate}`);
   }
 
   // Handle time part
-  if (excelTime !== undefined) {
+  if (excelTime !== undefined && excelTime !== null && excelTime !== '') {
     if (typeof excelTime === 'number') {
       // Excel time as fraction of day (0.5 = noon = 12:00)
       const totalMinutes = excelTime * 24 * 60;
@@ -383,20 +397,30 @@ function excelDateToJSDate(excelDate: number | string, excelTime?: number | stri
       // Text time string from CSV (e.g., "16:30", "4:30 PM")
       const timeStr = excelTime.trim();
 
-      // Parse HH:MM or H:MM format
-      const timeMatch = timeStr.match(/^(\d{1,2}):(\d{2})(?:\s*(AM|PM))?$/i);
-      if (timeMatch) {
-        let hours = parseInt(timeMatch[1]);
-        const minutes = parseInt(timeMatch[2]);
-        const ampm = timeMatch[3];
+      if (timeStr) {
+        // Parse HH:MM or H:MM format with optional seconds
+        const timeMatch = timeStr.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*(AM|PM))?$/i);
+        if (timeMatch) {
+          let hours = parseInt(timeMatch[1]);
+          const minutes = parseInt(timeMatch[2]);
+          const ampm = timeMatch[4];
 
-        // Handle AM/PM
-        if (ampm) {
-          if (ampm.toUpperCase() === 'PM' && hours !== 12) hours += 12;
-          if (ampm.toUpperCase() === 'AM' && hours === 12) hours = 0;
+          // Handle AM/PM
+          if (ampm) {
+            if (ampm.toUpperCase() === 'PM' && hours !== 12) hours += 12;
+            if (ampm.toUpperCase() === 'AM' && hours === 12) hours = 0;
+          }
+
+          resultDate.setHours(hours, minutes, 0, 0);
+        } else {
+          // Try parsing as a full datetime string (e.g., "2025-11-17 16:30:00")
+          const fullDateTimeMatch = timeStr.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+          if (fullDateTimeMatch) {
+            const hours = parseInt(fullDateTimeMatch[1]);
+            const minutes = parseInt(fullDateTimeMatch[2]);
+            resultDate.setHours(hours, minutes, 0, 0);
+          }
         }
-
-        resultDate.setHours(hours, minutes, 0, 0);
       }
     }
   }
@@ -569,8 +593,15 @@ export async function parseExcelSchedule(
             continue; // Skip entire tour if we can't create the contract
           }
 
-          const startTimestamp = excelDateToJSDate(startDate, startTime);
-          const endTimestamp = excelDateToJSDate(endDate, endTime);
+          let startTimestamp: Date;
+          let endTimestamp: Date;
+          try {
+            startTimestamp = excelDateToJSDate(startDate, startTime);
+            endTimestamp = excelDateToJSDate(endDate, endTime);
+          } catch (err: any) {
+            result.warnings.push(`Block ${blockId}: Cannot parse timing data for contract creation - ${err.message}`);
+            continue;
+          }
 
           // Calculate duration from first block's timing data
           const duration = Math.round((endTimestamp.getTime() - startTimestamp.getTime()) / (1000 * 60 * 60));
@@ -667,10 +698,16 @@ export async function parseExcelSchedule(
       const baselineRow = sortedRows[baselineIndex];
 
       // Calculate baseline canonical start (anchor for entire tour)
-      const baselineActualStart = excelDateToJSDate(
-        baselineRow.stop1PlannedStartDate!,
-        baselineRow.stop1PlannedStartTime!
-      );
+      let baselineActualStart: Date;
+      try {
+        baselineActualStart = excelDateToJSDate(
+          baselineRow.stop1PlannedStartDate!,
+          baselineRow.stop1PlannedStartTime!
+        );
+      } catch (err: any) {
+        result.warnings.push(`Block ${blockId}: Cannot parse baseline timing - ${err.message} - skipping tour`);
+        continue;
+      }
       const baselinePatternGroup = detectPatternGroup(baselineActualStart, contract.startTime);
       const baselineCanonicalStart = calculateCanonicalStart(
         baselineActualStart,
@@ -716,8 +753,14 @@ export async function parseExcelSchedule(
 
         if (hasActualTiming) {
           // Use actual Excel data
-          startTimestamp = excelDateToJSDate(row.stop1PlannedStartDate!, row.stop1PlannedStartTime!);
-          endTimestamp = excelDateToJSDate(row.stop2PlannedArrivalDate!, row.stop2PlannedArrivalTime!);
+          try {
+            startTimestamp = excelDateToJSDate(row.stop1PlannedStartDate!, row.stop1PlannedStartTime!);
+            endTimestamp = excelDateToJSDate(row.stop2PlannedArrivalDate!, row.stop2PlannedArrivalTime!);
+          } catch (err: any) {
+            result.warnings.push(`Block ${blockId}, day ${i + 1}: Cannot parse timing (${err.message}) - synthesizing from canonical`);
+            startTimestamp = canonicalStart;
+            endTimestamp = new Date(startTimestamp.getTime() + contract.duration * 60 * 60 * 1000);
+          }
 
           // Warn if drift from canonical start exceeds 2 hours
           const driftHours = Math.abs(startTimestamp.getTime() - canonicalStart.getTime()) / (1000 * 60 * 60);
@@ -1330,9 +1373,14 @@ export async function parseExcelScheduleShiftBased(
       const originalCount = rows.length;
       rows = rows.filter(row => {
         if (!row.stop1PlannedStartDate) return false;
-        const rowDate = excelDateToJSDate(row.stop1PlannedStartDate, 0);
-        rowDate.setHours(0, 0, 0, 0);
-        return rowDate >= filterDateOnly;
+        try {
+          const rowDate = excelDateToJSDate(row.stop1PlannedStartDate, 0);
+          rowDate.setHours(0, 0, 0, 0);
+          return rowDate >= filterDateOnly;
+        } catch (err) {
+          // Skip rows with invalid dates
+          return false;
+        }
       });
 
       const filtered = originalCount - rows.length;
@@ -1403,8 +1451,16 @@ export async function parseExcelScheduleShiftBased(
           const endDate = rowWithTiming.stop2PlannedArrivalDate!;
           const endTime = rowWithTiming.stop2PlannedArrivalTime!;
 
-          const startTimestamp = excelDateToJSDate(startDate, startTime);
-          const endTimestamp = excelDateToJSDate(endDate, endTime);
+          let startTimestamp: Date;
+          let endTimestamp: Date;
+          try {
+            startTimestamp = excelDateToJSDate(startDate, startTime);
+            endTimestamp = excelDateToJSDate(endDate, endTime);
+          } catch (err: any) {
+            failedOperatorIds.set(operatorId, `Cannot parse timing data: ${err.message}`);
+            result.warnings.push(`Operator ${operatorId}: Cannot auto-create contract - ${err.message} - ${shiftRows.length} rows affected`);
+            continue;
+          }
           const duration = Math.round((endTimestamp.getTime() - startTimestamp.getTime()) / (1000 * 60 * 60));
           const startHour = startTimestamp.getHours();
           const startMinute = startTimestamp.getMinutes();
@@ -1464,10 +1520,17 @@ export async function parseExcelScheduleShiftBased(
           continue;
         }
 
-        const sampleStart = excelDateToJSDate(
-          firstRowWithTiming.stop1PlannedStartDate!,
-          firstRowWithTiming.stop1PlannedStartTime!
-        );
+        let sampleStart: Date;
+        try {
+          sampleStart = excelDateToJSDate(
+            firstRowWithTiming.stop1PlannedStartDate!,
+            firstRowWithTiming.stop1PlannedStartTime!
+          );
+        } catch (err: any) {
+          failedOperatorIds.set(operatorId, `Cannot parse sample timing: ${err.message}`);
+          result.warnings.push(`Operator ${operatorId}: Cannot create template - ${err.message} - ${shiftRows.length} rows affected`);
+          continue;
+        }
         const patternGroup = detectPatternGroup(sampleStart, contract.startTime);
 
         // Upsert template: create if new, update if exists
@@ -1524,10 +1587,16 @@ export async function parseExcelScheduleShiftBased(
       }
 
       const baselineRow = sortedRows[baselineIndex];
-      const baselineActualStart = excelDateToJSDate(
-        baselineRow.stop1PlannedStartDate!,
-        baselineRow.stop1PlannedStartTime!
-      );
+      let baselineActualStart: Date;
+      try {
+        baselineActualStart = excelDateToJSDate(
+          baselineRow.stop1PlannedStartDate!,
+          baselineRow.stop1PlannedStartTime!
+        );
+      } catch (err: any) {
+        result.warnings.push(`Operator ${operatorId}: Cannot parse baseline timing - ${err.message} - skipping occurrences`);
+        continue;
+      }
       const baselinePatternGroup = detectPatternGroup(baselineActualStart, contract.startTime);
       const baselineCanonicalStart = calculateCanonicalStart(
         baselineActualStart,
@@ -1560,8 +1629,14 @@ export async function parseExcelScheduleShiftBased(
         let endTimestamp: Date;
 
         if (hasActualTiming) {
-          startTimestamp = excelDateToJSDate(row.stop1PlannedStartDate!, row.stop1PlannedStartTime!);
-          endTimestamp = excelDateToJSDate(row.stop2PlannedArrivalDate!, row.stop2PlannedArrivalTime!);
+          try {
+            startTimestamp = excelDateToJSDate(row.stop1PlannedStartDate!, row.stop1PlannedStartTime!);
+            endTimestamp = excelDateToJSDate(row.stop2PlannedArrivalDate!, row.stop2PlannedArrivalTime!);
+          } catch (err: any) {
+            result.warnings.push(`Operator ${operatorId}, day ${i + 1}: Cannot parse timing (${err.message}) - synthesizing from canonical`);
+            startTimestamp = canonicalStart;
+            endTimestamp = new Date(startTimestamp.getTime() + contract.duration * 60 * 60 * 1000);
+          }
         } else {
           result.warnings.push(`Operator ${operatorId}, day ${i + 1}: Synthesizing times from canonical`);
           startTimestamp = canonicalStart;
@@ -1677,15 +1752,19 @@ export async function parseExcelScheduleShiftBased(
 
       // First, try to derive service date from Excel timing data
       if (row.stop1PlannedStartDate) {
-        const startTimestamp = excelDateToJSDate(row.stop1PlannedStartDate, row.stop1PlannedStartTime || 0);
-        const serviceDate = new Date(startTimestamp);
-        serviceDate.setHours(0, 0, 0, 0);
-        const serviceDateStr = format(serviceDate, "yyyy-MM-dd");
+        try {
+          const startTimestamp = excelDateToJSDate(row.stop1PlannedStartDate, row.stop1PlannedStartTime || 0);
+          const serviceDate = new Date(startTimestamp);
+          serviceDate.setHours(0, 0, 0, 0);
+          const serviceDateStr = format(serviceDate, "yyyy-MM-dd");
 
-        // Match on BOTH Block ID and service date
-        occurrence = allOccurrences.find(
-          o => o.externalBlockId === row.blockId.trim() && o.serviceDate === serviceDateStr
-        );
+          // Match on BOTH Block ID and service date
+          occurrence = allOccurrences.find(
+            o => o.externalBlockId === row.blockId.trim() && o.serviceDate === serviceDateStr
+          );
+        } catch (err) {
+          // Fall through to fallback matching
+        }
       }
 
       // Fallback: if no timing data, try to find ANY occurrence with this Block ID
