@@ -656,11 +656,16 @@ export default function Schedules() {
                                       {occ.blockId}
                                     </div>
 
-                                    {/* Driver Name (Secondary) */}
+                                    {/* Driver Name + Tractor ID (Secondary) */}
                                     {occ.driverName ? (
                                       <div className="flex items-center gap-1 text-muted-foreground text-xs">
                                         <User className="w-2.5 h-2.5" />
                                         <span>{occ.driverName}</span>
+                                        {occ.tractorId && (
+                                          <span className="text-blue-600 dark:text-blue-400 font-medium">
+                                            [{occ.tractorId}]
+                                          </span>
+                                        )}
                                       </div>
                                     ) : (
                                       <Badge 
