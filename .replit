@@ -96,10 +96,6 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "git pull origin main || echo 'Git pull failed, continuing...'"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
 args = "npm run dev"
 waitForPort = 5000
 
