@@ -390,11 +390,23 @@ export async function parseExcelSchedule(
   debug.log(`Import batch ID: ${importBatchId}`);
 
   try {
-    // Parse Excel file
-    const workbook = XLSX.read(fileBuffer, { type: "buffer" });
+    // Detect if file is CSV by checking for text content at start
+    // CSV files start with printable ASCII characters, Excel files start with binary headers
+    const isCSV = fileBuffer.length > 0 &&
+      fileBuffer[0] >= 32 && fileBuffer[0] <= 126 && // First byte is printable ASCII
+      !fileBuffer.slice(0, 4).equals(Buffer.from([0x50, 0x4B, 0x03, 0x04])) && // Not ZIP (xlsx)
+      !fileBuffer.slice(0, 8).equals(Buffer.from([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1])); // Not OLE (xls)
+
+    // Parse file (XLSX library handles both Excel and CSV)
+    const workbook = XLSX.read(fileBuffer, {
+      type: "buffer",
+      // For CSV files, explicitly set the format
+      ...(isCSV ? { raw: false, codepage: 65001 } : {})
+    });
+
     const sheetName = workbook.SheetNames[0];
     if (!sheetName) {
-      throw new Error("Excel file has no sheets");
+      throw new Error("File has no data sheets. For CSV files, ensure the file is not empty.");
     }
 
     const worksheet = workbook.Sheets[sheetName];
@@ -1195,11 +1207,23 @@ export async function parseExcelScheduleShiftBased(
   debug.log(`Import batch ID: ${importBatchId}`);
 
   try {
-    // Parse Excel file (same as before)
-    const workbook = XLSX.read(fileBuffer, { type: "buffer" });
+    // Detect if file is CSV by checking for text content at start
+    // CSV files start with printable ASCII characters, Excel files start with binary headers
+    const isCSV = fileBuffer.length > 0 &&
+      fileBuffer[0] >= 32 && fileBuffer[0] <= 126 && // First byte is printable ASCII
+      !fileBuffer.slice(0, 4).equals(Buffer.from([0x50, 0x4B, 0x03, 0x04])) && // Not ZIP (xlsx)
+      !fileBuffer.slice(0, 8).equals(Buffer.from([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1])); // Not OLE (xls)
+
+    // Parse file (XLSX library handles both Excel and CSV)
+    const workbook = XLSX.read(fileBuffer, {
+      type: "buffer",
+      // For CSV files, explicitly set the format
+      ...(isCSV ? { raw: false, codepage: 65001 } : {})
+    });
+
     const sheetName = workbook.SheetNames[0];
     if (!sheetName) {
-      throw new Error("Excel file has no sheets");
+      throw new Error("File has no data sheets. For CSV files, ensure the file is not empty.");
     }
 
     const worksheet = workbook.Sheets[sheetName];
