@@ -15,6 +15,7 @@ import {
 
 interface ExcelRow {
   blockId: string;
+  tripId?: string;  // Rows with Trip ID are from previous weeks - filter them out
   driverName: string;
   operatorId: string;
   stop1PlannedStartDate?: number | string;  // Excel serial or text date from CSV
@@ -29,6 +30,7 @@ interface ExcelRow {
  */
 const CANONICAL_COLUMN_MAP: Record<string, string> = {
   "block id": "blockId",
+  "trip id": "tripId", // Rows with Trip ID are from previous weeks - filter them out
   "driver name": "driverName",
   "operator id": "operatorId",
 
@@ -98,6 +100,7 @@ function normalizeRows(rawRows: any[], columnMap: Map<string, string>): ExcelRow
     // Prefer Departure for Stop 1 (shift start), Arrival for Stop 2 (shift end)
     const normalized: any = {
       blockId: intermediate.blockId,
+      tripId: intermediate.tripId, // Used to filter out previous week data
       driverName: intermediate.driverName,
       operatorId: intermediate.operatorId,
 
@@ -1387,6 +1390,65 @@ export async function parseExcelScheduleShiftBased(
     }
 
     let rows: ExcelRow[] = normalizeRows(rawRows, columnMap);
+
+    // Filter out rows with Trip ID (they are from previous weeks)
+    const originalRowCount = rows.length;
+    rows = rows.filter(row => {
+      // Keep rows that don't have a Trip ID (current week blocks)
+      // Skip rows that have a Trip ID (previous week trips)
+      return !row.tripId || row.tripId === '';
+    });
+    const tripIdFiltered = originalRowCount - rows.length;
+    if (tripIdFiltered > 0) {
+      console.log(`[SHIFT-IMPORT] Filtered out ${tripIdFiltered} rows with Trip ID (previous week data)`);
+    }
+
+    // Filter to only include the target week (Sunday-Saturday)
+    // Find earliest date and calculate its Sunday, then filter to 7 days
+    if (rows.length > 0) {
+      // Find earliest date in remaining rows
+      let earliestDate: Date | null = null;
+      for (const row of rows) {
+        if (row.stop1PlannedStartDate) {
+          try {
+            const rowDate = excelDateToJSDate(row.stop1PlannedStartDate, 0);
+            if (!earliestDate || rowDate < earliestDate) {
+              earliestDate = rowDate;
+            }
+          } catch {
+            // Skip invalid dates
+          }
+        }
+      }
+
+      if (earliestDate) {
+        // Calculate the Sunday of the week containing the earliest date
+        // getDay() returns 0 for Sunday, 1 for Monday, etc.
+        const weekStartSunday = new Date(earliestDate);
+        weekStartSunday.setDate(earliestDate.getDate() - earliestDate.getDay());
+        weekStartSunday.setHours(0, 0, 0, 0);
+
+        console.log(`[SHIFT-IMPORT] Week starts: ${format(weekStartSunday, "MMM d, yyyy")} (Sunday)`);
+
+        // Filter to only include rows from this Sunday forward
+        // No end date - Amazon may send data on Friday for upcoming week
+        const beforeWeekFilter = rows.length;
+        rows = rows.filter(row => {
+          if (!row.stop1PlannedStartDate) return false;
+          try {
+            const rowDate = excelDateToJSDate(row.stop1PlannedStartDate, 0);
+            return rowDate >= weekStartSunday;
+          } catch {
+            return false;
+          }
+        });
+
+        const weekFiltered = beforeWeekFilter - rows.length;
+        if (weekFiltered > 0) {
+          console.log(`[SHIFT-IMPORT] Filtered out ${weekFiltered} rows before ${format(weekStartSunday, "MMM d")}`);
+        }
+      }
+    }
 
     // Apply start date filter if provided
     if (startDateFilter) {
