@@ -893,6 +893,7 @@ export default function Schedules() {
 
       {/* Calendar View with Sidebar */}
       {viewMode === "calendar" && (
+        <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
         <div className="flex flex-1 gap-0 overflow-hidden">
           {/* Driver Pool Sidebar */}
           <DriverPoolSidebar
@@ -903,7 +904,6 @@ export default function Schedules() {
           {/* Calendar */}
           <Card className="flex-1 overflow-hidden">
             <CardContent className="p-0 h-full overflow-auto">
-            <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
           <table className="w-full border-collapse text-sm">
             <thead className="sticky top-0 z-10 bg-card border-b shadow-md">
               <tr>
@@ -1136,10 +1136,10 @@ export default function Schedules() {
               </div>
             ) : null}
           </DragOverlay>
-          </DndContext>
         </CardContent>
       </Card>
         </div>
+        </DndContext>
       )}
 
       {/* List View */}
