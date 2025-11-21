@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format, startOfWeek, addWeeks, subWeeks, eachDayOfInterval, addDays } from "date-fns";
-import { ChevronLeft, ChevronRight, Calendar, User, Upload, X, LayoutGrid, List } from "lucide-react";
+import { ChevronLeft, ChevronRight, Calendar, User, Upload, X, LayoutGrid, List, UserMinus } from "lucide-react";
 import { DndContext, DragEndEvent, DragStartEvent, useDraggable, useDroppable, DragOverlay } from "@dnd-kit/core";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -31,6 +31,7 @@ import { useToast } from "@/hooks/use-toast";
 import { queryClient } from "@/lib/queryClient";
 import { DriverAssignmentModal } from "@/components/DriverAssignmentModal";
 import { ScheduleListView } from "@/components/ScheduleListView";
+import { DriverPoolSidebar } from "@/components/DriverPoolSidebar";
 import type { Block, BlockAssignment, Driver, Contract } from "@shared/schema";
 
 // Simplified occurrence from new calendar API
@@ -130,6 +131,32 @@ export default function Schedules() {
   const handleOccurrenceClick = (occurrence: ShiftOccurrence) => {
     setSelectedOccurrence(occurrence);
     setIsAssignmentModalOpen(true);
+  };
+
+  const handleUnassignDriver = async (e: React.MouseEvent, occurrence: ShiftOccurrence) => {
+    e.stopPropagation(); // Prevent occurrence click modal from opening
+
+    if (!occurrence.driverId) return;
+
+    try {
+      await updateAssignmentMutation.mutateAsync({
+        occurrenceId: occurrence.occurrenceId,
+        driverId: null,
+      });
+
+      await queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
+
+      toast({
+        title: "Driver Unassigned",
+        description: `${occurrence.driverName} removed from ${occurrence.blockId}`,
+      });
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Unassign Failed",
+        description: error.message || "Failed to unassign driver",
+      });
+    }
   };
 
   const handleCloseModal = () => {
@@ -337,8 +364,12 @@ export default function Schedules() {
 
   // Handle drag start event
   const handleDragStart = (event: DragStartEvent) => {
-    const draggedOccurrence = event.active.data.current?.occurrence as ShiftOccurrence;
-    setActiveOccurrence(draggedOccurrence);
+    // Check if dragging an occurrence or a driver from sidebar
+    if (event.active.data.current?.occurrence) {
+      const draggedOccurrence = event.active.data.current.occurrence as ShiftOccurrence;
+      setActiveOccurrence(draggedOccurrence);
+    }
+    // Driver dragging handled by sidebar component's visual feedback
   };
 
   // Handle drag end event
@@ -350,40 +381,70 @@ export default function Schedules() {
 
     if (!over) return;
 
-    const draggedOccurrence = active.data.current?.occurrence as ShiftOccurrence;
     const targetCellId = over.id as string;
-
-    // Only allow dragging if the occurrence has a driver assigned
-    if (!draggedOccurrence.driverId) return;
-
-    // Parse target cell ID to extract date and contractId (format: "cell-{date}-{contractId}")
     if (!targetCellId.startsWith('cell-')) return;
 
+    // Parse target cell ID
     const parts = targetCellId.split('-');
     if (parts.length < 3) return;
 
     const targetDate = parts[1];
-    const targetContractId = parts.slice(2).join('-'); // Handle tractorIds with hyphens
-
-    // Don't allow dropping on the same cell
-    if (draggedOccurrence.serviceDate === targetDate && draggedOccurrence.tractorId === targetContractId) {
-      return;
-    }
+    const targetContractId = parts.slice(2).join('-');
 
     // Find target occurrence in the target cell
     const targetCell = occurrencesByContract[targetContractId]?.[targetDate] || [];
-
-    // Silently ignore drops on empty cells (they should be disabled anyway)
-    if (targetCell.length === 0) {
-      return;
-    }
+    if (targetCell.length === 0) return;
 
     const targetOccurrence = targetCell[0];
 
     try {
+      // Case 1: Dragging a driver from the sidebar
+      if (active.data.current?.type === 'driver') {
+        const driver = active.data.current.driver as Driver;
+
+        // TODO: Add validation here (green/gray logic)
+        // For now, allow all assignments
+
+        // If target already has a driver, swap is not allowed from sidebar
+        // (can only swap by dragging between cells)
+        if (targetOccurrence.driverId) {
+          toast({
+            variant: "destructive",
+            title: "Cannot Assign",
+            description: "This slot already has a driver. Drag between cells to swap drivers.",
+          });
+          return;
+        }
+
+        // Assign driver to the empty slot
+        await updateAssignmentMutation.mutateAsync({
+          occurrenceId: targetOccurrence.occurrenceId,
+          driverId: driver.id,
+        });
+
+        await queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
+
+        toast({
+          title: "Driver Assigned",
+          description: `${driver.firstName} ${driver.lastName} assigned to ${targetOccurrence.blockId}`,
+        });
+
+        return;
+      }
+
+      // Case 2: Dragging an occurrence (existing swap/move logic)
+      const draggedOccurrence = active.data.current?.occurrence as ShiftOccurrence;
+
+      // Only allow dragging if the occurrence has a driver assigned
+      if (!draggedOccurrence?.driverId) return;
+
+      // Don't allow dropping on the same cell
+      if (draggedOccurrence.serviceDate === targetDate && draggedOccurrence.tractorId === targetContractId) {
+        return;
+      }
+
       // If target has a driver, swap assignments
       if (targetOccurrence.driverId) {
-        // Swap: assign dragged driver to target, and target driver to source
         const draggedDriverId = draggedOccurrence.driverId;
         const targetDriverId = targetOccurrence.driverId;
 
@@ -398,7 +459,6 @@ export default function Schedules() {
           driverId: targetDriverId,
         });
 
-        // Invalidate and show success message after both mutations complete
         await queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
 
         toast({
@@ -417,7 +477,6 @@ export default function Schedules() {
           driverId: null,
         });
 
-        // Invalidate and show success message after both mutations complete
         await queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
 
         toast({
@@ -791,11 +850,19 @@ export default function Schedules() {
           </div>
         </div>
 
-      {/* Calendar View */}
+      {/* Calendar View with Sidebar */}
       {viewMode === "calendar" && (
-        <Card className="flex-1 overflow-hidden">
-          <CardContent className="p-0 h-full overflow-auto">
-          <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+        <div className="flex flex-1 gap-0 overflow-hidden">
+          {/* Driver Pool Sidebar */}
+          <DriverPoolSidebar
+            currentWeekStart={weekRange.weekStart}
+            currentWeekEnd={addDays(weekRange.weekStart, 6)}
+          />
+
+          {/* Calendar */}
+          <Card className="flex-1 overflow-hidden">
+            <CardContent className="p-0 h-full overflow-auto">
+            <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
           <table className="w-full border-collapse text-sm">
             <thead className="sticky top-0 z-10 bg-card border-b shadow-md">
               <tr>
@@ -950,6 +1017,24 @@ export default function Schedules() {
                                     </div>
                                     </button>
 
+                                    {/* Unassign Driver Button - Only show if driver is assigned */}
+                                    {occ.driverId && (
+                                      <button
+                                        onClick={(e) => handleUnassignDriver(e, occ)}
+                                        disabled={updateAssignmentMutation.isPending}
+                                        className="absolute top-0.5 right-5 p-0.5 rounded hover:bg-orange-500/20 opacity-0 group-hover:opacity-100 transition-opacity"
+                                        data-testid={`button-unassign-driver-${occ.occurrenceId}`}
+                                        aria-label="Unassign driver"
+                                        title="Unassign driver"
+                                      >
+                                        {updateAssignmentMutation.isPending ? (
+                                          <div className="w-3 h-3 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
+                                        ) : (
+                                          <UserMinus className="w-3 h-3 text-orange-500" />
+                                        )}
+                                      </button>
+                                    )}
+
                                     {/* Delete Button */}
                                     <button
                                       onClick={(e) => handleDeleteShift(e, occ.occurrenceId)}
@@ -1058,6 +1143,7 @@ export default function Schedules() {
           </DndContext>
         </CardContent>
       </Card>
+        </div>
       )}
 
       {/* List View */}
