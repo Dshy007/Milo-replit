@@ -151,15 +151,9 @@ export default function Schedules() {
         driverId: null,
       });
 
-      // Force immediate refetch of all queries to ensure sidebar updates
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] }),
-        queryClient.invalidateQueries({ queryKey: ["/api/drivers"] }),
-      ]);
-      await Promise.all([
-        queryClient.refetchQueries({ queryKey: ["/api/schedules/calendar"], type: 'active' }),
-        queryClient.refetchQueries({ queryKey: ["/api/drivers"], type: 'active' }),
-      ]);
+      // Invalidate queries to trigger immediate refetch
+      await queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"], refetchType: 'active' });
+      await queryClient.invalidateQueries({ queryKey: ["/api/drivers"], refetchType: 'active' });
 
       toast({
         title: "Driver Unassigned",
@@ -198,15 +192,9 @@ export default function Schedules() {
         driverId,
       });
 
-      // Force immediate refetch of all queries to ensure sidebar updates
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] }),
-        queryClient.invalidateQueries({ queryKey: ["/api/drivers"] }),
-      ]);
-      await Promise.all([
-        queryClient.refetchQueries({ queryKey: ["/api/schedules/calendar"], type: 'active' }),
-        queryClient.refetchQueries({ queryKey: ["/api/drivers"], type: 'active' }),
-      ]);
+      // Invalidate queries to trigger immediate refetch
+      await queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"], refetchType: 'active' });
+      await queryClient.invalidateQueries({ queryKey: ["/api/drivers"], refetchType: 'active' });
 
       const driver = allDrivers.find(d => d.id === driverId);
       toast({
@@ -525,11 +513,9 @@ export default function Schedules() {
             driverId: driver.id,
           });
 
-          // Invalidate both calendar and drivers queries to refresh sidebar
-          await Promise.all([
-            queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] }),
-            queryClient.invalidateQueries({ queryKey: ["/api/drivers"] }),
-          ]);
+          // Invalidate queries to trigger immediate refetch
+          await queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"], refetchType: 'active' });
+          await queryClient.invalidateQueries({ queryKey: ["/api/drivers"], refetchType: 'active' });
 
           toast({
             title: "Driver Replaced",
