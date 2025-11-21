@@ -2,7 +2,7 @@ import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format, startOfWeek, addWeeks, subWeeks, eachDayOfInterval, addDays } from "date-fns";
 import { ChevronLeft, ChevronRight, Calendar, User, Upload, X, LayoutGrid, List, UserMinus } from "lucide-react";
-import { DndContext, DragEndEvent, DragStartEvent, useDraggable, useDroppable, DragOverlay } from "@dnd-kit/core";
+import { DndContext, DragEndEvent, DragStartEvent, useDraggable, useDroppable, DragOverlay, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -65,10 +65,17 @@ function DraggableOccurrence({ occurrence, children }: { occurrence: ShiftOccurr
     },
   });
 
-  const style = {
-    opacity: isDragging ? 0 : 1,
-    cursor: isDragging ? 'grabbing' : 'grab',
-  };
+  const style = transform
+    ? {
+        transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
+        opacity: 0,
+        cursor: 'grabbing',
+        position: 'relative' as const,
+        zIndex: 9999,
+        pointerEvents: 'none' as const,
+        willChange: 'transform',
+      }
+    : { cursor: 'grab' };
 
   return (
     <div ref={setNodeRef} style={style} {...listeners} {...attributes}>
@@ -121,6 +128,15 @@ export default function Schedules() {
   const [activeOccurrence, setActiveOccurrence] = useState<ShiftOccurrence | null>(null);
   const [activeDriver, setActiveDriver] = useState<Driver | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; occurrence: ShiftOccurrence } | null>(null);
+
+  // Configure drag sensors for better performance
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8, // Require 8px movement before drag starts
+      },
+    })
+  );
 
   // Fetch contracts to get static start times
   const { data: contracts = [] } = useQuery<Contract[]>({
@@ -958,7 +974,7 @@ export default function Schedules() {
 
       {/* Calendar View with Sidebar */}
       {viewMode === "calendar" && (
-        <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+        <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
         <div className="flex flex-1 gap-0 overflow-hidden">
           {/* Driver Pool Sidebar */}
           <DriverPoolSidebar
