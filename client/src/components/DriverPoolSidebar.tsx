@@ -123,6 +123,21 @@ export function DriverPoolSidebar({ currentWeekStart, currentWeekEnd }: DriverPo
     return assignments;
   };
 
+  // Get assignment counts by contract type
+  const getAssignmentCounts = (driverId: string) => {
+    const assignments = getAssignmentInfo(driverId);
+    const solo1Count = assignments.filter(a => a.contractType === 'solo1').length;
+    const solo2Count = assignments.filter(a => a.contractType === 'solo2').length;
+    const teamCount = assignments.filter(a => a.contractType === 'team').length;
+
+    return {
+      total: assignments.length,
+      solo1: solo1Count,
+      solo2: solo2Count,
+      team: teamCount,
+    };
+  };
+
   return (
     <div className="w-80 border-r bg-card flex flex-col h-full">
       {/* Header */}
@@ -202,18 +217,32 @@ export function DriverPoolSidebar({ currentWeekStart, currentWeekEnd }: DriverPo
                 ) : (
                   filteredAssigned.map(driver => {
                     const assignments = getAssignmentInfo(driver.id);
+                    const counts = getAssignmentCounts(driver.id);
+
+                    // Build contract type summary
+                    const typeParts: string[] = [];
+                    if (counts.solo1 > 0) typeParts.push(`${counts.solo1} SOLO1`);
+                    if (counts.solo2 > 0) typeParts.push(`${counts.solo2} SOLO2`);
+                    if (counts.team > 0) typeParts.push(`${counts.team} TEAM`);
+                    const typeSummary = typeParts.join(', ');
+
                     return (
                       <div key={driver.id} className="space-y-1">
-                        <div className="flex items-center gap-2 p-2 rounded-md bg-blue-50 dark:bg-blue-950/30">
-                          <User className="w-4 h-4 text-blue-600 dark:text-blue-400 flex-shrink-0" />
-                          <span className="text-sm font-medium truncate">
-                            {driver.firstName} {driver.lastName}
-                          </span>
+                        <div className="flex flex-col gap-1 p-2 rounded-md bg-blue-50 dark:bg-blue-950/30">
+                          <div className="flex items-center gap-2">
+                            <User className="w-4 h-4 text-blue-600 dark:text-blue-400 flex-shrink-0" />
+                            <span className="text-sm font-medium truncate">
+                              {driver.firstName} {driver.lastName}
+                            </span>
+                          </div>
+                          <div className="text-xs text-blue-700 dark:text-blue-300 font-medium pl-6">
+                            {counts.total} shift{counts.total !== 1 ? 's' : ''} ({typeSummary})
+                          </div>
                         </div>
                         <div className="pl-6 space-y-0.5">
                           {assignments.slice(0, 3).map(assignment => (
                             <div key={assignment.occurrenceId} className="text-xs text-muted-foreground">
-                              → {assignment.serviceDate.split('-').slice(1).join('/')} {assignment.startTime} ({assignment.tractorId})
+                              → {assignment.serviceDate.split('-').slice(1).join('/')} {assignment.startTime} ({assignment.tractorId}) {assignment.contractType?.toUpperCase()}
                             </div>
                           ))}
                           {assignments.length > 3 && (

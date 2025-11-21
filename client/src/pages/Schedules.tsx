@@ -946,120 +946,124 @@ export default function Schedules() {
                           {dayOccurrences.length > 0 ? (
                             <div className="space-y-1">
                               {dayOccurrences.map((occ) => {
-                                const occurrenceContent = (
-                                  <div className="relative group">
-                                    <button
-                                      onClick={() => handleOccurrenceClick(occ)}
-                                      className="w-full p-1 rounded-md bg-muted/50 text-xs space-y-0.5 text-left hover-elevate active-elevate-2 transition-colors"
-                                      data-testid={`occurrence-${occ.occurrenceId}`}
-                                    >
-                                    {/* Block ID (Prominent) */}
-                                    <div className="font-mono font-medium text-foreground pr-4">
-                                      {occ.blockId}
+                                return (
+                                  <div key={occ.occurrenceId} className="space-y-1">
+                                    {/* STATIC SECTION - Never moves */}
+                                    <div className="relative group">
+                                      <button
+                                        onClick={() => handleOccurrenceClick(occ)}
+                                        className="w-full p-1.5 rounded-t-md bg-muted/50 text-xs space-y-0.5 text-left hover:bg-muted/70 transition-colors border border-b-0 border-border/50"
+                                        data-testid={`occurrence-static-${occ.occurrenceId}`}
+                                      >
+                                        {/* Block ID */}
+                                        <div className="font-mono font-semibold text-foreground">
+                                          {occ.blockId}
+                                        </div>
+
+                                        {/* Tractor + Contract Type */}
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                          {occ.tractorId && (
+                                            <span className="text-blue-600 dark:text-blue-400 font-medium text-xs">
+                                              [{occ.tractorId}]
+                                            </span>
+                                          )}
+                                          {occ.contractType && (
+                                            <>
+                                              <span className="text-muted-foreground">•</span>
+                                              <Badge
+                                                variant="outline"
+                                                className={`${getBlockTypeColor(occ.contractType)} text-xs px-1.5 py-0`}
+                                                data-testid={`badge-type-${occ.occurrenceId}`}
+                                              >
+                                                {occ.contractType.toUpperCase()}
+                                              </Badge>
+                                            </>
+                                          )}
+                                        </div>
+
+                                        {/* Time + Status Indicators */}
+                                        <div className="flex items-center gap-1.5 flex-wrap text-xs text-muted-foreground">
+                                          <span>{occ.startTime}</span>
+                                          {occ.isCarryover && (
+                                            <>
+                                              <span>•</span>
+                                              <Badge
+                                                variant="outline"
+                                                className="text-xs px-1 py-0 bg-orange-500/20 text-orange-700 dark:text-orange-300"
+                                                data-testid={`badge-carryover-${occ.occurrenceId}`}
+                                              >
+                                                Carryover
+                                              </Badge>
+                                            </>
+                                          )}
+                                          {occ.bumpMinutes !== 0 && (
+                                            <>
+                                              <span>•</span>
+                                              <span className={`font-medium ${getBumpIndicatorColor(occ.bumpMinutes)}`} data-testid={`bump-indicator-${occ.occurrenceId}`}>
+                                                {formatBumpTime(occ.bumpMinutes)}
+                                              </span>
+                                            </>
+                                          )}
+                                        </div>
+                                      </button>
+
+                                      {/* Delete Button */}
+                                      <button
+                                        onClick={(e) => handleDeleteShift(e, occ.occurrenceId)}
+                                        disabled={deleteMutation.isPending}
+                                        className="absolute top-1 right-1 p-0.5 rounded hover:bg-destructive/20 opacity-0 group-hover:opacity-100 transition-opacity z-10"
+                                        data-testid={`button-delete-shift-${occ.occurrenceId}`}
+                                        aria-label="Delete shift"
+                                      >
+                                        {deleteMutation.isPending ? (
+                                          <div className="w-3 h-3 border-2 border-destructive border-t-transparent rounded-full animate-spin" />
+                                        ) : (
+                                          <X className="w-3 h-3 text-destructive" />
+                                        )}
+                                      </button>
                                     </div>
 
-                                    {/* Driver Name + Tractor ID (Secondary) */}
+                                    {/* DRIVER SECTION - Draggable or droppable */}
                                     {occ.driverName ? (
-                                      <div className="flex items-center gap-1 text-muted-foreground text-xs">
-                                        <User className="w-2.5 h-2.5" />
-                                        <span>{occ.driverName}</span>
-                                        {occ.tractorId && (
-                                          <span className="text-blue-600 dark:text-blue-400 font-medium">
-                                            [{occ.tractorId}]
-                                          </span>
-                                        )}
-                                      </div>
+                                      <DraggableOccurrence occurrence={occ}>
+                                        <div className="relative group">
+                                          <div className="w-full p-1.5 rounded-b-md bg-blue-50/50 dark:bg-blue-950/20 border border-t-0 border-blue-200/50 dark:border-blue-800/50 text-xs hover:bg-blue-100/50 dark:hover:bg-blue-950/30 transition-colors cursor-grab active:cursor-grabbing">
+                                            <div className="flex items-center gap-1.5">
+                                              <User className="w-3 h-3 text-blue-600 dark:text-blue-400 flex-shrink-0" />
+                                              <span className="font-medium text-blue-900 dark:text-blue-100">
+                                                {occ.driverName}
+                                              </span>
+                                            </div>
+                                          </div>
+
+                                          {/* Unassign Driver Button */}
+                                          <button
+                                            onClick={(e) => handleUnassignDriver(e, occ)}
+                                            disabled={updateAssignmentMutation.isPending}
+                                            className="absolute top-1 right-1 p-0.5 rounded hover:bg-orange-500/20 opacity-0 group-hover:opacity-100 transition-opacity z-10"
+                                            data-testid={`button-unassign-driver-${occ.occurrenceId}`}
+                                            aria-label="Unassign driver"
+                                            title="Unassign driver"
+                                          >
+                                            {updateAssignmentMutation.isPending ? (
+                                              <div className="w-3 h-3 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
+                                            ) : (
+                                              <UserMinus className="w-3 h-3 text-orange-500" />
+                                            )}
+                                          </button>
+                                        </div>
+                                      </DraggableOccurrence>
                                     ) : (
-                                      <div className="flex items-center gap-1 text-muted-foreground text-xs">
+                                      <div className="w-full p-2 rounded-b-md bg-muted/30 border border-t-0 border-dashed border-border/50 text-xs text-center text-muted-foreground hover:bg-muted/50 hover:border-blue-400/50 hover:shadow-[0_0_8px_rgba(59,130,246,0.3)] transition-all">
                                         <Badge
                                           variant="secondary"
-                                          className="text-xs px-1 py-0"
+                                          className="text-xs px-2 py-0.5"
                                           data-testid={`badge-unassigned-${occ.occurrenceId}`}
                                         >
                                           Unassigned
                                         </Badge>
-                                        {occ.tractorId && (
-                                          <span className="text-blue-600 dark:text-blue-400 font-medium">
-                                            [{occ.tractorId}]
-                                          </span>
-                                        )}
                                       </div>
                                     )}
-
-                                    {/* Status & Bump Indicators (Subtle) */}
-                                    <div className="flex items-center gap-1 flex-wrap">
-                                      {occ.contractType && (
-                                        <Badge 
-                                          variant="outline" 
-                                          className={`${getBlockTypeColor(occ.contractType)} text-xs px-1 py-0`}
-                                          data-testid={`badge-type-${occ.occurrenceId}`}
-                                        >
-                                          {occ.contractType.toUpperCase()}
-                                        </Badge>
-                                      )}
-                                      {occ.isCarryover && (
-                                        <Badge 
-                                          variant="outline" 
-                                          className="text-xs px-1 py-0 bg-orange-500/20 text-orange-700 dark:text-orange-300"
-                                          data-testid={`badge-carryover-${occ.occurrenceId}`}
-                                        >
-                                          Carryover
-                                        </Badge>
-                                      )}
-                                      {occ.bumpMinutes !== 0 && (
-                                        <span 
-                                          className={`text-xs font-medium ${getBumpIndicatorColor(occ.bumpMinutes)}`}
-                                          data-testid={`bump-indicator-${occ.occurrenceId}`}
-                                        >
-                                          {formatBumpTime(occ.bumpMinutes)}
-                                        </span>
-                                      )}
-                                    </div>
-                                    </button>
-
-                                    {/* Unassign Driver Button - Only show if driver is assigned */}
-                                    {occ.driverId && (
-                                      <button
-                                        onClick={(e) => handleUnassignDriver(e, occ)}
-                                        disabled={updateAssignmentMutation.isPending}
-                                        className="absolute top-0.5 right-5 p-0.5 rounded hover:bg-orange-500/20 opacity-0 group-hover:opacity-100 transition-opacity"
-                                        data-testid={`button-unassign-driver-${occ.occurrenceId}`}
-                                        aria-label="Unassign driver"
-                                        title="Unassign driver"
-                                      >
-                                        {updateAssignmentMutation.isPending ? (
-                                          <div className="w-3 h-3 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
-                                        ) : (
-                                          <UserMinus className="w-3 h-3 text-orange-500" />
-                                        )}
-                                      </button>
-                                    )}
-
-                                    {/* Delete Button */}
-                                    <button
-                                      onClick={(e) => handleDeleteShift(e, occ.occurrenceId)}
-                                      disabled={deleteMutation.isPending}
-                                      className="absolute top-0.5 right-0.5 p-0.5 rounded hover:bg-destructive/20 opacity-0 group-hover:opacity-100 transition-opacity"
-                                      data-testid={`button-delete-shift-${occ.occurrenceId}`}
-                                      aria-label="Delete shift"
-                                    >
-                                      {deleteMutation.isPending ? (
-                                        <div className="w-3 h-3 border-2 border-destructive border-t-transparent rounded-full animate-spin" />
-                                      ) : (
-                                        <X className="w-3 h-3 text-destructive" />
-                                      )}
-                                    </button>
-                                  </div>
-                                );
-
-                                // Only make draggable if there's a driver assigned
-                                return occ.driverId ? (
-                                  <DraggableOccurrence key={occ.occurrenceId} occurrence={occ}>
-                                    {occurrenceContent}
-                                  </DraggableOccurrence>
-                                ) : (
-                                  <div key={occ.occurrenceId}>
-                                    {occurrenceContent}
                                   </div>
                                 );
                               })}
