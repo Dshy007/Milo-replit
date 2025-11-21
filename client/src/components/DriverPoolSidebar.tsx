@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useDraggable } from "@dnd-kit/core";
+import { useDraggable, useDroppable } from "@dnd-kit/core";
 import { User, Search, ChevronDown, ChevronRight } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -63,6 +63,26 @@ function DraggableDriver({ driver }: { driver: Driver }) {
 interface DriverPoolSidebarProps {
   currentWeekStart: Date;
   currentWeekEnd: Date;
+}
+
+// Droppable zone for Available Drivers section
+function DroppableAvailableSection({ children }: { children: React.ReactNode }) {
+  const { isOver, setNodeRef } = useDroppable({
+    id: 'available-drivers-pool',
+  });
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={`space-y-1.5 rounded-md transition-all ${
+        isOver
+          ? 'bg-green-50 dark:bg-green-950/20 ring-2 ring-green-400 dark:ring-green-600 shadow-[0_0_12px_rgba(34,197,94,0.4)]'
+          : ''
+      }`}
+    >
+      {children}
+    </div>
+  );
 }
 
 export function DriverPoolSidebar({ currentWeekStart, currentWeekEnd }: DriverPoolSidebarProps) {
@@ -175,7 +195,7 @@ export function DriverPoolSidebar({ currentWeekStart, currentWeekEnd }: DriverPo
             </button>
 
             {showAvailable && (
-              <div className="space-y-1.5">
+              <DroppableAvailableSection>
                 {driversLoading ? (
                   <div className="text-sm text-muted-foreground text-center py-4">
                     Loading drivers...
@@ -189,7 +209,7 @@ export function DriverPoolSidebar({ currentWeekStart, currentWeekEnd }: DriverPo
                     <DraggableDriver key={driver.id} driver={driver} />
                   ))
                 )}
-              </div>
+              </DroppableAvailableSection>
             )}
           </div>
 
