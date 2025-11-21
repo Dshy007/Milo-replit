@@ -151,10 +151,14 @@ export default function Schedules() {
         driverId: null,
       });
 
-      // Refetch both calendar and drivers queries to refresh sidebar immediately
+      // Force immediate refetch of all queries to ensure sidebar updates
       await Promise.all([
-        queryClient.refetchQueries({ queryKey: ["/api/schedules/calendar"] }),
-        queryClient.refetchQueries({ queryKey: ["/api/drivers"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/drivers"] }),
+      ]);
+      await Promise.all([
+        queryClient.refetchQueries({ queryKey: ["/api/schedules/calendar"], type: 'active' }),
+        queryClient.refetchQueries({ queryKey: ["/api/drivers"], type: 'active' }),
       ]);
 
       toast({
@@ -194,10 +198,14 @@ export default function Schedules() {
         driverId,
       });
 
-      // Refetch both calendar and drivers queries to refresh sidebar immediately
+      // Force immediate refetch of all queries to ensure sidebar updates
       await Promise.all([
-        queryClient.refetchQueries({ queryKey: ["/api/schedules/calendar"] }),
-        queryClient.refetchQueries({ queryKey: ["/api/drivers"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/drivers"] }),
+      ]);
+      await Promise.all([
+        queryClient.refetchQueries({ queryKey: ["/api/schedules/calendar"], type: 'active' }),
+        queryClient.refetchQueries({ queryKey: ["/api/drivers"], type: 'active' }),
       ]);
 
       const driver = allDrivers.find(d => d.id === driverId);
@@ -458,10 +466,14 @@ export default function Schedules() {
           driverId: null,
         });
 
-        // Invalidate both calendar and drivers queries to refresh sidebar
+        // Force immediate refetch of all queries to ensure sidebar updates
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] }),
           queryClient.invalidateQueries({ queryKey: ["/api/drivers"] }),
+        ]);
+        await Promise.all([
+          queryClient.refetchQueries({ queryKey: ["/api/schedules/calendar"], type: 'active' }),
+          queryClient.refetchQueries({ queryKey: ["/api/drivers"], type: 'active' }),
         ]);
 
         toast({
@@ -533,10 +545,14 @@ export default function Schedules() {
           driverId: driver.id,
         });
 
-        // Invalidate both calendar and drivers queries to refresh sidebar
+        // Force immediate refetch of all queries to ensure sidebar updates
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] }),
           queryClient.invalidateQueries({ queryKey: ["/api/drivers"] }),
+        ]);
+        await Promise.all([
+          queryClient.refetchQueries({ queryKey: ["/api/schedules/calendar"], type: 'active' }),
+          queryClient.refetchQueries({ queryKey: ["/api/drivers"], type: 'active' }),
         ]);
 
         toast({
@@ -574,10 +590,14 @@ export default function Schedules() {
           driverId: targetDriverId,
         });
 
-        // Invalidate both calendar and drivers queries to refresh sidebar
+        // Force immediate refetch of all queries to ensure sidebar updates
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] }),
           queryClient.invalidateQueries({ queryKey: ["/api/drivers"] }),
+        ]);
+        await Promise.all([
+          queryClient.refetchQueries({ queryKey: ["/api/schedules/calendar"], type: 'active' }),
+          queryClient.refetchQueries({ queryKey: ["/api/drivers"], type: 'active' }),
         ]);
 
         toast({
@@ -596,10 +616,14 @@ export default function Schedules() {
           driverId: null,
         });
 
-        // Invalidate both calendar and drivers queries to refresh sidebar
+        // Force immediate refetch of all queries to ensure sidebar updates
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] }),
           queryClient.invalidateQueries({ queryKey: ["/api/drivers"] }),
+        ]);
+        await Promise.all([
+          queryClient.refetchQueries({ queryKey: ["/api/schedules/calendar"], type: 'active' }),
+          queryClient.refetchQueries({ queryKey: ["/api/drivers"], type: 'active' }),
         ]);
 
         toast({
