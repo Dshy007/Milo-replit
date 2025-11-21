@@ -102,13 +102,11 @@ export function DriverPoolSidebar({ currentWeekStart, currentWeekEnd }: DriverPo
   // Fetch all drivers
   const { data: drivers = [], isLoading: driversLoading } = useQuery<Driver[]>({
     queryKey: ["/api/drivers"],
-    staleTime: 0, // Always fetch fresh data
   });
 
   // Fetch current week's calendar to determine assigned drivers
   const { data: calendarData } = useQuery<CalendarResponse>({
     queryKey: ["/api/schedules/calendar", currentWeekStart.toISOString().split('T')[0], currentWeekEnd.toISOString().split('T')[0]],
-    staleTime: 0, // Always fetch fresh data
   });
 
   // Categorize drivers
@@ -258,16 +256,9 @@ export function DriverPoolSidebar({ currentWeekStart, currentWeekEnd }: DriverPo
 
                     return (
                       <div key={driver.id} className="space-y-1">
-                        <div className="flex flex-col gap-1 p-2 rounded-md bg-blue-50 dark:bg-blue-950/30">
-                          <div className="flex items-center gap-2">
-                            <User className="w-4 h-4 text-blue-600 dark:text-blue-400 flex-shrink-0" />
-                            <span className="text-sm font-medium truncate">
-                              {driver.firstName} {driver.lastName}
-                            </span>
-                          </div>
-                          <div className="text-xs text-blue-700 dark:text-blue-300 font-medium pl-6">
-                            {counts.total} shift{counts.total !== 1 ? 's' : ''} ({typeSummary})
-                          </div>
+                        <DraggableDriver driver={driver} />
+                        <div className="text-xs text-blue-700 dark:text-blue-300 font-medium pl-6">
+                          {counts.total} shift{counts.total !== 1 ? 's' : ''} ({typeSummary})
                         </div>
                         <div className="pl-6 space-y-0.5">
                           {assignments.slice(0, 3).map(assignment => (
