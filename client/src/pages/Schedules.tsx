@@ -1085,61 +1085,12 @@ export default function Schedules() {
           {/* DragOverlay shows a floating clone while dragging */}
           <DragOverlay>
             {activeOccurrence ? (
-              <div className="relative group opacity-80">
-                <div className="w-full p-1 rounded-md bg-muted/50 text-xs space-y-0.5 text-left shadow-lg border-2 border-primary">
-                  {/* Block ID */}
-                  <div className="font-mono font-medium text-foreground pr-4">
-                    {activeOccurrence.blockId}
-                  </div>
-
-                  {/* Driver Name + Tractor ID */}
-                  {activeOccurrence.driverName ? (
-                    <div className="flex items-center gap-1 text-muted-foreground text-xs">
-                      <User className="w-2.5 h-2.5" />
-                      <span>{activeOccurrence.driverName}</span>
-                      {activeOccurrence.tractorId && (
-                        <span className="text-blue-600 dark:text-blue-400 font-medium">
-                          [{activeOccurrence.tractorId}]
-                        </span>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-1 text-muted-foreground text-xs">
-                      <Badge variant="secondary" className="text-xs px-1 py-0">
-                        Unassigned
-                      </Badge>
-                      {activeOccurrence.tractorId && (
-                        <span className="text-blue-600 dark:text-blue-400 font-medium">
-                          [{activeOccurrence.tractorId}]
-                        </span>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Status & Bump Indicators */}
-                  <div className="flex items-center gap-1 flex-wrap">
-                    {activeOccurrence.contractType && (
-                      <Badge
-                        variant="outline"
-                        className={`${getBlockTypeColor(activeOccurrence.contractType)} text-xs px-1 py-0`}
-                      >
-                        {activeOccurrence.contractType.toUpperCase()}
-                      </Badge>
-                    )}
-                    {activeOccurrence.isCarryover && (
-                      <Badge
-                        variant="outline"
-                        className="text-xs px-1 py-0 bg-orange-500/20 text-orange-700 dark:text-orange-300"
-                      >
-                        Carryover
-                      </Badge>
-                    )}
-                    {activeOccurrence.bumpMinutes !== 0 && (
-                      <span className={`text-xs font-medium ${getBumpIndicatorColor(activeOccurrence.bumpMinutes)}`}>
-                        {formatBumpTime(activeOccurrence.bumpMinutes)}
-                      </span>
-                    )}
-                  </div>
+              <div className="w-48 p-2 rounded-md bg-blue-100 dark:bg-blue-950/40 border-2 border-blue-400 dark:border-blue-600 shadow-lg">
+                <div className="flex items-center gap-2">
+                  <User className="w-4 h-4 text-blue-600 dark:text-blue-400 flex-shrink-0" />
+                  <span className="font-medium text-blue-900 dark:text-blue-100 text-sm">
+                    {activeOccurrence.driverName || 'Unassigned'}
+                  </span>
                 </div>
               </div>
             ) : null}
