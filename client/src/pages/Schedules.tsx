@@ -123,10 +123,16 @@ export default function Schedules() {
   const [showRate, setShowRate] = useState(true);
   const [activeOccurrence, setActiveOccurrence] = useState<ShiftOccurrence | null>(null);
   const [activeDriver, setActiveDriver] = useState<Driver | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; occurrence: ShiftOccurrence } | null>(null);
 
   // Fetch contracts to get static start times
   const { data: contracts = [] } = useQuery<Contract[]>({
     queryKey: ["/api/contracts"],
+  });
+
+  // Fetch all drivers for context menu
+  const { data: allDrivers = [] } = useQuery<Driver[]>({
+    queryKey: ["/api/drivers"],
   });
 
   const handleOccurrenceClick = (occurrence: ShiftOccurrence) => {
@@ -145,10 +151,10 @@ export default function Schedules() {
         driverId: null,
       });
 
-      // Invalidate both calendar and drivers queries to refresh sidebar
+      // Refetch both calendar and drivers queries to refresh sidebar immediately
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] }),
-        queryClient.invalidateQueries({ queryKey: ["/api/drivers"] }),
+        queryClient.refetchQueries({ queryKey: ["/api/schedules/calendar"] }),
+        queryClient.refetchQueries({ queryKey: ["/api/drivers"] }),
       ]);
 
       toast({
@@ -167,6 +173,52 @@ export default function Schedules() {
   const handleCloseModal = () => {
     setIsAssignmentModalOpen(false);
     setSelectedOccurrence(null);
+  };
+
+  const handleRightClickUnassigned = (e: React.MouseEvent, occurrence: ShiftOccurrence) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      occurrence,
+    });
+  };
+
+  const handleAssignFromContextMenu = async (driverId: string) => {
+    if (!contextMenu) return;
+
+    try {
+      await updateAssignmentMutation.mutateAsync({
+        occurrenceId: contextMenu.occurrence.occurrenceId,
+        driverId,
+      });
+
+      // Refetch both calendar and drivers queries to refresh sidebar immediately
+      await Promise.all([
+        queryClient.refetchQueries({ queryKey: ["/api/schedules/calendar"] }),
+        queryClient.refetchQueries({ queryKey: ["/api/drivers"] }),
+      ]);
+
+      const driver = allDrivers.find(d => d.id === driverId);
+      toast({
+        title: "Driver Assigned",
+        description: `${driver?.firstName} ${driver?.lastName} assigned to ${contextMenu.occurrence.blockId}`,
+      });
+
+      setContextMenu(null);
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Assignment Failed",
+        description: error.message || "Failed to assign driver",
+      });
+    }
+  };
+
+  // Close context menu when clicking outside
+  const handleClickOutside = () => {
+    setContextMenu(null);
   };
 
   const deleteMutation = useMutation({
@@ -701,7 +753,7 @@ export default function Schedules() {
   }
 
   return (
-    <div className="flex flex-col h-full bg-background">
+    <div className="flex flex-col h-full bg-background" onClick={handleClickOutside}>
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col p-6 gap-4 overflow-hidden">
         {/* Header */}
@@ -1125,7 +1177,11 @@ export default function Schedules() {
                                         </div>
                                       </DraggableOccurrence>
                                     ) : (
-                                      <div className="w-full p-2 rounded-b-md bg-red-50/50 dark:bg-red-950/20 border border-t-0 border-dashed border-red-200/50 dark:border-red-800/50 text-xs text-center text-red-600 dark:text-red-400 hover:bg-red-100/50 dark:hover:bg-red-950/30 hover:border-blue-400/50 hover:shadow-[0_0_8px_rgba(59,130,246,0.3)] transition-all">
+                                      <div
+                                        className="w-full p-2 rounded-b-md bg-red-50/50 dark:bg-red-950/20 border border-t-0 border-dashed border-red-200/50 dark:border-red-800/50 text-xs text-center text-red-600 dark:text-red-400 hover:bg-red-100/50 dark:hover:bg-red-950/30 hover:border-blue-400/50 hover:shadow-[0_0_8px_rgba(59,130,246,0.3)] transition-all cursor-pointer"
+                                        onContextMenu={(e) => handleRightClickUnassigned(e, occ)}
+                                        title="Right-click to assign driver"
+                                      >
                                         <Badge
                                           variant="secondary"
                                           className="text-xs px-2 py-0.5 bg-red-100 dark:bg-red-950/40 text-red-700 dark:text-red-300"
@@ -1251,6 +1307,42 @@ export default function Schedules() {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+
+        {/* Context Menu for Unassigned Blocks */}
+        {contextMenu && (
+          <div
+            className="fixed bg-card border border-border rounded-md shadow-lg py-1 z-50 min-w-[200px] max-h-[400px] overflow-y-auto"
+            style={{
+              top: contextMenu.y,
+              left: contextMenu.x,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-3 py-2 text-xs font-semibold text-muted-foreground border-b">
+              Assign Driver to {contextMenu.occurrence.blockId}
+            </div>
+            <div className="py-1">
+              {allDrivers
+                .filter(d => d.status === 'active' && d.loadEligible)
+                .sort((a, b) => `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`))
+                .map(driver => (
+                  <button
+                    key={driver.id}
+                    onClick={() => handleAssignFromContextMenu(driver.id)}
+                    className="w-full px-3 py-2 text-left text-sm hover:bg-muted/50 transition-colors flex items-center gap-2"
+                  >
+                    <User className="w-4 h-4 text-muted-foreground" />
+                    <span>{driver.firstName} {driver.lastName}</span>
+                  </button>
+                ))}
+              {allDrivers.filter(d => d.status === 'active' && d.loadEligible).length === 0 && (
+                <div className="px-3 py-2 text-sm text-muted-foreground text-center">
+                  No available drivers
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
