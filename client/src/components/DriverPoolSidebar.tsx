@@ -37,12 +37,9 @@ function DraggableDriver({ driver }: { driver: Driver }) {
     },
   });
 
-  const style = transform
-    ? {
-        transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
-        opacity: isDragging ? 0.3 : 1,
-      }
-    : undefined;
+  const style = {
+    opacity: isDragging ? 0 : 1,
+  };
 
   return (
     <div
