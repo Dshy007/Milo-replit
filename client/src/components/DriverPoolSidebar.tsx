@@ -102,11 +102,13 @@ export function DriverPoolSidebar({ currentWeekStart, currentWeekEnd }: DriverPo
   // Fetch all drivers
   const { data: drivers = [], isLoading: driversLoading } = useQuery<Driver[]>({
     queryKey: ["/api/drivers"],
+    staleTime: 0, // Always fetch fresh data
   });
 
   // Fetch current week's calendar to determine assigned drivers
   const { data: calendarData } = useQuery<CalendarResponse>({
     queryKey: ["/api/schedules/calendar", currentWeekStart.toISOString().split('T')[0], currentWeekEnd.toISOString().split('T')[0]],
+    staleTime: 0, // Always fetch fresh data
   });
 
   // Categorize drivers
