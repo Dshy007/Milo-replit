@@ -145,7 +145,11 @@ export default function Schedules() {
         driverId: null,
       });
 
-      await queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
+      // Invalidate both calendar and drivers queries to refresh sidebar
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/drivers"] }),
+      ]);
 
       toast({
         title: "Driver Unassigned",
@@ -402,7 +406,11 @@ export default function Schedules() {
           driverId: null,
         });
 
-        await queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
+        // Invalidate both calendar and drivers queries to refresh sidebar
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] }),
+          queryClient.invalidateQueries({ queryKey: ["/api/drivers"] }),
+        ]);
 
         toast({
           title: "Driver Unassigned",
@@ -453,7 +461,11 @@ export default function Schedules() {
             driverId: driver.id,
           });
 
-          await queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
+          // Invalidate both calendar and drivers queries to refresh sidebar
+          await Promise.all([
+            queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] }),
+            queryClient.invalidateQueries({ queryKey: ["/api/drivers"] }),
+          ]);
 
           toast({
             title: "Driver Replaced",
@@ -469,7 +481,11 @@ export default function Schedules() {
           driverId: driver.id,
         });
 
-        await queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
+        // Invalidate both calendar and drivers queries to refresh sidebar
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] }),
+          queryClient.invalidateQueries({ queryKey: ["/api/drivers"] }),
+        ]);
 
         toast({
           title: "Driver Assigned",
@@ -506,7 +522,11 @@ export default function Schedules() {
           driverId: targetDriverId,
         });
 
-        await queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
+        // Invalidate both calendar and drivers queries to refresh sidebar
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] }),
+          queryClient.invalidateQueries({ queryKey: ["/api/drivers"] }),
+        ]);
 
         toast({
           title: "Drivers Swapped",
@@ -524,7 +544,11 @@ export default function Schedules() {
           driverId: null,
         });
 
-        await queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
+        // Invalidate both calendar and drivers queries to refresh sidebar
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] }),
+          queryClient.invalidateQueries({ queryKey: ["/api/drivers"] }),
+        ]);
 
         toast({
           title: "Driver Moved",
@@ -1101,10 +1125,10 @@ export default function Schedules() {
                                         </div>
                                       </DraggableOccurrence>
                                     ) : (
-                                      <div className="w-full p-2 rounded-b-md bg-muted/30 border border-t-0 border-dashed border-border/50 text-xs text-center text-muted-foreground hover:bg-muted/50 hover:border-blue-400/50 hover:shadow-[0_0_8px_rgba(59,130,246,0.3)] transition-all">
+                                      <div className="w-full p-2 rounded-b-md bg-red-50/50 dark:bg-red-950/20 border border-t-0 border-dashed border-red-200/50 dark:border-red-800/50 text-xs text-center text-red-600 dark:text-red-400 hover:bg-red-100/50 dark:hover:bg-red-950/30 hover:border-blue-400/50 hover:shadow-[0_0_8px_rgba(59,130,246,0.3)] transition-all">
                                         <Badge
                                           variant="secondary"
-                                          className="text-xs px-2 py-0.5"
+                                          className="text-xs px-2 py-0.5 bg-red-100 dark:bg-red-950/40 text-red-700 dark:text-red-300"
                                           data-testid={`badge-unassigned-${occ.occurrenceId}`}
                                         >
                                           Unassigned

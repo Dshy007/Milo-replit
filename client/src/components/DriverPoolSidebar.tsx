@@ -72,16 +72,21 @@ function DroppableAvailableSection({ children }: { children: React.ReactNode }) 
   });
 
   return (
-    <div
-      ref={setNodeRef}
-      style={{ pointerEvents: 'none' }}
-      className={`space-y-2 rounded-lg transition-all p-3 ${
-        isOver
-          ? 'bg-green-50 dark:bg-green-950/20 ring-2 ring-green-400 dark:ring-green-600 shadow-[0_0_12px_rgba(34,197,94,0.4)]'
-          : 'bg-slate-50/50 dark:bg-slate-900/30'
-      }`}
-    >
-      <div style={{ pointerEvents: 'auto' }}>
+    <div className="relative">
+      {/* Invisible droppable overlay - only catches drop events */}
+      <div
+        ref={setNodeRef}
+        className="absolute inset-0 pointer-events-none z-0"
+      />
+
+      {/* Visual container with drivers */}
+      <div
+        className={`space-y-2 rounded-lg transition-all p-3 relative z-10 ${
+          isOver
+            ? 'bg-green-50 dark:bg-green-950/20 ring-2 ring-green-400 dark:ring-green-600 shadow-[0_0_12px_rgba(34,197,94,0.4)]'
+            : 'bg-slate-50/50 dark:bg-slate-900/30'
+        }`}
+      >
         {children}
       </div>
     </div>
