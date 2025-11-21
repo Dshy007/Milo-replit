@@ -37,17 +37,23 @@ function DraggableDriver({ driver }: { driver: Driver }) {
     },
   });
 
-  const style = {
-    opacity: isDragging ? 0 : 1,
-  };
+  const style = transform
+    ? {
+        transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
+        opacity: 0,
+        position: 'relative' as const,
+        zIndex: 9999,
+        pointerEvents: 'none' as const,
+      }
+    : undefined;
 
   return (
     <div
       ref={setNodeRef}
-      style={style}
       {...listeners}
       {...attributes}
-      className="flex items-center gap-2 p-2.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-500 shadow-sm hover:shadow-md cursor-grab active:cursor-grabbing transition-all"
+      className="flex items-center gap-2 p-2.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-500 shadow-sm hover:shadow-md cursor-grab active:cursor-grabbing"
+      style={{ ...style, willChange: isDragging ? 'transform' : 'auto' }}
     >
       <User className="w-4 h-4 text-slate-600 dark:text-slate-400 flex-shrink-0" />
       <span className="text-sm font-medium truncate text-slate-900 dark:text-slate-100">

@@ -65,10 +65,17 @@ function DraggableOccurrence({ occurrence, children }: { occurrence: ShiftOccurr
     },
   });
 
-  const style = {
-    opacity: isDragging ? 0 : 1,
-    cursor: isDragging ? 'grabbing' : 'grab',
-  };
+  const style = transform
+    ? {
+        transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
+        opacity: 0,
+        cursor: 'grabbing',
+        position: 'relative' as const,
+        zIndex: 9999,
+        pointerEvents: 'none' as const,
+        willChange: 'transform',
+      }
+    : { cursor: 'grab' };
 
   return (
     <div ref={setNodeRef} style={style} {...listeners} {...attributes}>
