@@ -437,18 +437,27 @@ export default function Schedules() {
         // TODO: Add validation here (green/gray logic)
         // For now, allow all assignments
 
-        // If target already has a driver, swap is not allowed from sidebar
-        // (can only swap by dragging between cells)
+        // If target already has a driver, REPLACE them
         if (targetOccurrence.driverId) {
-          toast({
-            variant: "destructive",
-            title: "Cannot Assign",
-            description: "This slot already has a driver. Drag between cells to swap drivers.",
+          const replacedDriverName = targetOccurrence.driverName;
+
+          // Replace: new driver takes the slot, old driver returns to pool (unassigned)
+          await updateAssignmentMutation.mutateAsync({
+            occurrenceId: targetOccurrence.occurrenceId,
+            driverId: driver.id,
           });
+
+          await queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
+
+          toast({
+            title: "Driver Replaced",
+            description: `${driver.firstName} ${driver.lastName} replaced ${replacedDriverName} on ${targetOccurrence.blockId}`,
+          });
+
           return;
         }
 
-        // Assign driver to the empty slot
+        // Target is empty - just assign
         await updateAssignmentMutation.mutateAsync({
           occurrenceId: targetOccurrence.occurrenceId,
           driverId: driver.id,
