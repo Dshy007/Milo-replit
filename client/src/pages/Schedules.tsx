@@ -381,11 +381,43 @@ export default function Schedules() {
 
     if (!over) return;
 
-    const targetCellId = over.id as string;
-    if (!targetCellId.startsWith('cell-')) return;
+    const targetId = over.id as string;
+
+    // SPECIAL CASE: Dropping on Available Drivers Pool to unassign
+    if (targetId === 'available-drivers-pool') {
+      const draggedOccurrence = active.data.current?.occurrence as ShiftOccurrence;
+
+      if (!draggedOccurrence?.driverId) return;
+
+      try {
+        // Unassign the driver
+        await updateAssignmentMutation.mutateAsync({
+          occurrenceId: draggedOccurrence.occurrenceId,
+          driverId: null,
+        });
+
+        await queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
+
+        toast({
+          title: "Driver Unassigned",
+          description: `${draggedOccurrence.driverName} returned to available pool`,
+        });
+      } catch (error: any) {
+        toast({
+          variant: "destructive",
+          title: "Unassign Failed",
+          description: error.message || "Failed to unassign driver",
+        });
+      }
+
+      return;
+    }
+
+    // Regular calendar cell drops
+    if (!targetId.startsWith('cell-')) return;
 
     // Parse target cell ID
-    const parts = targetCellId.split('-');
+    const parts = targetId.split('-');
     if (parts.length < 3) return;
 
     const targetDate = parts[1];
