@@ -122,6 +122,7 @@ export default function Schedules() {
   const [viewMode, setViewMode] = useState<"calendar" | "list">("calendar");
   const [showRate, setShowRate] = useState(true);
   const [activeOccurrence, setActiveOccurrence] = useState<ShiftOccurrence | null>(null);
+  const [activeDriver, setActiveDriver] = useState<Driver | null>(null);
 
   // Fetch contracts to get static start times
   const { data: contracts = [] } = useQuery<Contract[]>({
@@ -368,16 +369,21 @@ export default function Schedules() {
     if (event.active.data.current?.occurrence) {
       const draggedOccurrence = event.active.data.current.occurrence as ShiftOccurrence;
       setActiveOccurrence(draggedOccurrence);
+      setActiveDriver(null);
+    } else if (event.active.data.current?.type === 'driver') {
+      const driver = event.active.data.current.driver as Driver;
+      setActiveDriver(driver);
+      setActiveOccurrence(null);
     }
-    // Driver dragging handled by sidebar component's visual feedback
   };
 
   // Handle drag end event
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
 
-    // Clear the active dragged item
+    // Clear the active dragged items
     setActiveOccurrence(null);
+    setActiveDriver(null);
 
     if (!over) return;
 
@@ -1125,7 +1131,16 @@ export default function Schedules() {
 
           {/* DragOverlay shows a floating clone while dragging */}
           <DragOverlay>
-            {activeOccurrence ? (
+            {activeDriver ? (
+              <div className="w-48 p-2 rounded-md bg-blue-100 dark:bg-blue-950/40 border-2 border-blue-400 dark:border-blue-600 shadow-lg">
+                <div className="flex items-center gap-2">
+                  <User className="w-4 h-4 text-blue-600 dark:text-blue-400 flex-shrink-0" />
+                  <span className="font-medium text-blue-900 dark:text-blue-100 text-sm">
+                    {activeDriver.firstName} {activeDriver.lastName}
+                  </span>
+                </div>
+              </div>
+            ) : activeOccurrence ? (
               <div className="w-48 p-2 rounded-md bg-blue-100 dark:bg-blue-950/40 border-2 border-blue-400 dark:border-blue-600 shadow-lg">
                 <div className="flex items-center gap-2">
                   <User className="w-4 h-4 text-blue-600 dark:text-blue-400 flex-shrink-0" />

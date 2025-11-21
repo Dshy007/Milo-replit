@@ -40,7 +40,7 @@ function DraggableDriver({ driver }: { driver: Driver }) {
   const style = transform
     ? {
         transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
-        opacity: isDragging ? 0.5 : 1,
+        opacity: isDragging ? 0.3 : 1,
       }
     : undefined;
 
@@ -50,10 +50,10 @@ function DraggableDriver({ driver }: { driver: Driver }) {
       style={style}
       {...listeners}
       {...attributes}
-      className="flex items-center gap-2 p-2 rounded-md bg-muted/50 hover:bg-muted cursor-grab active:cursor-grabbing transition-colors"
+      className="flex items-center gap-2 p-2.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-500 shadow-sm hover:shadow-md cursor-grab active:cursor-grabbing transition-all"
     >
-      <User className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-      <span className="text-sm font-medium truncate">
+      <User className="w-4 h-4 text-slate-600 dark:text-slate-400 flex-shrink-0" />
+      <span className="text-sm font-medium truncate text-slate-900 dark:text-slate-100">
         {driver.firstName} {driver.lastName}
       </span>
     </div>
@@ -74,16 +74,13 @@ function DroppableAvailableSection({ children }: { children: React.ReactNode }) 
   return (
     <div
       ref={setNodeRef}
-      className={`space-y-1.5 rounded-md transition-all p-2 ${
+      className={`space-y-2 rounded-lg transition-all p-3 ${
         isOver
           ? 'bg-green-50 dark:bg-green-950/20 ring-2 ring-green-400 dark:ring-green-600 shadow-[0_0_12px_rgba(34,197,94,0.4)]'
-          : ''
+          : 'bg-slate-50/50 dark:bg-slate-900/30'
       }`}
-      style={{ pointerEvents: isOver ? 'none' : 'auto' }}
     >
-      <div style={{ pointerEvents: 'auto' }}>
-        {children}
-      </div>
+      {children}
     </div>
   );
 }
