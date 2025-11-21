@@ -74,13 +74,16 @@ function DroppableAvailableSection({ children }: { children: React.ReactNode }) 
   return (
     <div
       ref={setNodeRef}
-      className={`space-y-1.5 rounded-md transition-all ${
+      className={`space-y-1.5 rounded-md transition-all p-2 ${
         isOver
           ? 'bg-green-50 dark:bg-green-950/20 ring-2 ring-green-400 dark:ring-green-600 shadow-[0_0_12px_rgba(34,197,94,0.4)]'
           : ''
       }`}
+      style={{ pointerEvents: isOver ? 'none' : 'auto' }}
     >
-      {children}
+      <div style={{ pointerEvents: 'auto' }}>
+        {children}
+      </div>
     </div>
   );
 }
