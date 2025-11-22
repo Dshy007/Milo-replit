@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format, startOfWeek, addWeeks, subWeeks, eachDayOfInterval, addDays } from "date-fns";
-import { ChevronLeft, ChevronRight, Calendar, User, Upload, X, LayoutGrid, List, UserMinus, Undo2, Redo2, CheckSquare, XSquare, Moon, Sun, Zap } from "lucide-react";
+import { ChevronLeft, ChevronRight, Calendar, User, Upload, X, LayoutGrid, List, UserMinus, Undo2, Redo2, CheckSquare, XSquare, Moon, Sun, Zap, Cpu } from "lucide-react";
 import { DndContext, DragEndEvent, DragStartEvent, useDraggable, useDroppable, DragOverlay, PointerSensor, useSensor, useSensors, pointerWithin, closestCenter, rectIntersection, closestCorners } from "@dnd-kit/core";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -219,7 +219,7 @@ export default function Schedules() {
   const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set());
 
   // Theme mode state
-  type ThemeMode = 'night' | 'day' | 'retro';
+  type ThemeMode = 'night' | 'day' | 'retro' | 'cyberpunk';
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
     // Load from localStorage or default to 'day'
     const saved = localStorage.getItem('schedules-theme');
@@ -245,6 +245,12 @@ export default function Schedules() {
           background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
           color: '#fef3c7',
           accentColor: '#fbbf24',
+        };
+      case 'cyberpunk':
+        return {
+          background: 'linear-gradient(135deg, #0a0e27 0%, #1a1a2e 50%, #16213e 100%)',
+          color: '#00ffff',
+          accentColor: '#ff00ff',
         };
       case 'day':
       default:
@@ -1271,6 +1277,15 @@ export default function Schedules() {
                 title="Retro theme"
               >
                 <Zap className="w-4 h-4" />
+              </Button>
+              <Button
+                variant={themeMode === 'cyberpunk' ? 'default' : 'ghost'}
+                size="sm"
+                onClick={() => setThemeMode('cyberpunk')}
+                data-testid="button-theme-cyberpunk"
+                title="Cyberpunk theme"
+              >
+                <Cpu className="w-4 h-4" />
               </Button>
             </div>
           </div>
