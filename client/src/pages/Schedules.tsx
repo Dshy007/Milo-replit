@@ -424,8 +424,11 @@ export default function Schedules() {
 
       return response.json();
     },
-    // Note: onSuccess removed to prevent multiple invalidations and toasts
-    // We'll handle this manually in handleDragEnd after all mutations complete
+    onSuccess: () => {
+      // Refresh data after successful mutation
+      queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"], refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: ["/api/drivers"], refetchType: 'active' });
+    },
   });
 
   // Handle drag start event
@@ -460,28 +463,31 @@ export default function Schedules() {
 
       if (!draggedOccurrence?.driverId) return;
 
-      try {
-        // Unassign the driver
-        await updateAssignmentMutation.mutateAsync({
+      const driverName = draggedOccurrence.driverName;
+      const blockId = draggedOccurrence.blockId;
+
+      // Fire mutation without waiting
+      updateAssignmentMutation.mutate(
+        {
           occurrenceId: draggedOccurrence.occurrenceId,
           driverId: null,
-        });
-
-        // Invalidate queries in parallel (don't block drop animation)
-        queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"], refetchType: 'active' });
-        queryClient.invalidateQueries({ queryKey: ["/api/drivers"], refetchType: 'active' });
-
-        toast({
-          title: "Driver Unassigned",
-          description: `${draggedOccurrence.driverName} returned to available pool`,
-        });
-      } catch (error: any) {
-        toast({
-          variant: "destructive",
-          title: "Unassign Failed",
-          description: error.message || "Failed to unassign driver",
-        });
-      }
+        },
+        {
+          onSuccess: () => {
+            toast({
+              title: "Driver Unassigned",
+              description: `${driverName} returned to available pool`,
+            });
+          },
+          onError: (error: any) => {
+            toast({
+              variant: "destructive",
+              title: "Unassign Failed",
+              description: error.message || "Failed to unassign driver",
+            });
+          },
+        }
+      );
 
       return;
     }
@@ -502,117 +508,157 @@ export default function Schedules() {
 
     const targetOccurrence = targetCell[0];
 
-    try {
-      // Case 1: Dragging a driver from the sidebar
-      if (active.data.current?.type === 'driver') {
-        const driver = active.data.current.driver as Driver;
+    // Case 1: Dragging a driver from the sidebar
+    if (active.data.current?.type === 'driver') {
+      const driver = active.data.current.driver as Driver;
 
-        // TODO: Add validation here (green/gray logic)
-        // For now, allow all assignments
+      // TODO: Add validation here (green/gray logic)
+      // For now, allow all assignments
 
-        // If target already has a driver, REPLACE them
-        if (targetOccurrence.driverId) {
-          const replacedDriverName = targetOccurrence.driverName;
+      // If target already has a driver, REPLACE them
+      if (targetOccurrence.driverId) {
+        const replacedDriverName = targetOccurrence.driverName;
+        const blockId = targetOccurrence.blockId;
 
-          // Replace: new driver takes the slot, old driver returns to pool (unassigned)
-          await updateAssignmentMutation.mutateAsync({
+        // Fire mutation without waiting
+        updateAssignmentMutation.mutate(
+          {
             occurrenceId: targetOccurrence.occurrenceId,
             driverId: driver.id,
-          });
+          },
+          {
+            onSuccess: () => {
+              toast({
+                title: "Driver Replaced",
+                description: `${driver.firstName} ${driver.lastName} replaced ${replacedDriverName} on ${blockId}`,
+              });
+            },
+            onError: (error: any) => {
+              toast({
+                variant: "destructive",
+                title: "Assignment Failed",
+                description: error.message || "Failed to replace driver",
+              });
+            },
+          }
+        );
 
-          // Invalidate queries to trigger immediate refetch
-          await queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"], refetchType: 'active' });
-          await queryClient.invalidateQueries({ queryKey: ["/api/drivers"], refetchType: 'active' });
+        return;
+      }
 
-          toast({
-            title: "Driver Replaced",
-            description: `${driver.firstName} ${driver.lastName} replaced ${replacedDriverName} on ${targetOccurrence.blockId}`,
-          });
-
-          return;
-        }
-
-        // Target is empty - just assign
-        await updateAssignmentMutation.mutateAsync({
+      // Target is empty - just assign
+      updateAssignmentMutation.mutate(
+        {
           occurrenceId: targetOccurrence.occurrenceId,
           driverId: driver.id,
-        });
+        },
+        {
+          onSuccess: () => {
+            toast({
+              title: "Driver Assigned",
+              description: `${driver.firstName} ${driver.lastName} assigned to ${targetOccurrence.blockId}`,
+            });
+          },
+          onError: (error: any) => {
+            toast({
+              variant: "destructive",
+              title: "Assignment Failed",
+              description: error.message || "Failed to assign driver",
+            });
+          },
+        }
+      );
 
-        // Invalidate queries in parallel (don't block drop animation)
-        queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"], refetchType: 'active' });
-        queryClient.invalidateQueries({ queryKey: ["/api/drivers"], refetchType: 'active' });
+      return;
+    }
 
-        toast({
-          title: "Driver Assigned",
-          description: `${driver.firstName} ${driver.lastName} assigned to ${targetOccurrence.blockId}`,
-        });
+    // Case 2: Dragging an occurrence (existing swap/move logic)
+    const draggedOccurrence = active.data.current?.occurrence as ShiftOccurrence;
 
-        return;
-      }
+    // Only allow dragging if the occurrence has a driver assigned
+    if (!draggedOccurrence?.driverId) return;
 
-      // Case 2: Dragging an occurrence (existing swap/move logic)
-      const draggedOccurrence = active.data.current?.occurrence as ShiftOccurrence;
+    // Don't allow dropping on the same cell
+    if (draggedOccurrence.serviceDate === targetDate && draggedOccurrence.tractorId === targetContractId) {
+      return;
+    }
 
-      // Only allow dragging if the occurrence has a driver assigned
-      if (!draggedOccurrence?.driverId) return;
+    // If target has a driver, swap assignments
+    if (targetOccurrence.driverId) {
+      const draggedDriverId = draggedOccurrence.driverId;
+      const targetDriverId = targetOccurrence.driverId;
+      const draggedDriverName = draggedOccurrence.driverName;
+      const targetDriverName = targetOccurrence.driverName;
 
-      // Don't allow dropping on the same cell
-      if (draggedOccurrence.serviceDate === targetDate && draggedOccurrence.tractorId === targetContractId) {
-        return;
-      }
-
-      // If target has a driver, swap assignments
-      if (targetOccurrence.driverId) {
-        const draggedDriverId = draggedOccurrence.driverId;
-        const targetDriverId = targetOccurrence.driverId;
-
-        // Execute mutations sequentially to prevent race conditions
-        await updateAssignmentMutation.mutateAsync({
+      // Execute first mutation, then second on success
+      updateAssignmentMutation.mutate(
+        {
           occurrenceId: targetOccurrence.occurrenceId,
           driverId: draggedDriverId,
-        });
+        },
+        {
+          onSuccess: () => {
+            // Chain second mutation
+            updateAssignmentMutation.mutate(
+              {
+                occurrenceId: draggedOccurrence.occurrenceId,
+                driverId: targetDriverId,
+              },
+              {
+                onSuccess: () => {
+                  toast({
+                    title: "Drivers Swapped",
+                    description: `${draggedDriverName} and ${targetDriverName} have been swapped`,
+                  });
+                },
+              }
+            );
+          },
+          onError: (error: any) => {
+            toast({
+              variant: "destructive",
+              title: "Swap Failed",
+              description: error.message || "Failed to swap drivers",
+            });
+          },
+        }
+      );
+    } else {
+      // Target is unassigned, just move the driver
+      const driverName = draggedOccurrence.driverName;
 
-        await updateAssignmentMutation.mutateAsync({
-          occurrenceId: draggedOccurrence.occurrenceId,
-          driverId: targetDriverId,
-        });
-
-        // Invalidate queries in parallel (don't block drop animation)
-        queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"], refetchType: 'active' });
-        queryClient.invalidateQueries({ queryKey: ["/api/drivers"], refetchType: 'active' });
-
-        toast({
-          title: "Drivers Swapped",
-          description: `${draggedOccurrence.driverName} and ${targetOccurrence.driverName} have been swapped`,
-        });
-      } else {
-        // Target is unassigned, just move the driver
-        await updateAssignmentMutation.mutateAsync({
+      updateAssignmentMutation.mutate(
+        {
           occurrenceId: targetOccurrence.occurrenceId,
           driverId: draggedOccurrence.driverId,
-        });
-
-        await updateAssignmentMutation.mutateAsync({
-          occurrenceId: draggedOccurrence.occurrenceId,
-          driverId: null,
-        });
-
-        // Invalidate queries in parallel (don't block drop animation)
-        queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"], refetchType: 'active' });
-        queryClient.invalidateQueries({ queryKey: ["/api/drivers"], refetchType: 'active' });
-
-        toast({
-          title: "Driver Moved",
-          description: `${draggedOccurrence.driverName} has been moved successfully`,
-        });
-      }
-    } catch (error: any) {
-      // Handle errors from mutations
-      toast({
-        variant: "destructive",
-        title: "Update Failed",
-        description: error.message || "Failed to update assignment",
-      });
+        },
+        {
+          onSuccess: () => {
+            // Chain second mutation to clear source
+            updateAssignmentMutation.mutate(
+              {
+                occurrenceId: draggedOccurrence.occurrenceId,
+                driverId: null,
+              },
+              {
+                onSuccess: () => {
+                  toast({
+                    title: "Driver Moved",
+                    description: `${driverName} has been moved successfully`,
+                  });
+                },
+              }
+            );
+          },
+          onError: (error: any) => {
+            toast({
+              variant: "destructive",
+              title: "Move Failed",
+              description: error.message || "Failed to move driver",
+            });
+          },
+        }
+      );
     }
   };
 
