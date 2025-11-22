@@ -2,7 +2,7 @@ import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format, startOfWeek, addWeeks, subWeeks, eachDayOfInterval, addDays } from "date-fns";
 import { ChevronLeft, ChevronRight, Calendar, User, Upload, X, LayoutGrid, List, UserMinus } from "lucide-react";
-import { DndContext, DragEndEvent, DragStartEvent, useDraggable, useDroppable, DragOverlay, PointerSensor, useSensor, useSensors, pointerWithin, closestCenter, rectIntersection } from "@dnd-kit/core";
+import { DndContext, DragEndEvent, DragStartEvent, useDraggable, useDroppable, DragOverlay, PointerSensor, useSensor, useSensors, pointerWithin, closestCenter, rectIntersection, closestCorners } from "@dnd-kit/core";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -101,7 +101,9 @@ function DroppableCell({
   }
 
   const style = {
-    backgroundColor: isOver ? 'rgba(59, 130, 246, 0.1)' : undefined,
+    backgroundColor: isOver ? 'rgba(34, 197, 94, 0.2)' : undefined, // Green highlight when hovering
+    boxShadow: isOver ? '0 0 0 2px rgb(34, 197, 94), inset 0 0 20px rgba(34, 197, 94, 0.2)' : undefined,
+    transition: 'all 0.15s ease',
   };
 
   return (
@@ -139,7 +141,7 @@ export default function Schedules() {
 
   // Log collision detection strategy on mount
   useMemo(() => {
-    console.log('🎮 Using collision detection: rectIntersection (requires actual overlap)');
+    console.log('🎮 Using collision detection: closestCorners (balanced precision)');
   }, []);
 
   // Fetch contracts to get static start times
@@ -1064,7 +1066,7 @@ export default function Schedules() {
       {viewMode === "calendar" && (
         <DndContext
           sensors={sensors}
-          collisionDetection={rectIntersection}
+          collisionDetection={closestCorners}
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
         >
@@ -1302,21 +1304,21 @@ export default function Schedules() {
           </table>
 
           {/* DragOverlay shows a floating clone while dragging */}
-          <DragOverlay>
+          <DragOverlay style={{ pointerEvents: 'none' }}>
             {activeDriver ? (
-              <div className="w-48 p-2 rounded-md bg-blue-100 dark:bg-blue-950/40 border-2 border-blue-400 dark:border-blue-600 shadow-lg">
+              <div className="w-48 p-3 rounded-lg bg-blue-500 border-2 border-blue-600 shadow-2xl" style={{ transform: 'scale(1.05)' }}>
                 <div className="flex items-center gap-2">
-                  <User className="w-4 h-4 text-blue-600 dark:text-blue-400 flex-shrink-0" />
-                  <span className="font-medium text-blue-900 dark:text-blue-100 text-sm">
+                  <User className="w-5 h-5 text-white flex-shrink-0" />
+                  <span className="font-semibold text-white text-sm">
                     {activeDriver.firstName} {activeDriver.lastName}
                   </span>
                 </div>
               </div>
             ) : activeOccurrence ? (
-              <div className="w-48 p-2 rounded-md bg-blue-100 dark:bg-blue-950/40 border-2 border-blue-400 dark:border-blue-600 shadow-lg">
+              <div className="w-48 p-3 rounded-lg bg-blue-500 border-2 border-blue-600 shadow-2xl" style={{ transform: 'scale(1.05)' }}>
                 <div className="flex items-center gap-2">
-                  <User className="w-4 h-4 text-blue-600 dark:text-blue-400 flex-shrink-0" />
-                  <span className="font-medium text-blue-900 dark:text-blue-100 text-sm">
+                  <User className="w-5 h-5 text-white flex-shrink-0" />
+                  <span className="font-semibold text-white text-sm">
                     {activeOccurrence.driverName || 'Unassigned'}
                   </span>
                 </div>
