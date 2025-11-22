@@ -107,11 +107,47 @@ function DroppableCell({
   };
 
   return (
-    <td ref={setNodeRef} style={style} className={className}>
+    <td ref={setNodeRef} style={style} className={className} data-droppable="true">
       {children}
     </td>
   );
 }
+
+// Custom collision detection that looks at pointer position and finds the cell
+const customPointerCollision = (args: any) => {
+  // First try pointerWithin
+  const pointerCollisions = pointerWithin(args);
+
+  if (pointerCollisions.length > 0) {
+    console.log('✅ Pointer collision detected:', pointerCollisions[0].id);
+    return pointerCollisions;
+  }
+
+  // Fallback: Check if pointer is over a droppable cell by checking DOM
+  const { x, y } = args.pointerCoordinates || { x: 0, y: 0 };
+  const element = document.elementFromPoint(x, y);
+
+  if (element) {
+    // Walk up the DOM tree to find a droppable cell
+    let current: HTMLElement | null = element as HTMLElement;
+    while (current && current !== document.body) {
+      if (current.dataset && current.dataset.droppable === 'true') {
+        // Found a droppable cell, find its ID from droppableContainers
+        const droppable = args.droppableContainers.find((container: any) =>
+          container.node.current === current
+        );
+        if (droppable) {
+          console.log('✅ Found droppable via DOM walk:', droppable.id);
+          return [{ id: droppable.id }];
+        }
+      }
+      current = current.parentElement;
+    }
+  }
+
+  console.log('⚠️ No collision detected');
+  return [];
+};
 
 export default function Schedules() {
   const { toast } = useToast();
@@ -147,7 +183,7 @@ export default function Schedules() {
 
   // Log collision detection strategy on mount
   useMemo(() => {
-    console.log('🎮 Using collision detection: closestCorners (balanced precision)');
+    console.log('🎮 Using collision detection: custom (pointer + DOM walk fallback)');
   }, []);
 
   // Fetch contracts to get static start times
@@ -1088,7 +1124,7 @@ export default function Schedules() {
       {viewMode === "calendar" && (
         <DndContext
           sensors={sensors}
-          collisionDetection={closestCorners}
+          collisionDetection={customPointerCollision}
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
         >
