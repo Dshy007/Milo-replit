@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format, startOfWeek, addWeeks, subWeeks, eachDayOfInterval, addDays } from "date-fns";
-import { ChevronLeft, ChevronRight, Calendar, User, Upload, X, LayoutGrid, List, UserMinus, Undo2, Redo2, CheckSquare, XSquare } from "lucide-react";
+import { ChevronLeft, ChevronRight, Calendar, User, Upload, X, LayoutGrid, List, UserMinus, Undo2, Redo2, CheckSquare, XSquare, Moon, Sun, Zap } from "lucide-react";
 import { DndContext, DragEndEvent, DragStartEvent, useDraggable, useDroppable, DragOverlay, PointerSensor, useSensor, useSensors, pointerWithin, closestCenter, rectIntersection, closestCorners } from "@dnd-kit/core";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -124,7 +124,7 @@ function DroppableCell({
             e.stopPropagation();
             onToggleSelection(id);
           }}
-          className="absolute top-1 left-1 z-10 w-4 h-4 cursor-pointer"
+          className="absolute top-0.5 left-0.5 z-10 w-3 h-3 cursor-pointer opacity-40 hover:opacity-100 transition-opacity"
           title="Select for bulk operations"
         />
       )}
@@ -217,6 +217,46 @@ export default function Schedules() {
 
   // Bulk selection state
   const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set());
+
+  // Theme mode state
+  type ThemeMode = 'night' | 'day' | 'retro';
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
+    // Load from localStorage or default to 'day'
+    const saved = localStorage.getItem('schedules-theme');
+    return (saved as ThemeMode) || 'day';
+  });
+
+  // Save theme to localStorage when it changes
+  useMemo(() => {
+    localStorage.setItem('schedules-theme', themeMode);
+  }, [themeMode]);
+
+  // Get theme-specific styles
+  const getThemeStyles = () => {
+    switch (themeMode) {
+      case 'night':
+        return {
+          background: 'linear-gradient(to bottom, #0f172a 0%, #1e293b 100%)',
+          color: '#e2e8f0',
+          accentColor: '#60a5fa',
+        };
+      case 'retro':
+        return {
+          background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+          color: '#fef3c7',
+          accentColor: '#fbbf24',
+        };
+      case 'day':
+      default:
+        return {
+          background: 'linear-gradient(to bottom, #f8fafc 0%, #e2e8f0 100%)',
+          color: '#1e293b',
+          accentColor: '#3b82f6',
+        };
+    }
+  };
+
+  const themeStyles = getThemeStyles();
 
   // Configure drag sensors for better performance
   const sensors = useSensors(
@@ -1175,23 +1215,63 @@ export default function Schedules() {
   }
 
   return (
-    <div className="flex flex-col h-full bg-background" onClick={handleClickOutside}>
+    <div
+      className="flex flex-col h-full transition-all duration-500"
+      style={{ background: themeStyles.background }}
+      onClick={handleClickOutside}
+    >
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col p-6 gap-4 overflow-hidden">
+      <div
+        className="flex-1 flex flex-col p-6 gap-4 overflow-hidden"
+        style={{ color: themeStyles.color }}
+      >
         {/* Header */}
         <div className="flex flex-col gap-4">
           {/* Title Section */}
-          <div className="flex items-center gap-3">
-            <div className="flex items-center justify-center w-10 h-10 rounded-full bg-primary/10">
-              <Calendar className="w-5 h-5 text-primary" data-testid="schedules-icon" />
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="flex items-center justify-center w-10 h-10 rounded-full bg-primary/10">
+                <Calendar className="w-5 h-5 text-primary" data-testid="schedules-icon" />
+              </div>
+              <div>
+                <h1 className="text-2xl font-bold text-foreground" data-testid="page-title">
+                  Schedules
+                </h1>
+                <p className="text-sm text-muted-foreground" data-testid="page-subtitle">
+                  Week of {format(weekRange.weekStart, "MMM d")} - {format(addDays(weekRange.weekStart, 6), "MMM d, yyyy")}
+                </p>
+              </div>
             </div>
-            <div>
-              <h1 className="text-2xl font-bold text-foreground" data-testid="page-title">
-                Schedules
-              </h1>
-              <p className="text-sm text-muted-foreground" data-testid="page-subtitle">
-                Week of {format(weekRange.weekStart, "MMM d")} - {format(addDays(weekRange.weekStart, 6), "MMM d, yyyy")}
-              </p>
+
+            {/* Theme Selector */}
+            <div className="flex items-center gap-1 border rounded-md p-0.5">
+              <Button
+                variant={themeMode === 'day' ? 'default' : 'ghost'}
+                size="sm"
+                onClick={() => setThemeMode('day')}
+                data-testid="button-theme-day"
+                title="Day theme"
+              >
+                <Sun className="w-4 h-4" />
+              </Button>
+              <Button
+                variant={themeMode === 'night' ? 'default' : 'ghost'}
+                size="sm"
+                onClick={() => setThemeMode('night')}
+                data-testid="button-theme-night"
+                title="Night theme"
+              >
+                <Moon className="w-4 h-4" />
+              </Button>
+              <Button
+                variant={themeMode === 'retro' ? 'default' : 'ghost'}
+                size="sm"
+                onClick={() => setThemeMode('retro')}
+                data-testid="button-theme-retro"
+                title="Retro theme"
+              >
+                <Zap className="w-4 h-4" />
+              </Button>
             </div>
           </div>
 
