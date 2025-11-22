@@ -95,6 +95,11 @@ function DroppableCell({
     disabled: !isDroppable,
   });
 
+  // Debug when something hovers over this cell
+  if (isOver) {
+    console.log('🔵 Hovering over cell:', id, 'isDroppable:', isDroppable);
+  }
+
   const style = {
     backgroundColor: isOver ? 'rgba(59, 130, 246, 0.1)' : undefined,
   };
@@ -427,13 +432,20 @@ export default function Schedules() {
 
   // Handle drag start event
   const handleDragStart = (event: DragStartEvent) => {
+    console.log('🎯 DRAG START:', {
+      activeId: event.active.id,
+      data: event.active.data.current,
+    });
+
     // Check if dragging an occurrence or a driver from sidebar
     if (event.active.data.current?.occurrence) {
       const draggedOccurrence = event.active.data.current.occurrence as ShiftOccurrence;
+      console.log('📦 Dragging occurrence:', draggedOccurrence.blockId, 'Driver:', draggedOccurrence.driverName);
       setActiveOccurrence(draggedOccurrence);
       setActiveDriver(null);
     } else if (event.active.data.current?.type === 'driver') {
       const driver = event.active.data.current.driver as Driver;
+      console.log('👤 Dragging driver:', driver.firstName, driver.lastName);
       setActiveDriver(driver);
       setActiveOccurrence(null);
     }
@@ -443,13 +455,23 @@ export default function Schedules() {
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
 
+    console.log('🏁 DRAG END:', {
+      activeId: active.id,
+      overId: over?.id,
+      hasOver: !!over,
+    });
+
     // Clear the active dragged items
     setActiveOccurrence(null);
     setActiveDriver(null);
 
-    if (!over) return;
+    if (!over) {
+      console.log('❌ NO DROP TARGET DETECTED - Item will snap back');
+      return;
+    }
 
     const targetId = over.id as string;
+    console.log('🎯 Drop target:', targetId);
 
     // SPECIAL CASE: Dropping on Available Drivers Pool to unassign
     if (targetId === 'available-drivers-pool') {
@@ -487,18 +509,28 @@ export default function Schedules() {
     }
 
     // Regular calendar cell drops
-    if (!targetId.startsWith('cell-')) return;
+    if (!targetId.startsWith('cell-')) {
+      console.log('⚠️ Not a calendar cell drop, exiting');
+      return;
+    }
 
     // Parse target cell ID
     const parts = targetId.split('-');
-    if (parts.length < 3) return;
+    if (parts.length < 3) {
+      console.log('⚠️ Invalid cell ID format:', targetId);
+      return;
+    }
 
     const targetDate = parts[1];
     const targetContractId = parts.slice(2).join('-');
+    console.log('📅 Parsed target:', { targetDate, targetContractId });
 
     // Find target occurrence in the target cell
     const targetCell = occurrencesByContract[targetContractId]?.[targetDate] || [];
+    console.log('📋 Target cell occurrences:', targetCell.length, targetCell);
+
     if (targetCell.length === 0) {
+      console.log('⚠️ Empty cell - cannot drop here');
       // Show feedback for empty cell drops
       toast({
         variant: "default",
@@ -509,6 +541,7 @@ export default function Schedules() {
     }
 
     const targetOccurrence = targetCell[0];
+    console.log('✅ Target occurrence found:', targetOccurrence.blockId);
 
     // Case 1: Dragging a driver from the sidebar
     if (active.data.current?.type === 'driver') {
