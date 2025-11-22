@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format, startOfWeek, addWeeks, subWeeks, eachDayOfInterval, addDays } from "date-fns";
-import { ChevronLeft, ChevronRight, Calendar, User, Upload, X, LayoutGrid, List, UserMinus, Undo2, Redo2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Calendar, User, Upload, X, LayoutGrid, List, UserMinus, Undo2, Redo2, CheckSquare, XSquare } from "lucide-react";
 import { DndContext, DragEndEvent, DragStartEvent, useDraggable, useDroppable, DragOverlay, PointerSensor, useSensor, useSensors, pointerWithin, closestCenter, rectIntersection, closestCorners } from "@dnd-kit/core";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -84,11 +84,15 @@ function DroppableCell({
   children,
   className,
   isDroppable = true,
+  isSelected = false,
+  onToggleSelection,
 }: {
   id: string;
   children: React.ReactNode;
   className?: string;
   isDroppable?: boolean;
+  isSelected?: boolean;
+  onToggleSelection?: (id: string) => void;
 }) {
   const { isOver, setNodeRef } = useDroppable({
     id,
@@ -101,13 +105,29 @@ function DroppableCell({
   }
 
   const style = {
-    backgroundColor: isOver ? 'rgba(34, 197, 94, 0.2)' : undefined, // Green highlight when hovering
-    boxShadow: isOver ? '0 0 0 2px rgb(34, 197, 94), inset 0 0 20px rgba(34, 197, 94, 0.2)' : undefined,
+    backgroundColor: isOver ? 'rgba(34, 197, 94, 0.2)' : isSelected ? 'rgba(59, 130, 246, 0.1)' : undefined,
+    boxShadow: isOver
+      ? '0 0 0 2px rgb(34, 197, 94), inset 0 0 20px rgba(34, 197, 94, 0.2)'
+      : isSelected
+      ? '0 0 0 2px rgb(59, 130, 246), inset 0 0 20px rgba(59, 130, 246, 0.15)'
+      : undefined,
     transition: 'all 0.15s ease',
   };
 
   return (
-    <td ref={setNodeRef} style={style} className={className} data-droppable="true">
+    <td ref={setNodeRef} style={style} className={`${className} relative`} data-droppable="true">
+      {isDroppable && onToggleSelection && (
+        <input
+          type="checkbox"
+          checked={isSelected}
+          onChange={(e) => {
+            e.stopPropagation();
+            onToggleSelection(id);
+          }}
+          className="absolute top-1 left-1 z-10 w-4 h-4 cursor-pointer"
+          title="Select for bulk operations"
+        />
+      )}
       {children}
     </td>
   );
@@ -179,15 +199,24 @@ export default function Schedules() {
   } | null>(null);
 
   // Undo/Redo history stacks
-  type HistoryAction = {
+  type HistoryChange = {
     occurrenceId: string;
     previousDriverId: string | null;
     newDriverId: string | null;
     blockId: string;
-    timestamp: number;
   };
+
+  type HistoryAction = {
+    changes: HistoryChange[]; // Support bulk operations
+    timestamp: number;
+    isBulk: boolean;
+  };
+
   const [undoStack, setUndoStack] = useState<HistoryAction[]>([]);
   const [redoStack, setRedoStack] = useState<HistoryAction[]>([]);
+
+  // Bulk selection state
+  const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set());
 
   // Configure drag sensors for better performance
   const sensors = useSensors(
@@ -489,11 +518,14 @@ export default function Schedules() {
           onSuccess: () => {
             // Record action in undo stack
             const action: HistoryAction = {
-              occurrenceId: targetOccurrence.occurrenceId,
-              previousDriverId,
-              newDriverId: driver.id,
-              blockId: targetOccurrence.blockId,
+              changes: [{
+                occurrenceId: targetOccurrence.occurrenceId,
+                previousDriverId,
+                newDriverId: driver.id,
+                blockId: targetOccurrence.blockId,
+              }],
               timestamp: Date.now(),
+              isBulk: false,
             };
             setUndoStack(prev => [...prev, action]);
             setRedoStack([]); // Clear redo stack on new action
@@ -520,65 +552,172 @@ export default function Schedules() {
   };
 
   // Undo last assignment change
-  const handleUndo = () => {
+  const handleUndo = async () => {
     if (undoStack.length === 0) return;
 
     const action = undoStack[undoStack.length - 1];
 
-    updateAssignmentMutation.mutate(
-      {
-        occurrenceId: action.occurrenceId,
-        driverId: action.previousDriverId,
-      },
-      {
-        onSuccess: () => {
-          setUndoStack(prev => prev.slice(0, -1));
-          setRedoStack(prev => [...prev, action]);
-          toast({
-            title: "Undo Successful",
-            description: `Reverted assignment on ${action.blockId}`,
-          });
-        },
-        onError: (error: any) => {
-          toast({
-            variant: "destructive",
-            title: "Undo Failed",
-            description: error.message || "Failed to undo assignment",
-          });
-        },
+    try {
+      // Process all changes in the action
+      for (const change of action.changes) {
+        await updateAssignmentMutation.mutateAsync({
+          occurrenceId: change.occurrenceId,
+          driverId: change.previousDriverId,
+        });
       }
-    );
+
+      setUndoStack(prev => prev.slice(0, -1));
+      setRedoStack(prev => [...prev, action]);
+
+      const description = action.isBulk
+        ? `Reverted ${action.changes.length} assignments`
+        : `Reverted assignment on ${action.changes[0].blockId}`;
+
+      toast({ title: "Undo Successful", description });
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Undo Failed",
+        description: error.message || "Failed to undo assignment",
+      });
+    }
   };
 
   // Redo last undone assignment change
-  const handleRedo = () => {
+  const handleRedo = async () => {
     if (redoStack.length === 0) return;
 
     const action = redoStack[redoStack.length - 1];
 
-    updateAssignmentMutation.mutate(
-      {
-        occurrenceId: action.occurrenceId,
-        driverId: action.newDriverId,
-      },
-      {
-        onSuccess: () => {
-          setRedoStack(prev => prev.slice(0, -1));
-          setUndoStack(prev => [...prev, action]);
-          toast({
-            title: "Redo Successful",
-            description: `Reapplied assignment on ${action.blockId}`,
-          });
-        },
-        onError: (error: any) => {
-          toast({
-            variant: "destructive",
-            title: "Redo Failed",
-            description: error.message || "Failed to redo assignment",
-          });
-        },
+    try {
+      // Process all changes in the action
+      for (const change of action.changes) {
+        await updateAssignmentMutation.mutateAsync({
+          occurrenceId: change.occurrenceId,
+          driverId: change.newDriverId,
+        });
       }
-    );
+
+      setRedoStack(prev => prev.slice(0, -1));
+      setUndoStack(prev => [...prev, action]);
+
+      const description = action.isBulk
+        ? `Reapplied ${action.changes.length} assignments`
+        : `Reapplied assignment on ${action.changes[0].blockId}`;
+
+      toast({ title: "Redo Successful", description });
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Redo Failed",
+        description: error.message || "Failed to redo assignment",
+      });
+    }
+  };
+
+  // Bulk selection handlers
+  const toggleCellSelection = (cellId: string) => {
+    setSelectedCells(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(cellId)) {
+        newSet.delete(cellId);
+      } else {
+        newSet.add(cellId);
+      }
+      return newSet;
+    });
+  };
+
+  const selectAllUnassigned = () => {
+    const unassignedCellIds = new Set<string>();
+    Object.entries(occurrencesByContract).forEach(([tractorId, dates]) => {
+      Object.entries(dates).forEach(([date, occurrences]) => {
+        occurrences.forEach(occ => {
+          if (!occ.driverId) {
+            const cellId = `cell-${date}-${tractorId}-${occ.startTime}`;
+            unassignedCellIds.add(cellId);
+          }
+        });
+      });
+    });
+    setSelectedCells(unassignedCellIds);
+    toast({
+      title: "Selection Updated",
+      description: `Selected ${unassignedCellIds.size} unassigned shifts`,
+    });
+  };
+
+  const clearSelection = () => {
+    setSelectedCells(new Set());
+  };
+
+  const unassignSelected = async () => {
+    if (selectedCells.size === 0) {
+      toast({
+        variant: "destructive",
+        title: "No Selection",
+        description: "Please select cells first",
+      });
+      return;
+    }
+
+    const changes: HistoryChange[] = [];
+
+    try {
+      // Find all occurrences in selected cells
+      for (const cellId of selectedCells) {
+        const parts = cellId.split('-');
+        if (parts.length < 6) continue;
+
+        const targetDate = `${parts[1]}-${parts[2]}-${parts[3]}`;
+        const targetStartTime = parts[parts.length - 1];
+        const targetContractId = parts.slice(4, parts.length - 1).join('-');
+
+        const occurrences = occurrencesByContract[targetContractId]?.[targetDate] || [];
+        const matchingOccurrences = occurrences.filter(occ => occ.startTime === targetStartTime);
+
+        for (const occ of matchingOccurrences) {
+          if (occ.driverId) {
+            // Unassign the driver
+            await updateAssignmentMutation.mutateAsync({
+              occurrenceId: occ.occurrenceId,
+              driverId: null,
+            });
+
+            changes.push({
+              occurrenceId: occ.occurrenceId,
+              previousDriverId: occ.driverId,
+              newDriverId: null,
+              blockId: occ.blockId,
+            });
+          }
+        }
+      }
+
+      if (changes.length > 0) {
+        // Record in undo history
+        const action: HistoryAction = {
+          changes,
+          timestamp: Date.now(),
+          isBulk: true,
+        };
+        setUndoStack(prev => [...prev, action]);
+        setRedoStack([]);
+
+        toast({
+          title: "Bulk Unassign Complete",
+          description: `Unassigned ${changes.length} drivers`,
+        });
+      }
+
+      clearSelection();
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Bulk Unassign Failed",
+        description: error.message || "Failed to unassign drivers",
+      });
+    }
   };
 
   // Assignment update mutation for drag-and-drop
@@ -729,7 +868,69 @@ export default function Schedules() {
     if (active.data.current?.type === 'driver') {
       const driver = active.data.current.driver as Driver;
 
-      // If target already has a driver, REPLACE them
+      // BULK ASSIGNMENT: If cells are selected and drop is on a selected cell
+      if (selectedCells.size > 0 && selectedCells.has(targetId)) {
+        const changes: HistoryChange[] = [];
+
+        try {
+          // Assign driver to all selected cells
+          for (const cellId of selectedCells) {
+            const parts = cellId.split('-');
+            if (parts.length < 6) continue;
+
+            const date = `${parts[1]}-${parts[2]}-${parts[3]}`;
+            const startTime = parts[parts.length - 1];
+            const contractId = parts.slice(4, parts.length - 1).join('-');
+
+            const occurrences = occurrencesByContract[contractId]?.[date] || [];
+            const matchingOccs = occurrences.filter(occ => occ.startTime === startTime);
+
+            for (const occ of matchingOccs) {
+              const previousDriverId = occ.driverId;
+
+              await updateAssignmentMutation.mutateAsync({
+                occurrenceId: occ.occurrenceId,
+                driverId: driver.id,
+              });
+
+              changes.push({
+                occurrenceId: occ.occurrenceId,
+                previousDriverId,
+                newDriverId: driver.id,
+                blockId: occ.blockId,
+              });
+            }
+          }
+
+          if (changes.length > 0) {
+            // Record bulk operation in undo history
+            const action: HistoryAction = {
+              changes,
+              timestamp: Date.now(),
+              isBulk: true,
+            };
+            setUndoStack(prev => [...prev, action]);
+            setRedoStack([]);
+
+            toast({
+              title: "Bulk Assignment Complete",
+              description: `Assigned ${driver.firstName} ${driver.lastName} to ${changes.length} shifts`,
+            });
+          }
+
+          clearSelection();
+          return;
+        } catch (error: any) {
+          toast({
+            variant: "destructive",
+            title: "Bulk Assignment Failed",
+            description: error.message || "Failed to assign driver",
+          });
+          return;
+        }
+      }
+
+      // SINGLE ASSIGNMENT: If target already has a driver, REPLACE them
       if (targetOccurrence.driverId) {
         setPendingAssignment({
           type: 'replace',
@@ -1116,6 +1317,47 @@ export default function Schedules() {
               </Button>
             </div>
 
+            {/* Bulk Selection Controls */}
+            <div className="flex items-center gap-2 border rounded-md p-1">
+              {selectedCells.size > 0 && (
+                <span className="text-sm font-medium text-primary px-2">
+                  {selectedCells.size} selected
+                </span>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={selectAllUnassigned}
+                data-testid="button-select-all-unassigned"
+                title="Select all unassigned shifts"
+              >
+                <CheckSquare className="w-4 h-4 mr-1" />
+                Select Unassigned
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={clearSelection}
+                disabled={selectedCells.size === 0}
+                data-testid="button-clear-selection"
+                title="Clear selection"
+              >
+                <XSquare className="w-4 h-4 mr-1" />
+                Clear
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={unassignSelected}
+                disabled={selectedCells.size === 0 || updateAssignmentMutation.isPending}
+                data-testid="button-unassign-selected"
+                title="Unassign all selected shifts"
+              >
+                <UserMinus className="w-4 h-4 mr-1" />
+                Unassign Selected
+              </Button>
+            </div>
+
             {/* View Toggle */}
             <div className="flex items-center gap-2 border rounded-md p-1">
               <Button
@@ -1315,6 +1557,8 @@ export default function Schedules() {
                           id={`cell-${dayISO}-${contract.tractorId}-${contract.startTime}`}
                           className="p-1.5 border-r last:border-r-0 align-top"
                           isDroppable={true}
+                          isSelected={selectedCells.has(`cell-${dayISO}-${contract.tractorId}-${contract.startTime}`)}
+                          onToggleSelection={toggleCellSelection}
                         >
                           {dayOccurrences.length > 0 ? (
                             <div className="space-y-1">
