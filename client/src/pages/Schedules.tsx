@@ -1376,11 +1376,20 @@ export default function Schedules() {
             dropAnimation={null}
             style={{
               pointerEvents: 'none',
-              cursor: 'grabbing'
             }}
+            modifiers={[
+              (args) => {
+                // Offset the drag overlay so it doesn't block collision detection
+                return {
+                  ...args.transform,
+                  x: args.transform.x + 20,
+                  y: args.transform.y + 20,
+                };
+              },
+            ]}
           >
             {activeDriver ? (
-              <div className="w-48 p-3 rounded-lg bg-blue-500 border-2 border-blue-600 shadow-2xl cursor-grabbing">
+              <div className="w-48 p-3 rounded-lg bg-blue-500 border-2 border-blue-600 shadow-2xl pointer-events-none">
                 <div className="flex items-center gap-2">
                   <User className="w-5 h-5 text-white flex-shrink-0" />
                   <span className="font-semibold text-white text-sm">
@@ -1389,7 +1398,7 @@ export default function Schedules() {
                 </div>
               </div>
             ) : activeOccurrence ? (
-              <div className="w-48 p-3 rounded-lg bg-blue-500 border-2 border-blue-600 shadow-2xl cursor-grabbing">
+              <div className="w-48 p-3 rounded-lg bg-blue-500 border-2 border-blue-600 shadow-2xl pointer-events-none">
                 <div className="flex items-center gap-2">
                   <User className="w-5 h-5 text-white flex-shrink-0" />
                   <span className="font-semibold text-white text-sm">
