@@ -2,6 +2,7 @@ import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format, startOfWeek, addWeeks, subWeeks, eachDayOfInterval, addDays } from "date-fns";
 import { ChevronLeft, ChevronRight, Calendar, User, Upload, X, LayoutGrid, List, UserMinus, Undo2, Redo2, CheckSquare, XSquare, Moon, Sun, Zap, Cpu } from "lucide-react";
+import { useTheme } from "@/contexts/ThemeContext";
 import { DndContext, DragEndEvent, DragStartEvent, useDraggable, useDroppable, DragOverlay, PointerSensor, useSensor, useSensors, pointerWithin, closestCenter, rectIntersection, closestCorners } from "@dnd-kit/core";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -218,51 +219,8 @@ export default function Schedules() {
   // Bulk selection state
   const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set());
 
-  // Theme mode state
-  type ThemeMode = 'night' | 'day' | 'retro' | 'cyberpunk';
-  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
-    // Load from localStorage or default to 'day'
-    const saved = localStorage.getItem('schedules-theme');
-    return (saved as ThemeMode) || 'day';
-  });
-
-  // Save theme to localStorage when it changes
-  useMemo(() => {
-    localStorage.setItem('schedules-theme', themeMode);
-  }, [themeMode]);
-
-  // Get theme-specific styles
-  const getThemeStyles = () => {
-    switch (themeMode) {
-      case 'night':
-        return {
-          background: 'linear-gradient(to bottom, #0f172a 0%, #1e293b 100%)',
-          color: '#e2e8f0',
-          accentColor: '#60a5fa',
-        };
-      case 'retro':
-        return {
-          background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-          color: '#fef3c7',
-          accentColor: '#fbbf24',
-        };
-      case 'cyberpunk':
-        return {
-          background: 'linear-gradient(135deg, #0a0e27 0%, #1a1a2e 50%, #16213e 100%)',
-          color: '#00ffff',
-          accentColor: '#ff00ff',
-        };
-      case 'day':
-      default:
-        return {
-          background: 'linear-gradient(to bottom, #f8fafc 0%, #e2e8f0 100%)',
-          color: '#1e293b',
-          accentColor: '#3b82f6',
-        };
-    }
-  };
-
-  const themeStyles = getThemeStyles();
+  // Use global theme
+  const { themeMode, setThemeMode, themeStyles } = useTheme();
 
   // Configure drag sensors for better performance
   const sensors = useSensors(
@@ -1222,15 +1180,11 @@ export default function Schedules() {
 
   return (
     <div
-      className="flex flex-col h-full transition-all duration-500"
-      style={{ background: themeStyles.background }}
+      className="flex flex-col h-full"
       onClick={handleClickOutside}
     >
       {/* Main Content Area */}
-      <div
-        className="flex-1 flex flex-col p-6 gap-4 overflow-hidden"
-        style={{ color: themeStyles.color }}
-      >
+      <div className="flex-1 flex flex-col p-6 gap-4 overflow-hidden">
         {/* Header */}
         <div className="flex flex-col gap-4">
           {/* Title Section */}
@@ -1571,10 +1525,16 @@ export default function Schedules() {
           />
 
           {/* Calendar */}
-          <Card className="flex-1 overflow-hidden">
+          <Card className="flex-1 overflow-hidden" style={{ backgroundColor: themeMode === 'day' ? undefined : 'rgba(0, 0, 0, 0.2)' }}>
             <CardContent className="p-0 h-full overflow-auto">
           <table className="w-full border-collapse text-sm">
-            <thead className="sticky top-0 z-10 bg-card border-b shadow-md">
+            <thead
+              className="sticky top-0 z-10 border-b shadow-md"
+              style={{
+                backgroundColor: themeMode === 'day' ? undefined : 'rgba(0, 0, 0, 0.3)',
+                color: themeStyles.color
+              }}
+            >
               <tr>
                 <th className="text-left p-3 font-semibold min-w-[220px] border-r shadow-sm">
                   Start Times
@@ -1601,9 +1561,21 @@ export default function Schedules() {
                 </tr>
               ) : (
                 sortedContracts.map((contract) => (
-                  <tr key={contract.id} className="border-b hover:bg-muted/30">
+                  <tr
+                    key={contract.id}
+                    className="border-b"
+                    style={{
+                      backgroundColor: themeMode === 'day' ? undefined : 'rgba(0, 0, 0, 0.1)',
+                    }}
+                  >
                     {/* Bench Slot Cell */}
-                    <td className="p-3 border-r align-top bg-muted/20">
+                    <td
+                      className="p-3 border-r align-top"
+                      style={{
+                        backgroundColor: themeMode === 'day' ? undefined : 'rgba(0, 0, 0, 0.2)',
+                        color: themeStyles.color
+                      }}
+                    >
                       <div className="space-y-1.5">
                         {/* Start Time & Status */}
                         <div className="flex items-center justify-between">
@@ -1664,7 +1636,12 @@ export default function Schedules() {
                                     <div className="relative group">
                                       <button
                                         onClick={() => handleOccurrenceClick(occ)}
-                                        className="w-full p-1.5 rounded-t-md bg-muted/50 text-xs space-y-0.5 text-left hover:bg-muted/70 transition-colors border border-b-0 border-border/50"
+                                        className="w-full p-1.5 rounded-t-md text-xs space-y-0.5 text-left transition-colors border border-b-0"
+                                        style={{
+                                          backgroundColor: themeMode === 'day' ? undefined : 'rgba(255, 255, 255, 0.05)',
+                                          color: themeStyles.color,
+                                          borderColor: themeMode === 'day' ? undefined : 'rgba(255, 255, 255, 0.1)'
+                                        }}
                                         data-testid={`occurrence-static-${occ.occurrenceId}`}
                                       >
                                         {/* Block ID */}
@@ -1739,10 +1716,17 @@ export default function Schedules() {
                                     {occ.driverName ? (
                                       <DraggableOccurrence occurrence={occ}>
                                         <div className="relative group">
-                                          <div className="w-full p-1.5 rounded-b-md bg-blue-50/50 dark:bg-blue-950/20 border border-t-0 border-blue-200/50 dark:border-blue-800/50 text-xs hover:bg-blue-100/50 dark:hover:bg-blue-950/30 transition-colors cursor-grab active:cursor-grabbing">
+                                          <div
+                                            className="w-full p-1.5 rounded-b-md border border-t-0 text-xs transition-colors cursor-grab active:cursor-grabbing"
+                                            style={{
+                                              backgroundColor: themeMode === 'day' ? undefined : 'rgba(59, 130, 246, 0.15)',
+                                              borderColor: themeMode === 'day' ? undefined : 'rgba(59, 130, 246, 0.3)',
+                                              color: themeMode === 'day' ? undefined : themeStyles.color
+                                            }}
+                                          >
                                             <div className="flex items-center gap-1.5">
-                                              <User className="w-3 h-3 text-blue-600 dark:text-blue-400 flex-shrink-0" />
-                                              <span className="font-medium text-blue-900 dark:text-blue-100">
+                                              <User className="w-3 h-3 flex-shrink-0" style={{ color: themeStyles.accentColor }} />
+                                              <span className="font-medium">
                                                 {occ.driverName}
                                               </span>
                                             </div>
@@ -1767,13 +1751,22 @@ export default function Schedules() {
                                       </DraggableOccurrence>
                                     ) : (
                                       <div
-                                        className="w-full p-2 rounded-b-md bg-red-50/50 dark:bg-red-950/20 border border-t-0 border-dashed border-red-200/50 dark:border-red-800/50 text-xs text-center text-red-600 dark:text-red-400 hover:bg-red-100/50 dark:hover:bg-red-950/30 hover:border-blue-400/50 hover:shadow-[0_0_8px_rgba(59,130,246,0.3)] transition-all cursor-pointer"
+                                        className="w-full p-2 rounded-b-md border border-t-0 border-dashed text-xs text-center transition-all cursor-pointer"
+                                        style={{
+                                          backgroundColor: themeMode === 'day' ? undefined : 'rgba(239, 68, 68, 0.15)',
+                                          borderColor: themeMode === 'day' ? undefined : 'rgba(239, 68, 68, 0.3)',
+                                          color: themeMode === 'day' ? undefined : '#ff6b6b'
+                                        }}
                                         onContextMenu={(e) => handleRightClickUnassigned(e, occ)}
                                         title="Right-click to assign driver"
                                       >
                                         <Badge
                                           variant="secondary"
-                                          className="text-xs px-2 py-0.5 bg-red-100 dark:bg-red-950/40 text-red-700 dark:text-red-300"
+                                          className="text-xs px-2 py-0.5"
+                                          style={{
+                                            backgroundColor: themeMode === 'day' ? undefined : 'rgba(239, 68, 68, 0.2)',
+                                            color: themeMode === 'day' ? undefined : '#ff6b6b'
+                                          }}
                                           data-testid={`badge-unassigned-${occ.occurrenceId}`}
                                         >
                                           Unassigned
