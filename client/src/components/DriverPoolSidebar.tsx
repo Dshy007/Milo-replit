@@ -37,15 +37,10 @@ function DraggableDriver({ driver }: { driver: Driver }) {
     },
   });
 
-  const style = transform
-    ? {
-        transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
-        opacity: 0,
-        position: 'relative' as const,
-        zIndex: 9999,
-        pointerEvents: 'none' as const,
-      }
-    : undefined;
+  // Only use opacity - no transform to prevent visual movement
+  const style = {
+    opacity: isDragging ? 0 : 1,
+  };
 
   return (
     <div
@@ -53,7 +48,7 @@ function DraggableDriver({ driver }: { driver: Driver }) {
       {...listeners}
       {...attributes}
       className="flex items-center gap-2 p-2.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-500 shadow-sm hover:shadow-md cursor-grab active:cursor-grabbing"
-      style={{ ...style, willChange: isDragging ? 'transform' : 'auto' }}
+      style={style}
     >
       <User className="w-4 h-4 text-slate-600 dark:text-slate-400 flex-shrink-0" />
       <span className="text-sm font-medium truncate text-slate-900 dark:text-slate-100">
@@ -75,23 +70,16 @@ function DroppableAvailableSection({ children }: { children: React.ReactNode }) 
   });
 
   return (
-    <div className="relative">
-      {/* Invisible droppable overlay - only catches drop events */}
-      <div
-        ref={setNodeRef}
-        className="absolute inset-0 pointer-events-none z-0"
-      />
-
-      {/* Visual container with drivers */}
-      <div
-        className={`space-y-2 rounded-lg transition-all p-3 relative z-10 ${
-          isOver
-            ? 'bg-green-50 dark:bg-green-950/20 ring-2 ring-green-400 dark:ring-green-600 shadow-[0_0_12px_rgba(34,197,94,0.4)]'
-            : 'bg-slate-50/50 dark:bg-slate-900/30'
-        }`}
-      >
-        {children}
-      </div>
+    <div
+      ref={setNodeRef}
+      className={`space-y-2 rounded-lg transition-all p-3 ${
+        isOver
+          ? 'bg-green-50 dark:bg-green-950/20 ring-2 ring-green-400 dark:ring-green-600 shadow-[0_0_12px_rgba(34,197,94,0.4)]'
+          : 'bg-slate-50/50 dark:bg-slate-900/30'
+      }`}
+      style={{ pointerEvents: 'auto' }}
+    >
+      {children}
     </div>
   );
 }
