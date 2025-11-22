@@ -519,15 +519,17 @@ export default function Schedules() {
       return;
     }
 
-    // Parse target cell ID
+    // Parse target cell ID: cell-YYYY-MM-DD-TractorId
     const parts = targetId.split('-');
-    if (parts.length < 3) {
+    if (parts.length < 5) {
       console.log('⚠️ Invalid cell ID format:', targetId);
       return;
     }
 
-    const targetDate = parts[1];
-    const targetContractId = parts.slice(2).join('-');
+    // Date is always YYYY-MM-DD (parts 1, 2, 3)
+    const targetDate = `${parts[1]}-${parts[2]}-${parts[3]}`;
+    // Tractor ID is everything after the date (part 4 onwards)
+    const targetContractId = parts.slice(4).join('-');
     console.log('📅 Parsed target:', { targetDate, targetContractId });
 
     // Find target occurrence in the target cell
