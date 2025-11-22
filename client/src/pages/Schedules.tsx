@@ -117,45 +117,41 @@ function DroppableCell({
 const customPointerCollision = (args: any) => {
   const { x, y } = args.pointerCoordinates || { x: 0, y: 0 };
 
-  console.log(`🔍 Collision check at (${x}, ${y})`);
-
   // First try pointerWithin
   const pointerCollisions = pointerWithin(args);
 
   if (pointerCollisions.length > 0) {
-    console.log('✅ Pointer collision detected:', pointerCollisions[0].id);
     return pointerCollisions;
   }
 
   // Fallback: Check if pointer is over a droppable cell by checking DOM
   const element = document.elementFromPoint(x, y);
-  console.log('📍 Element at pointer:', element?.tagName, element?.className);
 
   if (element) {
     // Walk up the DOM tree to find a droppable cell
     let current: HTMLElement | null = element as HTMLElement;
     let depth = 0;
     while (current && current !== document.body && depth < 10) {
-      console.log(`  ↑ Level ${depth}: ${current.tagName} - droppable: ${current.dataset?.droppable}`);
-
-      if (current.dataset && current.dataset.droppable === 'true') {
-        // Found a droppable cell, find its ID from droppableContainers
-        const droppable = args.droppableContainers.find((container: any) =>
-          container.node.current === current
-        );
-        if (droppable) {
-          console.log('✅ Found droppable via DOM walk:', droppable.id);
-          return [{ id: droppable.id }];
-        } else {
-          console.log('⚠️ Found droppable element but no matching container');
+      // Check if this is a TD element
+      if (current.tagName === 'TD') {
+        // If it has droppable="true", it's a valid drop target
+        if (current.dataset && current.dataset.droppable === 'true') {
+          const droppable = args.droppableContainers.find((container: any) =>
+            container.node.current === current
+          );
+          if (droppable) {
+            return [{ id: droppable.id }];
+          }
         }
+        // If it's a TD without droppable or with droppable="false", stop looking
+        // This is the bench slot column or other non-droppable cell
+        return [];
       }
       current = current.parentElement;
       depth++;
     }
   }
 
-  console.log('❌ No collision detected after full DOM walk');
   return [];
 };
 
