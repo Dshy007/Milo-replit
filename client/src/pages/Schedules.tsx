@@ -115,6 +115,10 @@ function DroppableCell({
 
 // Custom collision detection that looks at pointer position and finds the cell
 const customPointerCollision = (args: any) => {
+  const { x, y } = args.pointerCoordinates || { x: 0, y: 0 };
+
+  console.log(`🔍 Collision check at (${x}, ${y})`);
+
   // First try pointerWithin
   const pointerCollisions = pointerWithin(args);
 
@@ -124,13 +128,16 @@ const customPointerCollision = (args: any) => {
   }
 
   // Fallback: Check if pointer is over a droppable cell by checking DOM
-  const { x, y } = args.pointerCoordinates || { x: 0, y: 0 };
   const element = document.elementFromPoint(x, y);
+  console.log('📍 Element at pointer:', element?.tagName, element?.className);
 
   if (element) {
     // Walk up the DOM tree to find a droppable cell
     let current: HTMLElement | null = element as HTMLElement;
-    while (current && current !== document.body) {
+    let depth = 0;
+    while (current && current !== document.body && depth < 10) {
+      console.log(`  ↑ Level ${depth}: ${current.tagName} - droppable: ${current.dataset?.droppable}`);
+
       if (current.dataset && current.dataset.droppable === 'true') {
         // Found a droppable cell, find its ID from droppableContainers
         const droppable = args.droppableContainers.find((container: any) =>
@@ -139,13 +146,16 @@ const customPointerCollision = (args: any) => {
         if (droppable) {
           console.log('✅ Found droppable via DOM walk:', droppable.id);
           return [{ id: droppable.id }];
+        } else {
+          console.log('⚠️ Found droppable element but no matching container');
         }
       }
       current = current.parentElement;
+      depth++;
     }
   }
 
-  console.log('⚠️ No collision detected');
+  console.log('❌ No collision detected after full DOM walk');
   return [];
 };
 
@@ -1366,11 +1376,20 @@ export default function Schedules() {
             dropAnimation={null}
             style={{
               pointerEvents: 'none',
-              cursor: 'grabbing'
             }}
+            modifiers={[
+              (args) => {
+                // Offset the drag overlay so it doesn't block collision detection
+                return {
+                  ...args.transform,
+                  x: args.transform.x + 20,
+                  y: args.transform.y + 20,
+                };
+              },
+            ]}
           >
             {activeDriver ? (
-              <div className="w-48 p-3 rounded-lg bg-blue-500 border-2 border-blue-600 shadow-2xl cursor-grabbing">
+              <div className="w-48 p-3 rounded-lg bg-blue-500 border-2 border-blue-600 shadow-2xl pointer-events-none">
                 <div className="flex items-center gap-2">
                   <User className="w-5 h-5 text-white flex-shrink-0" />
                   <span className="font-semibold text-white text-sm">
@@ -1379,7 +1398,7 @@ export default function Schedules() {
                 </div>
               </div>
             ) : activeOccurrence ? (
-              <div className="w-48 p-3 rounded-lg bg-blue-500 border-2 border-blue-600 shadow-2xl cursor-grabbing">
+              <div className="w-48 p-3 rounded-lg bg-blue-500 border-2 border-blue-600 shadow-2xl pointer-events-none">
                 <div className="flex items-center gap-2">
                   <User className="w-5 h-5 text-white flex-shrink-0" />
                   <span className="font-semibold text-white text-sm">
