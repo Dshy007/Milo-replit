@@ -498,7 +498,15 @@ export default function Schedules() {
 
     // Find target occurrence in the target cell
     const targetCell = occurrencesByContract[targetContractId]?.[targetDate] || [];
-    if (targetCell.length === 0) return;
+    if (targetCell.length === 0) {
+      // Show feedback for empty cell drops
+      toast({
+        variant: "default",
+        title: "Cannot Drop Here",
+        description: "This cell has no shift occurrence. Drops are only allowed on cells with existing shifts.",
+      });
+      return;
+    }
 
     const targetOccurrence = targetCell[0];
 
@@ -1108,7 +1116,7 @@ export default function Schedules() {
                           key={day.toISOString()}
                           id={`cell-${dayISO}-${contract.tractorId}`}
                           className="p-1.5 border-r last:border-r-0 align-top"
-                          isDroppable={dayOccurrences.length > 0}
+                          isDroppable={true}
                         >
                           {dayOccurrences.length > 0 ? (
                             <div className="space-y-1">
