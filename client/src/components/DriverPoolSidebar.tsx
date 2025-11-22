@@ -39,7 +39,11 @@ function DraggableDriver({ driver }: { driver: Driver }) {
 
   // Only use opacity - no transform to prevent visual movement
   const style = {
-    opacity: isDragging ? 0 : 1,
+    opacity: isDragging ? 0.4 : 1,
+    backgroundColor: isDragging ? 'rgb(59, 130, 246)' : undefined, // Blue when dragging
+    color: isDragging ? 'white' : undefined,
+    transform: isDragging ? 'scale(1.05)' : undefined,
+    transition: 'all 0.15s ease',
   };
 
   return (
