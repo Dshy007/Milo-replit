@@ -129,6 +129,12 @@ export default function Schedules() {
   const [activeOccurrence, setActiveOccurrence] = useState<ShiftOccurrence | null>(null);
   const [activeDriver, setActiveDriver] = useState<Driver | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; occurrence: ShiftOccurrence } | null>(null);
+  const [pendingAssignment, setPendingAssignment] = useState<{
+    type: 'assign' | 'replace' | 'swap' | 'move';
+    driver: Driver;
+    targetOccurrence: ShiftOccurrence;
+    sourceOccurrence?: ShiftOccurrence;
+  } | null>(null);
 
   // Configure drag sensors for better performance
   const sensors = useSensors(
@@ -413,6 +419,63 @@ export default function Schedules() {
     clearAllMutation.mutate({ weekStart, weekEnd });
   };
 
+  // Confirm and execute pending assignment
+  const confirmAssignment = () => {
+    if (!pendingAssignment) return;
+
+    const { type, driver, targetOccurrence } = pendingAssignment;
+
+    if (type === 'assign') {
+      updateAssignmentMutation.mutate(
+        {
+          occurrenceId: targetOccurrence.occurrenceId,
+          driverId: driver.id,
+        },
+        {
+          onSuccess: () => {
+            toast({
+              title: "Driver Assigned",
+              description: `${driver.firstName} ${driver.lastName} assigned to ${targetOccurrence.blockId}`,
+            });
+            setPendingAssignment(null);
+          },
+          onError: (error: any) => {
+            toast({
+              variant: "destructive",
+              title: "Assignment Failed",
+              description: error.message || "Failed to assign driver",
+            });
+            setPendingAssignment(null);
+          },
+        }
+      );
+    } else if (type === 'replace') {
+      updateAssignmentMutation.mutate(
+        {
+          occurrenceId: targetOccurrence.occurrenceId,
+          driverId: driver.id,
+        },
+        {
+          onSuccess: () => {
+            toast({
+              title: "Driver Replaced",
+              description: `${driver.firstName} ${driver.lastName} replaced ${targetOccurrence.driverName} on ${targetOccurrence.blockId}`,
+            });
+            setPendingAssignment(null);
+          },
+          onError: (error: any) => {
+            toast({
+              variant: "destructive",
+              title: "Assignment Failed",
+              description: error.message || "Failed to replace driver",
+            });
+            setPendingAssignment(null);
+          },
+        }
+      );
+    }
+  };
+
   // Assignment update mutation for drag-and-drop
   const updateAssignmentMutation = useMutation({
     mutationFn: async ({ occurrenceId, driverId }: { occurrenceId: string; driverId: string | null }) => {
@@ -556,63 +619,22 @@ export default function Schedules() {
     if (active.data.current?.type === 'driver') {
       const driver = active.data.current.driver as Driver;
 
-      // TODO: Add validation here (green/gray logic)
-      // For now, allow all assignments
-
       // If target already has a driver, REPLACE them
       if (targetOccurrence.driverId) {
-        const replacedDriverName = targetOccurrence.driverName;
-        const blockId = targetOccurrence.blockId;
-
-        // Fire mutation without waiting
-        updateAssignmentMutation.mutate(
-          {
-            occurrenceId: targetOccurrence.occurrenceId,
-            driverId: driver.id,
-          },
-          {
-            onSuccess: () => {
-              toast({
-                title: "Driver Replaced",
-                description: `${driver.firstName} ${driver.lastName} replaced ${replacedDriverName} on ${blockId}`,
-              });
-            },
-            onError: (error: any) => {
-              toast({
-                variant: "destructive",
-                title: "Assignment Failed",
-                description: error.message || "Failed to replace driver",
-              });
-            },
-          }
-        );
-
+        setPendingAssignment({
+          type: 'replace',
+          driver,
+          targetOccurrence,
+        });
         return;
       }
 
       // Target is empty - just assign
-      updateAssignmentMutation.mutate(
-        {
-          occurrenceId: targetOccurrence.occurrenceId,
-          driverId: driver.id,
-        },
-        {
-          onSuccess: () => {
-            toast({
-              title: "Driver Assigned",
-              description: `${driver.firstName} ${driver.lastName} assigned to ${targetOccurrence.blockId}`,
-            });
-          },
-          onError: (error: any) => {
-            toast({
-              variant: "destructive",
-              title: "Assignment Failed",
-              description: error.message || "Failed to assign driver",
-            });
-          },
-        }
-      );
-
+      setPendingAssignment({
+        type: 'assign',
+        driver,
+        targetOccurrence,
+      });
       return;
     }
 
@@ -1304,9 +1326,15 @@ export default function Schedules() {
           </table>
 
           {/* DragOverlay shows a floating clone while dragging */}
-          <DragOverlay style={{ pointerEvents: 'none' }}>
+          <DragOverlay
+            dropAnimation={null}
+            style={{
+              pointerEvents: 'none',
+              cursor: 'grabbing'
+            }}
+          >
             {activeDriver ? (
-              <div className="w-48 p-3 rounded-lg bg-blue-500 border-2 border-blue-600 shadow-2xl" style={{ transform: 'scale(1.05)' }}>
+              <div className="w-48 p-3 rounded-lg bg-blue-500 border-2 border-blue-600 shadow-2xl cursor-grabbing">
                 <div className="flex items-center gap-2">
                   <User className="w-5 h-5 text-white flex-shrink-0" />
                   <span className="font-semibold text-white text-sm">
@@ -1315,7 +1343,7 @@ export default function Schedules() {
                 </div>
               </div>
             ) : activeOccurrence ? (
-              <div className="w-48 p-3 rounded-lg bg-blue-500 border-2 border-blue-600 shadow-2xl" style={{ transform: 'scale(1.05)' }}>
+              <div className="w-48 p-3 rounded-lg bg-blue-500 border-2 border-blue-600 shadow-2xl cursor-grabbing">
                 <div className="flex items-center gap-2">
                   <User className="w-5 h-5 text-white flex-shrink-0" />
                   <span className="font-semibold text-white text-sm">
@@ -1397,6 +1425,44 @@ export default function Schedules() {
                 className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               >
                 {clearAllMutation.isPending ? "Clearing..." : "Clear All"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Assignment Confirmation Dialog */}
+        <AlertDialog open={!!pendingAssignment} onOpenChange={(open) => !open && setPendingAssignment(null)}>
+          <AlertDialogContent data-testid="dialog-confirm-assignment">
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                {pendingAssignment?.type === 'replace' ? 'Replace Driver?' : 'Assign Driver?'}
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                {pendingAssignment?.type === 'replace' ? (
+                  <>
+                    Replace <strong>{pendingAssignment.targetOccurrence.driverName}</strong> with{' '}
+                    <strong>{pendingAssignment.driver.firstName} {pendingAssignment.driver.lastName}</strong> on{' '}
+                    <strong>{pendingAssignment.targetOccurrence.blockId}</strong>
+                    {' '}({format(new Date(pendingAssignment.targetOccurrence.serviceDate), 'MMM d, yyyy')} at {pendingAssignment.targetOccurrence.startTime})?
+                  </>
+                ) : (
+                  <>
+                    Assign <strong>{pendingAssignment?.driver.firstName} {pendingAssignment?.driver.lastName}</strong> to{' '}
+                    <strong>{pendingAssignment?.targetOccurrence.blockId}</strong>
+                    {' '}({pendingAssignment && format(new Date(pendingAssignment.targetOccurrence.serviceDate), 'MMM d, yyyy')} at {pendingAssignment?.targetOccurrence.startTime})?
+                  </>
+                )}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel data-testid="button-cancel-assignment">Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={confirmAssignment}
+                disabled={updateAssignmentMutation.isPending}
+                data-testid="button-confirm-assignment"
+                className="bg-primary text-primary-foreground hover:bg-primary/90"
+              >
+                {updateAssignmentMutation.isPending ? "Assigning..." : "Confirm"}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
