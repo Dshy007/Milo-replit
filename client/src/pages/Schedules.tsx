@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format, startOfWeek, addWeeks, subWeeks, eachDayOfInterval, addDays } from "date-fns";
-import { ChevronLeft, ChevronRight, Calendar, User, Upload, X, LayoutGrid, List, UserMinus } from "lucide-react";
+import { ChevronLeft, ChevronRight, Calendar, User, Upload, X, LayoutGrid, List, UserMinus, Undo2, Redo2 } from "lucide-react";
 import { DndContext, DragEndEvent, DragStartEvent, useDraggable, useDroppable, DragOverlay, PointerSensor, useSensor, useSensors, pointerWithin, closestCenter, rectIntersection, closestCorners } from "@dnd-kit/core";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -177,6 +177,17 @@ export default function Schedules() {
     targetOccurrence: ShiftOccurrence;
     sourceOccurrence?: ShiftOccurrence;
   } | null>(null);
+
+  // Undo/Redo history stacks
+  type HistoryAction = {
+    occurrenceId: string;
+    previousDriverId: string | null;
+    newDriverId: string | null;
+    blockId: string;
+    timestamp: number;
+  };
+  const [undoStack, setUndoStack] = useState<HistoryAction[]>([]);
+  const [redoStack, setRedoStack] = useState<HistoryAction[]>([]);
 
   // Configure drag sensors for better performance
   const sensors = useSensors(
@@ -466,8 +477,9 @@ export default function Schedules() {
     if (!pendingAssignment) return;
 
     const { type, driver, targetOccurrence } = pendingAssignment;
+    const previousDriverId = targetOccurrence.driverId;
 
-    if (type === 'assign') {
+    if (type === 'assign' || type === 'replace') {
       updateAssignmentMutation.mutate(
         {
           occurrenceId: targetOccurrence.occurrenceId,
@@ -475,9 +487,22 @@ export default function Schedules() {
         },
         {
           onSuccess: () => {
+            // Record action in undo stack
+            const action: HistoryAction = {
+              occurrenceId: targetOccurrence.occurrenceId,
+              previousDriverId,
+              newDriverId: driver.id,
+              blockId: targetOccurrence.blockId,
+              timestamp: Date.now(),
+            };
+            setUndoStack(prev => [...prev, action]);
+            setRedoStack([]); // Clear redo stack on new action
+
             toast({
-              title: "Driver Assigned",
-              description: `${driver.firstName} ${driver.lastName} assigned to ${targetOccurrence.blockId}`,
+              title: type === 'assign' ? "Driver Assigned" : "Driver Replaced",
+              description: type === 'assign'
+                ? `${driver.firstName} ${driver.lastName} assigned to ${targetOccurrence.blockId}`
+                : `${driver.firstName} ${driver.lastName} replaced ${targetOccurrence.driverName} on ${targetOccurrence.blockId}`,
             });
             setPendingAssignment(null);
           },
@@ -491,31 +516,69 @@ export default function Schedules() {
           },
         }
       );
-    } else if (type === 'replace') {
-      updateAssignmentMutation.mutate(
-        {
-          occurrenceId: targetOccurrence.occurrenceId,
-          driverId: driver.id,
-        },
-        {
-          onSuccess: () => {
-            toast({
-              title: "Driver Replaced",
-              description: `${driver.firstName} ${driver.lastName} replaced ${targetOccurrence.driverName} on ${targetOccurrence.blockId}`,
-            });
-            setPendingAssignment(null);
-          },
-          onError: (error: any) => {
-            toast({
-              variant: "destructive",
-              title: "Assignment Failed",
-              description: error.message || "Failed to replace driver",
-            });
-            setPendingAssignment(null);
-          },
-        }
-      );
     }
+  };
+
+  // Undo last assignment change
+  const handleUndo = () => {
+    if (undoStack.length === 0) return;
+
+    const action = undoStack[undoStack.length - 1];
+
+    updateAssignmentMutation.mutate(
+      {
+        occurrenceId: action.occurrenceId,
+        driverId: action.previousDriverId,
+      },
+      {
+        onSuccess: () => {
+          setUndoStack(prev => prev.slice(0, -1));
+          setRedoStack(prev => [...prev, action]);
+          toast({
+            title: "Undo Successful",
+            description: `Reverted assignment on ${action.blockId}`,
+          });
+        },
+        onError: (error: any) => {
+          toast({
+            variant: "destructive",
+            title: "Undo Failed",
+            description: error.message || "Failed to undo assignment",
+          });
+        },
+      }
+    );
+  };
+
+  // Redo last undone assignment change
+  const handleRedo = () => {
+    if (redoStack.length === 0) return;
+
+    const action = redoStack[redoStack.length - 1];
+
+    updateAssignmentMutation.mutate(
+      {
+        occurrenceId: action.occurrenceId,
+        driverId: action.newDriverId,
+      },
+      {
+        onSuccess: () => {
+          setRedoStack(prev => prev.slice(0, -1));
+          setUndoStack(prev => [...prev, action]);
+          toast({
+            title: "Redo Successful",
+            description: `Reapplied assignment on ${action.blockId}`,
+          });
+        },
+        onError: (error: any) => {
+          toast({
+            variant: "destructive",
+            title: "Redo Failed",
+            description: error.message || "Failed to redo assignment",
+          });
+        },
+      }
+    );
   };
 
   // Assignment update mutation for drag-and-drop
@@ -1026,6 +1089,30 @@ export default function Schedules() {
               >
                 Next Week
                 <ChevronRight className="w-4 h-4" />
+              </Button>
+            </div>
+
+            {/* Undo/Redo */}
+            <div className="flex items-center gap-1 border rounded-md p-0.5">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleUndo}
+                disabled={undoStack.length === 0 || updateAssignmentMutation.isPending}
+                data-testid="button-undo"
+                title="Undo last assignment"
+              >
+                <Undo2 className="w-4 h-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleRedo}
+                disabled={redoStack.length === 0 || updateAssignmentMutation.isPending}
+                data-testid="button-redo"
+                title="Redo last undone assignment"
+              >
+                <Redo2 className="w-4 h-4" />
               </Button>
             </div>
 
