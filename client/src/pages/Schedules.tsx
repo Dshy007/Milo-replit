@@ -626,24 +626,28 @@ export default function Schedules() {
       return;
     }
 
-    // Parse target cell ID: cell-YYYY-MM-DD-TractorId
+    // Parse target cell ID: cell-YYYY-MM-DD-TractorId-HH:MM
     const parts = targetId.split('-');
-    if (parts.length < 5) {
+    if (parts.length < 7) {
       console.log('⚠️ Invalid cell ID format:', targetId);
       return;
     }
 
     // Date is always YYYY-MM-DD (parts 1, 2, 3)
     const targetDate = `${parts[1]}-${parts[2]}-${parts[3]}`;
-    // Tractor ID is everything after the date (part 4 onwards)
-    const targetContractId = parts.slice(4).join('-');
-    console.log('📅 Parsed target:', { targetDate, targetContractId });
+    // Start time is the last part (HH:MM format like "00:30")
+    const targetStartTime = parts[parts.length - 1];
+    // Tractor ID is everything between date and time
+    const targetContractId = parts.slice(4, parts.length - 1).join('-');
+    console.log('📅 Parsed target:', { targetDate, targetContractId, targetStartTime });
 
     // Find target occurrence in the target cell
     const targetCell = occurrencesByContract[targetContractId]?.[targetDate] || [];
-    console.log('📋 Target cell occurrences:', targetCell.length, targetCell);
+    // Filter by start time to get the exact occurrence for this row
+    const matchingOccurrences = targetCell.filter(occ => occ.startTime === targetStartTime);
+    console.log('📋 Target cell occurrences:', matchingOccurrences.length, matchingOccurrences);
 
-    if (targetCell.length === 0) {
+    if (matchingOccurrences.length === 0) {
       console.log('⚠️ Empty cell - cannot drop here');
       // Show feedback for empty cell drops
       toast({
@@ -654,8 +658,8 @@ export default function Schedules() {
       return;
     }
 
-    const targetOccurrence = targetCell[0];
-    console.log('✅ Target occurrence found:', targetOccurrence.blockId);
+    const targetOccurrence = matchingOccurrences[0];
+    console.log('✅ Target occurrence found:', targetOccurrence.blockId, 'at', targetOccurrence.startTime);
 
     // Case 1: Dragging a driver from the sidebar
     if (active.data.current?.type === 'driver') {
@@ -1220,7 +1224,7 @@ export default function Schedules() {
                       return (
                         <DroppableCell
                           key={day.toISOString()}
-                          id={`cell-${dayISO}-${contract.tractorId}`}
+                          id={`cell-${dayISO}-${contract.tractorId}-${contract.startTime}`}
                           className="p-1.5 border-r last:border-r-0 align-top"
                           isDroppable={true}
                         >
