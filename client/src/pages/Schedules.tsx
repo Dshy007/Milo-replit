@@ -1188,59 +1188,17 @@ export default function Schedules() {
         {/* Header */}
         <div className="flex flex-col gap-4">
           {/* Title Section */}
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <div className="flex items-center justify-center w-10 h-10 rounded-full bg-primary/10">
-                <Calendar className="w-5 h-5 text-primary" data-testid="schedules-icon" />
-              </div>
-              <div>
-                <h1 className="text-2xl font-bold text-foreground" data-testid="page-title">
-                  Schedules
-                </h1>
-                <p className="text-sm text-muted-foreground" data-testid="page-subtitle">
-                  Week of {format(weekRange.weekStart, "MMM d")} - {format(addDays(weekRange.weekStart, 6), "MMM d, yyyy")}
-                </p>
-              </div>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center justify-center w-10 h-10 rounded-full bg-primary/10">
+              <Calendar className="w-5 h-5 text-primary" data-testid="schedules-icon" />
             </div>
-
-            {/* Theme Selector */}
-            <div className="flex items-center gap-1 border rounded-md p-0.5">
-              <Button
-                variant={themeMode === 'day' ? 'default' : 'ghost'}
-                size="sm"
-                onClick={() => setThemeMode('day')}
-                data-testid="button-theme-day"
-                title="Day theme"
-              >
-                <Sun className="w-4 h-4" />
-              </Button>
-              <Button
-                variant={themeMode === 'night' ? 'default' : 'ghost'}
-                size="sm"
-                onClick={() => setThemeMode('night')}
-                data-testid="button-theme-night"
-                title="Night theme"
-              >
-                <Moon className="w-4 h-4" />
-              </Button>
-              <Button
-                variant={themeMode === 'retro' ? 'default' : 'ghost'}
-                size="sm"
-                onClick={() => setThemeMode('retro')}
-                data-testid="button-theme-retro"
-                title="Retro theme"
-              >
-                <Zap className="w-4 h-4" />
-              </Button>
-              <Button
-                variant={themeMode === 'cyberpunk' ? 'default' : 'ghost'}
-                size="sm"
-                onClick={() => setThemeMode('cyberpunk')}
-                data-testid="button-theme-cyberpunk"
-                title="Cyberpunk theme"
-              >
-                <Cpu className="w-4 h-4" />
-              </Button>
+            <div>
+              <h1 className="text-2xl font-bold text-foreground" data-testid="page-title">
+                Schedules
+              </h1>
+              <p className="text-sm text-muted-foreground" data-testid="page-subtitle">
+                Week of {format(weekRange.weekStart, "MMM d")} - {format(addDays(weekRange.weekStart, 6), "MMM d, yyyy")}
+              </p>
             </div>
           </div>
 
