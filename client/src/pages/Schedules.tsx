@@ -627,9 +627,10 @@ export default function Schedules() {
     }
 
     // Parse target cell ID: cell-YYYY-MM-DD-TractorId-HH:MM
+    // Note: HH:MM contains colon, not dash, so minimum 6 parts when split on '-'
     const parts = targetId.split('-');
-    if (parts.length < 7) {
-      console.log('⚠️ Invalid cell ID format:', targetId);
+    if (parts.length < 6) {
+      console.log('⚠️ Invalid cell ID format:', targetId, 'parts:', parts.length);
       return;
     }
 
