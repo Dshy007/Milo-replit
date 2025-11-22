@@ -164,9 +164,9 @@ export default function Schedules() {
         driverId: null,
       });
 
-      // Invalidate queries to trigger immediate refetch
-      await queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"], refetchType: 'active' });
-      await queryClient.invalidateQueries({ queryKey: ["/api/drivers"], refetchType: 'active' });
+      // Invalidate queries in parallel (don't block UI)
+      queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"], refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: ["/api/drivers"], refetchType: 'active' });
 
       toast({
         title: "Driver Unassigned",
@@ -205,9 +205,9 @@ export default function Schedules() {
         driverId,
       });
 
-      // Invalidate queries to trigger immediate refetch
-      await queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"], refetchType: 'active' });
-      await queryClient.invalidateQueries({ queryKey: ["/api/drivers"], refetchType: 'active' });
+      // Invalidate queries in parallel (don't block UI)
+      queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"], refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: ["/api/drivers"], refetchType: 'active' });
 
       const driver = allDrivers.find(d => d.id === driverId);
       toast({
