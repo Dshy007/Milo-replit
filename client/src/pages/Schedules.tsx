@@ -139,7 +139,7 @@ export default function Schedules() {
 
   // Log collision detection strategy on mount
   useMemo(() => {
-    console.log('🎮 Using collision detection: closestCenter (more forgiving than pointerWithin)');
+    console.log('🎮 Using collision detection: rectIntersection (requires actual overlap)');
   }, []);
 
   // Fetch contracts to get static start times
@@ -1064,7 +1064,7 @@ export default function Schedules() {
       {viewMode === "calendar" && (
         <DndContext
           sensors={sensors}
-          collisionDetection={closestCenter}
+          collisionDetection={rectIntersection}
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
         >
