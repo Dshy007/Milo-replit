@@ -43,8 +43,8 @@ export const ThemeProvider = ({ children }: ThemeProviderProps) => {
     switch (themeMode) {
       case 'night':
         return {
-          background: 'linear-gradient(to bottom, #020617 0%, #0f172a 100%)',
-          color: '#cbd5e1',
+          background: '#000000',
+          color: '#ffffff',
           accentColor: '#60a5fa',
         };
       case 'retro':
