@@ -80,7 +80,7 @@ export const ThemeProvider = ({ children }: ThemeProviderProps) => {
   return (
     <ThemeContext.Provider value={value}>
       <div
-        className="min-h-screen transition-all duration-500"
+        className={`min-h-screen transition-all duration-500 ${themeMode === 'night' ? 'dark' : ''}`}
         style={{ background: themeStyles.background, color: themeStyles.color }}
       >
         {children}
