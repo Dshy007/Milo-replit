@@ -138,21 +138,42 @@ function DroppableCell({
 const customPointerCollision = (args: any) => {
   const { x, y } = args.pointerCoordinates || { x: 0, y: 0 };
 
-  // First try pointerWithin
+  // First try pointerWithin - this is the most accurate
   const pointerCollisions = pointerWithin(args);
 
   if (pointerCollisions.length > 0) {
     return pointerCollisions;
   }
 
-  // Fallback: Check if pointer is over a droppable cell by checking DOM
+  // Fallback 1: Try other collision detection algorithms
+  const rectCollisions = rectIntersection(args);
+  if (rectCollisions.length > 0) {
+    return rectCollisions;
+  }
+
+  const centerCollisions = closestCenter(args);
+  if (centerCollisions.length > 0) {
+    return centerCollisions;
+  }
+
+  // Fallback 2: Check if pointer is over a droppable cell by checking DOM
   const element = document.elementFromPoint(x, y);
 
   if (element) {
-    // Walk up the DOM tree to find a droppable cell
+    // Walk up the DOM tree to find a droppable cell or div
     let current: HTMLElement | null = element as HTMLElement;
     let depth = 0;
-    while (current && current !== document.body && depth < 10) {
+    while (current && current !== document.body && depth < 15) {
+      // Check if this element has a data-droppable-id attribute
+      if (current.dataset && current.dataset.droppable === 'true') {
+        const droppable = args.droppableContainers.find((container: any) =>
+          container.node.current === current
+        );
+        if (droppable) {
+          return [{ id: droppable.id }];
+        }
+      }
+
       // Check if this is a TD element
       if (current.tagName === 'TD') {
         // If it has droppable="true", it's a valid drop target
