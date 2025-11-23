@@ -365,7 +365,7 @@ export default function Trucks() {
   }
 
   return (
-    <div className="flex flex-col h-full bg-background p-6 gap-6">
+    <div className="flex flex-col h-full p-6 gap-6">
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="flex items-center justify-center w-10 h-10 rounded-full bg-primary/10">

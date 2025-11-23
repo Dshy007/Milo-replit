@@ -146,7 +146,7 @@ export default function Chat() {
   };
 
   return (
-    <div className="flex flex-col h-full bg-background">
+    <div className="flex flex-col h-full">
       {/* Header */}
       <div className="border-b border-border bg-card/50 backdrop-blur-sm px-6 py-4">
         <div className="flex items-center gap-3">

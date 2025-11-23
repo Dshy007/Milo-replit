@@ -26,7 +26,7 @@ export default function Dashboard() {
   });
 
   return (
-    <div className="bg-background p-6">
+    <div className="p-6">
         <div className="mb-8 flex items-center justify-between">
           <div>
             <h2 className="text-3xl font-bold text-foreground mb-2" data-testid="text-welcome">Welcome back, {user?.username}!</h2>
