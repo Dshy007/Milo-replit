@@ -8,9 +8,7 @@ import { AuthProvider, ProtectedRoute } from "@/lib/auth";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
 import { ChatLauncher } from "@/components/ChatLauncher";
-import { ThemeProvider, useTheme } from "@/contexts/ThemeContext";
-import { Button } from "@/components/ui/button";
-import { Moon, Sun, Zap, Cpu } from "lucide-react";
+import { ThemeProvider } from "@/contexts/ThemeContext";
 import Landing from "@/pages/Landing";
 import Login from "@/pages/Login";
 import Signup from "@/pages/Signup";
@@ -34,55 +32,13 @@ function ProtectedLayout({ children }: { children: ReactNode }) {
     "--sidebar-width-icon": "3rem",
   };
 
-  const { themeMode, setThemeMode } = useTheme();
-
   return (
     <SidebarProvider style={sidebarStyle as CSSProperties}>
       <div className="flex h-screen w-full">
         <AppSidebar />
         <div className="flex flex-col flex-1 overflow-hidden">
-          <header className="flex items-center justify-between gap-2 h-14 px-4 border-b border-border bg-card/50 backdrop-blur-sm">
+          <header className="flex items-center gap-2 h-14 px-4 border-b border-border bg-card/50 backdrop-blur-sm">
             <SidebarTrigger data-testid="button-sidebar-toggle" />
-
-            {/* Theme Selector */}
-            <div className="flex items-center gap-1 border rounded-md p-0.5">
-              <Button
-                variant={themeMode === 'day' ? 'default' : 'ghost'}
-                size="sm"
-                onClick={() => setThemeMode('day')}
-                data-testid="button-theme-day"
-                title="Day theme"
-              >
-                <Sun className="w-4 h-4" />
-              </Button>
-              <Button
-                variant={themeMode === 'night' ? 'default' : 'ghost'}
-                size="sm"
-                onClick={() => setThemeMode('night')}
-                data-testid="button-theme-night"
-                title="Night theme"
-              >
-                <Moon className="w-4 h-4" />
-              </Button>
-              <Button
-                variant={themeMode === 'retro' ? 'default' : 'ghost'}
-                size="sm"
-                onClick={() => setThemeMode('retro')}
-                data-testid="button-theme-retro"
-                title="Retro theme"
-              >
-                <Zap className="w-4 h-4" />
-              </Button>
-              <Button
-                variant={themeMode === 'cyberpunk' ? 'default' : 'ghost'}
-                size="sm"
-                onClick={() => setThemeMode('cyberpunk')}
-                data-testid="button-theme-cyberpunk"
-                title="Cyberpunk theme"
-              >
-                <Cpu className="w-4 h-4" />
-              </Button>
-            </div>
           </header>
           <main className="flex-1 overflow-auto">
             {children}

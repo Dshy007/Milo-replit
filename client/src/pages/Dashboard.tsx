@@ -1,10 +1,11 @@
 import { useAuth } from "@/lib/auth";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Truck, Calendar, Users, Sparkles, Upload, FileSpreadsheet } from "lucide-react";
+import { Truck, Calendar, Users, Sparkles, Upload, FileSpreadsheet, Moon, Sun, Zap, Cpu } from "lucide-react";
 import { ComplianceHeatmap } from "@/components/ComplianceHeatmap";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
+import { useTheme } from "@/contexts/ThemeContext";
 
 type DashboardStats = {
   totalDrivers: number;
@@ -17,7 +18,8 @@ type DashboardStats = {
 
 export default function Dashboard() {
   const { user } = useAuth();
-  
+  const { themeMode, setThemeMode } = useTheme();
+
   // Fetch dashboard stats
   const { data: stats, isLoading } = useQuery<DashboardStats>({
     queryKey: ["/api/dashboard/stats"],
@@ -25,9 +27,51 @@ export default function Dashboard() {
 
   return (
     <div className="bg-background p-6">
-        <div className="mb-8">
-          <h2 className="text-3xl font-bold text-foreground mb-2" data-testid="text-welcome">Welcome back, {user?.username}!</h2>
-          <p className="text-muted-foreground" data-testid="text-subtitle">Manage your trucking operations with AI-powered intelligence</p>
+        <div className="mb-8 flex items-center justify-between">
+          <div>
+            <h2 className="text-3xl font-bold text-foreground mb-2" data-testid="text-welcome">Welcome back, {user?.username}!</h2>
+            <p className="text-muted-foreground" data-testid="text-subtitle">Manage your trucking operations with AI-powered intelligence</p>
+          </div>
+
+          {/* Theme Selector */}
+          <div className="flex items-center gap-1 border rounded-md p-0.5">
+            <Button
+              variant={themeMode === 'day' ? 'default' : 'ghost'}
+              size="sm"
+              onClick={() => setThemeMode('day')}
+              data-testid="button-theme-day"
+              title="Day theme"
+            >
+              <Sun className="w-4 h-4" />
+            </Button>
+            <Button
+              variant={themeMode === 'night' ? 'default' : 'ghost'}
+              size="sm"
+              onClick={() => setThemeMode('night')}
+              data-testid="button-theme-night"
+              title="Night theme"
+            >
+              <Moon className="w-4 h-4" />
+            </Button>
+            <Button
+              variant={themeMode === 'retro' ? 'default' : 'ghost'}
+              size="sm"
+              onClick={() => setThemeMode('retro')}
+              data-testid="button-theme-retro"
+              title="Retro theme"
+            >
+              <Zap className="w-4 h-4" />
+            </Button>
+            <Button
+              variant={themeMode === 'cyberpunk' ? 'default' : 'ghost'}
+              size="sm"
+              onClick={() => setThemeMode('cyberpunk')}
+              data-testid="button-theme-cyberpunk"
+              title="Cyberpunk theme"
+            >
+              <Cpu className="w-4 h-4" />
+            </Button>
+          </div>
         </div>
 
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4 mb-12">
