@@ -142,17 +142,40 @@ const customPointerCollision = (args: any) => {
   const pointerCollisions = pointerWithin(args);
 
   if (pointerCollisions.length > 0) {
+    console.log('🔍 Pointer collisions detected:', pointerCollisions.map((c: any) => c.id));
+    // PRIORITY FIX: If we have multiple collisions, prioritize calendar cells over the pool
+    const cellCollision = pointerCollisions.find((collision: any) =>
+      String(collision.id).startsWith('cell-')
+    );
+    if (cellCollision) {
+      console.log('✅ Prioritizing calendar cell:', cellCollision.id);
+      return [cellCollision]; // Return only the calendar cell
+    }
     return pointerCollisions;
   }
 
   // Fallback 1: Try other collision detection algorithms
   const rectCollisions = rectIntersection(args);
   if (rectCollisions.length > 0) {
+    // PRIORITY FIX: Prioritize calendar cells
+    const cellCollision = rectCollisions.find((collision: any) =>
+      String(collision.id).startsWith('cell-')
+    );
+    if (cellCollision) {
+      return [cellCollision];
+    }
     return rectCollisions;
   }
 
   const centerCollisions = closestCenter(args);
   if (centerCollisions.length > 0) {
+    // PRIORITY FIX: Prioritize calendar cells
+    const cellCollision = centerCollisions.find((collision: any) =>
+      String(collision.id).startsWith('cell-')
+    );
+    if (cellCollision) {
+      return [cellCollision];
+    }
     return centerCollisions;
   }
 
@@ -792,12 +815,14 @@ export default function Schedules() {
 
   // Handle drag end event
   const handleDragEnd = async (event: DragEndEvent) => {
-    const { active, over } = event;
+    const { active, over, collisions } = event;
 
     console.log('🏁 DRAG END:', {
       activeId: active.id,
       overId: over?.id,
       hasOver: !!over,
+      collisionsCount: collisions?.length,
+      collisionIds: collisions?.map((c: any) => c.id),
     });
 
     // Clear the active dragged items
