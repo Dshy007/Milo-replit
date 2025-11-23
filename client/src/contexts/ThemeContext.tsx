@@ -77,10 +77,28 @@ export const ThemeProvider = ({ children }: ThemeProviderProps) => {
     themeStyles,
   };
 
+  // Apply dark class to night, retro, and cyberpunk themes
+  // Apply cyberpunk class for special effects
+  const getThemeClasses = () => {
+    const classes = ['min-h-screen', 'transition-all', 'duration-500'];
+
+    // Apply dark mode variables to all dark themes
+    if (themeMode === 'night' || themeMode === 'retro' || themeMode === 'cyberpunk') {
+      classes.push('dark');
+    }
+
+    // Apply special cyberpunk class for neon effects
+    if (themeMode === 'cyberpunk') {
+      classes.push('cyberpunk');
+    }
+
+    return classes.join(' ');
+  };
+
   return (
     <ThemeContext.Provider value={value}>
       <div
-        className={`min-h-screen transition-all duration-500 ${themeMode === 'night' ? 'dark' : ''}`}
+        className={getThemeClasses()}
         style={{ background: themeStyles.background, color: themeStyles.color }}
       >
         {children}
