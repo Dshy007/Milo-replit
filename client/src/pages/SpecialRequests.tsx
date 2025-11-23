@@ -8,6 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Combobox } from "@/components/ui/combobox";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Calendar } from "@/components/ui/calendar";
@@ -634,20 +635,19 @@ export default function SpecialRequests() {
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Driver</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value}>
-                      <FormControl>
-                        <SelectTrigger data-testid="select-driver">
-                          <SelectValue placeholder="Select driver" />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        {drivers?.map((driver) => (
-                          <SelectItem key={driver.id} value={driver.id}>
-                            {driver.firstName} {driver.lastName}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <FormControl>
+                      <Combobox
+                        options={drivers?.map((driver) => ({
+                          value: driver.id,
+                          label: `${driver.firstName} ${driver.lastName}`
+                        })) || []}
+                        value={field.value}
+                        onValueChange={field.onChange}
+                        placeholder="Select driver"
+                        searchPlaceholder="Search drivers..."
+                        emptyText="No driver found."
+                      />
+                    </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -1186,20 +1186,19 @@ export default function SpecialRequests() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Which driver is this request for?</FormLabel>
-                      <Select onValueChange={field.onChange} value={field.value}>
-                        <FormControl>
-                          <SelectTrigger data-testid="wizard-select-driver">
-                            <SelectValue placeholder="Select driver" />
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                          {drivers?.map((driver) => (
-                            <SelectItem key={driver.id} value={driver.id}>
-                              {driver.firstName} {driver.lastName}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <FormControl>
+                        <Combobox
+                          options={drivers?.map((driver) => ({
+                            value: driver.id,
+                            label: `${driver.firstName} ${driver.lastName}`
+                          })) || []}
+                          value={field.value}
+                          onValueChange={field.onChange}
+                          placeholder="Select driver"
+                          searchPlaceholder="Search drivers..."
+                          emptyText="No driver found."
+                        />
+                      </FormControl>
                       <FormDescription>
                         Choose the driver who needs time off or has a scheduling request
                       </FormDescription>

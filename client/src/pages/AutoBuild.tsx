@@ -15,6 +15,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Combobox } from "@/components/ui/combobox";
 import {
   Table,
   TableBody,
@@ -547,22 +548,19 @@ export default function AutoBuild() {
                           {suggestion.driverName}
                         </TableCell>
                         <TableCell>
-                          <Select
+                          <Combobox
+                            options={allDrivers.map((driver) => ({
+                              value: driver.id,
+                              label: `${driver.firstName} ${driver.lastName}`
+                            }))}
                             value={getEffectiveDriverId(suggestion)}
                             onValueChange={(value) => handleDriverChange(suggestion.blockId, value)}
+                            placeholder="Select driver"
+                            searchPlaceholder="Search drivers..."
+                            emptyText="No driver found."
                             disabled={suggestion.isProtectedAssignment}
-                          >
-                            <SelectTrigger className="w-[180px]" data-testid={`select-driver-${suggestion.blockDisplayId}`}>
-                              <SelectValue>{getEffectiveDriverName(suggestion)}</SelectValue>
-                            </SelectTrigger>
-                            <SelectContent>
-                              {allDrivers.map((driver) => (
-                                <SelectItem key={driver.id} value={driver.id}>
-                                  {driver.firstName} {driver.lastName}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                            className="w-[180px]"
+                          />
                           {manualOverrides.has(suggestion.blockId) && (
                             <Badge variant="outline" className="ml-2">
                               Override

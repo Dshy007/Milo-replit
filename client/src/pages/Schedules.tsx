@@ -116,7 +116,7 @@ function DroppableCell({
   };
 
   return (
-    <td ref={setNodeRef} style={style} className={`${className} relative`} data-droppable="true">
+    <td ref={setNodeRef} style={style} className={`${className} relative`} data-droppable={isDroppable ? "true" : "false"}>
       {isDroppable && onToggleSelection && (
         <input
           type="checkbox"
@@ -1581,7 +1581,7 @@ export default function Schedules() {
                           key={day.toISOString()}
                           id={`cell-${dayISO}-${contract.tractorId}-${contract.startTime}`}
                           className="p-1.5 border-r last:border-r-0 align-top"
-                          isDroppable={true}
+                          isDroppable={dayOccurrences.length > 0}
                           isSelected={selectedCells.has(`cell-${dayISO}-${contract.tractorId}-${contract.startTime}`)}
                           onToggleSelection={toggleCellSelection}
                         >
