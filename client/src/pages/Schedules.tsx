@@ -137,6 +137,12 @@ function DroppableCell({
 // Custom collision detection that looks at pointer position and finds the cell
 const customPointerCollision = (args: any) => {
   const { x, y } = args.pointerCoordinates || { x: 0, y: 0 };
+  const { droppableContainers } = args;
+
+  // Debug: Log all available droppable containers
+  const allDroppableIds = Array.from(droppableContainers.values()).map((c: any) => c.id);
+  const cellDroppables = allDroppableIds.filter(id => String(id).startsWith('cell-'));
+  console.log('📦 Total droppables:', allDroppableIds.length, 'Calendar cells:', cellDroppables.length);
 
   // First try pointerWithin - this is the most accurate
   const pointerCollisions = pointerWithin(args);
