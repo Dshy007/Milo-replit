@@ -868,10 +868,12 @@ export default function Schedules() {
     // Tractor ID is everything between date and time
     const targetContractId = parts.slice(4, parts.length - 1).join('-');
     console.log('📅 Parsed target:', { targetDate, targetContractId, targetStartTime });
+    console.log('🔍 All parts:', parts);
 
     // Find target occurrence in the target cell
     const targetCell = occurrencesByContract[targetContractId]?.[targetDate] || [];
     // Filter by start time to get the exact occurrence for this row
+    console.log('🔍 Filtering:', { targetStartTime, availableTimes: targetCell.map(o => o.startTime) });
     const matchingOccurrences = targetCell.filter(occ => occ.startTime === targetStartTime);
     console.log('📋 Target cell occurrences:', matchingOccurrences.length, matchingOccurrences);
 
