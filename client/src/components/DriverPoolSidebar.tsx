@@ -82,6 +82,7 @@ function DroppableAvailableSection({ children }: { children: React.ReactNode }) 
           : 'bg-slate-50/50 dark:bg-slate-900/30'
       }`}
       style={{ pointerEvents: 'auto' }}
+      data-droppable="true"
     >
       {children}
     </div>
