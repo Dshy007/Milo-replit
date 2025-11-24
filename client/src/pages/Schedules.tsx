@@ -17,6 +17,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -1724,39 +1725,58 @@ export default function Schedules() {
                                     {/* DRIVER SECTION - Draggable or droppable */}
                                     {occ.driverName ? (
                                       <DraggableOccurrence occurrence={occ}>
-                                        <div className="relative group">
-                                          <div
-                                            className="w-full p-1.5 rounded-b-md border border-t-0 text-xs transition-colors cursor-grab active:cursor-grabbing"
-                                            style={{
-                                              backgroundColor: themeMode === 'day' ? undefined : 'rgba(59, 130, 246, 0.15)',
-                                              borderColor: themeMode === 'day' ? undefined : 'rgba(59, 130, 246, 0.3)',
-                                              color: themeMode === 'day' ? undefined : themeStyles.color
-                                            }}
-                                          >
-                                            <div className="flex items-center gap-1.5">
-                                              <User className="w-3 h-3 flex-shrink-0" style={{ color: themeStyles.accentColor }} />
-                                              <span className="font-medium">
-                                                {occ.driverName}
-                                              </span>
-                                            </div>
-                                          </div>
+                                        <TooltipProvider>
+                                          <Tooltip>
+                                            <TooltipTrigger asChild>
+                                              <div className="relative group">
+                                                <div
+                                                  className="w-full p-1.5 rounded-b-md border border-t-0 text-xs transition-colors cursor-grab active:cursor-grabbing"
+                                                  style={{
+                                                    backgroundColor: themeMode === 'day' ? undefined : 'rgba(59, 130, 246, 0.15)',
+                                                    borderColor: themeMode === 'day' ? undefined : 'rgba(59, 130, 246, 0.3)',
+                                                    color: themeMode === 'day' ? undefined : themeStyles.color
+                                                  }}
+                                                >
+                                                  <div className="flex items-center gap-1.5">
+                                                    <User className="w-3 h-3 flex-shrink-0" style={{ color: themeStyles.accentColor }} />
+                                                    <span className="font-medium">
+                                                      {occ.driverName}
+                                                    </span>
+                                                  </div>
+                                                </div>
 
-                                          {/* Unassign Driver Button */}
-                                          <button
-                                            onClick={(e) => handleUnassignDriver(e, occ)}
-                                            disabled={updateAssignmentMutation.isPending}
-                                            className="absolute top-1 right-1 p-0.5 rounded hover:bg-orange-500/20 opacity-0 group-hover:opacity-100 transition-opacity z-10"
-                                            data-testid={`button-unassign-driver-${occ.occurrenceId}`}
-                                            aria-label="Unassign driver"
-                                            title="Unassign driver"
-                                          >
-                                            {updateAssignmentMutation.isPending ? (
-                                              <div className="w-3 h-3 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
-                                            ) : (
-                                              <UserMinus className="w-3 h-3 text-orange-500" />
-                                            )}
-                                          </button>
-                                        </div>
+                                                {/* Unassign Driver Button */}
+                                                <button
+                                                  onClick={(e) => handleUnassignDriver(e, occ)}
+                                                  disabled={updateAssignmentMutation.isPending}
+                                                  className="absolute top-1 right-1 p-0.5 rounded hover:bg-orange-500/20 opacity-0 group-hover:opacity-100 transition-opacity z-10"
+                                                  data-testid={`button-unassign-driver-${occ.occurrenceId}`}
+                                                  aria-label="Unassign driver"
+                                                  title="Unassign driver"
+                                                >
+                                                  {updateAssignmentMutation.isPending ? (
+                                                    <div className="w-3 h-3 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
+                                                  ) : (
+                                                    <UserMinus className="w-3 h-3 text-orange-500" />
+                                                  )}
+                                                </button>
+                                              </div>
+                                            </TooltipTrigger>
+                                            <TooltipContent
+                                              side="top"
+                                              align="center"
+                                              sideOffset={5}
+                                              avoidCollisions={true}
+                                              collisionPadding={8}
+                                            >
+                                              <div className="space-y-1">
+                                                <div className="font-medium">{occ.driverName}</div>
+                                                <div className="text-sm">{occ.blockId}</div>
+                                                <div className="text-xs text-muted-foreground">Drag to move or swap</div>
+                                              </div>
+                                            </TooltipContent>
+                                          </Tooltip>
+                                        </TooltipProvider>
                                       </DraggableOccurrence>
                                     ) : (
                                       <div
