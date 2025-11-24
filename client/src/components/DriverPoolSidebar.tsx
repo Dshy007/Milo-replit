@@ -5,6 +5,7 @@ import { User, Search, ChevronDown, ChevronRight } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Driver } from "@shared/schema";
 
 type ShiftOccurrence = {
@@ -47,18 +48,36 @@ function DraggableDriver({ driver }: { driver: Driver }) {
   };
 
   return (
-    <div
-      ref={setNodeRef}
-      {...listeners}
-      {...attributes}
-      className="flex items-center gap-2 p-2.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-500 shadow-sm hover:shadow-md cursor-grab active:cursor-grabbing"
-      style={style}
-    >
-      <User className="w-4 h-4 text-slate-600 dark:text-slate-400 flex-shrink-0" />
-      <span className="text-sm font-medium truncate text-slate-900 dark:text-slate-100">
-        {driver.firstName} {driver.lastName}
-      </span>
-    </div>
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div
+            ref={setNodeRef}
+            {...listeners}
+            {...attributes}
+            className="flex items-center gap-2 p-2.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-500 shadow-sm hover:shadow-md cursor-grab active:cursor-grabbing"
+            style={style}
+          >
+            <User className="w-4 h-4 text-slate-600 dark:text-slate-400 flex-shrink-0" />
+            <span className="text-sm font-medium truncate text-slate-900 dark:text-slate-100">
+              {driver.firstName} {driver.lastName}
+            </span>
+          </div>
+        </TooltipTrigger>
+        <TooltipContent
+          side="right"
+          align="center"
+          sideOffset={8}
+          avoidCollisions={true}
+          collisionPadding={8}
+        >
+          <div className="space-y-1">
+            <div className="font-medium">{driver.firstName} {driver.lastName}</div>
+            <div className="text-xs text-muted-foreground">Drag to assign to schedule</div>
+          </div>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }
 
