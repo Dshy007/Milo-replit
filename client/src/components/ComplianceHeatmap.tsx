@@ -258,9 +258,10 @@ export function ComplianceHeatmap() {
                               </div>
                             </TooltipTrigger>
                             <TooltipContent
-                              side="top"
-                              align="center"
-                              sideOffset={5}
+                              side="bottom"
+                              align="start"
+                              sideOffset={2}
+                              alignOffset={-8}
                               avoidCollisions={true}
                               collisionPadding={8}
                             >
