@@ -100,6 +100,11 @@ function DroppableCell({
     disabled: !isDroppable,
   });
 
+  // Debug: Log cell creation
+  if (id.startsWith('cell-')) {
+    console.log('📋 DroppableCell created:', id, 'isDroppable:', isDroppable);
+  }
+
   // Debug when something hovers over this cell
   if (isOver) {
     console.log('🔵 Hovering over cell:', id, 'isDroppable:', isDroppable);
@@ -1147,20 +1152,22 @@ export default function Schedules() {
       grouped[tractorId][date].push(occ);
     });
 
+    console.log('📅 Occurrences by contract:', Object.keys(grouped).length, 'tractors with shifts');
+    console.log('📊 Total occurrences:', calendarData.occurrences.length);
     return grouped;
   }, [calendarData]);
 
   // Get sorted and filtered contracts for bench display
   const sortedContracts = useMemo(() => {
     let filtered = [...contracts];
-    
+
     // Apply type filter
     if (filterType !== "all") {
       filtered = filtered.filter(c => c.type.toLowerCase() === filterType);
     }
-    
+
     // Apply sort
-    return filtered.sort((a, b) => {
+    const sorted = filtered.sort((a, b) => {
       if (sortBy === "time") {
         // Sort by start time first, then tractor
         if (a.startTime !== b.startTime) {
@@ -1178,6 +1185,8 @@ export default function Schedules() {
         return a.tractorId.localeCompare(b.tractorId);
       }
     });
+    console.log('🔧 Sorted contracts for rendering:', sorted.length);
+    return sorted;
   }, [contracts, sortBy, filterType]);
 
   // Navigation handlers
