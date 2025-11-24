@@ -257,7 +257,13 @@ export function ComplianceHeatmap() {
                                 </div>
                               </div>
                             </TooltipTrigger>
-                            <TooltipContent>
+                            <TooltipContent
+                              side="top"
+                              align="center"
+                              sideOffset={5}
+                              avoidCollisions={true}
+                              collisionPadding={8}
+                            >
                               <div className="space-y-1">
                                 <div className="font-medium">{cell.driverName}</div>
                                 <div className="text-sm">{format(parseISO(cell.date), "EEEE, MMM d")}</div>
