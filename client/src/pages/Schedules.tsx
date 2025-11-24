@@ -142,7 +142,11 @@ const customPointerCollision = (args: any) => {
   // Debug: Log all available droppable containers
   const allDroppableIds = Array.from(droppableContainers.values()).map((c: any) => c.id);
   const cellDroppables = allDroppableIds.filter(id => String(id).startsWith('cell-'));
-  console.log('📦 Total droppables:', allDroppableIds.length, 'Calendar cells:', cellDroppables.length);
+  const enabledCells = Array.from(droppableContainers.values()).filter((c: any) =>
+    String(c.id).startsWith('cell-') && !c.disabled
+  ).map((c: any) => c.id);
+  console.log('📦 Total droppables:', allDroppableIds.length, 'Calendar cells:', cellDroppables.length, 'Enabled cells:', enabledCells.length);
+  console.log('🖱️ Pointer at:', { x, y });
 
   // First try pointerWithin - this is the most accurate
   const pointerCollisions = pointerWithin(args);
@@ -187,6 +191,7 @@ const customPointerCollision = (args: any) => {
 
   // Fallback 2: Check if pointer is over a droppable cell by checking DOM
   const element = document.elementFromPoint(x, y);
+  console.log('🔍 Element under pointer:', element?.tagName, element?.className);
 
   if (element) {
     // Walk up the DOM tree to find a droppable cell or div
@@ -223,6 +228,7 @@ const customPointerCollision = (args: any) => {
     }
   }
 
+  console.log('❌ No collision detected at pointer position');
   return [];
 };
 
@@ -1808,17 +1814,8 @@ export default function Schedules() {
             dropAnimation={null}
             style={{
               pointerEvents: 'none',
+              cursor: 'grabbing',
             }}
-            modifiers={[
-              (args) => {
-                // Offset the drag overlay so it doesn't block collision detection
-                return {
-                  ...args.transform,
-                  x: args.transform.x + 20,
-                  y: args.transform.y + 20,
-                };
-              },
-            ]}
           >
             {activeDriver ? (
               <div className="w-48 p-3 rounded-lg bg-blue-500 border-2 border-blue-600 shadow-2xl pointer-events-none">
