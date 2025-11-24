@@ -101,6 +101,11 @@ function DroppableCell({
     disabled: false, // Always enabled - validation happens in handleDragEnd
   });
 
+  // Debug cell registration
+  if (id.startsWith('cell-')) {
+    console.log('🔵 DIAGNOSTIC: Cell registered:', id, 'isDroppable:', isDroppable);
+  }
+
   const style = {
     backgroundColor: isOver ? 'rgba(34, 197, 94, 0.2)' : isSelected ? 'rgba(59, 130, 246, 0.1)' : undefined,
     boxShadow: isOver
@@ -133,17 +138,25 @@ function DroppableCell({
 // Custom collision detection that looks at pointer position and finds the cell
 const customPointerCollision = (args: any) => {
   const { x, y } = args.pointerCoordinates || { x: 0, y: 0 };
+  const { droppableContainers } = args;
+
+  // Log available droppable containers
+  const allDroppableIds = Array.from(droppableContainers.values()).map((c: any) => c.id);
+  const cellDroppables = allDroppableIds.filter(id => String(id).startsWith('cell-'));
+  console.log('🔍 DIAGNOSTIC: Collision detection at', { x, y }, 'Total cells:', cellDroppables.length);
 
   // Try multiple collision detection strategies in order of preference
   // 1. pointerWithin - most accurate for mouse position
   const pointerCollisions = pointerWithin(args);
 
   if (pointerCollisions.length > 0) {
+    console.log('🔍 DIAGNOSTIC: pointerWithin found:', pointerCollisions.map((c: any) => c.id));
     // Prioritize calendar cells over sidebar pool
     const cellCollision = pointerCollisions.find((collision: any) =>
       String(collision.id).startsWith('cell-')
     );
     if (cellCollision) {
+      console.log('✅ DIAGNOSTIC: Collision detected:', cellCollision.id);
       return [cellCollision];
     }
     return pointerCollisions;
@@ -789,15 +802,23 @@ export default function Schedules() {
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
 
+    console.log('🎯 DIAGNOSTIC: Drag ended', {
+      activeId: active.id,
+      overId: over?.id,
+      hasOver: !!over
+    });
+
     // Clear the active dragged items
     setActiveOccurrence(null);
     setActiveDriver(null);
 
     if (!over) {
+      console.log('❌ DIAGNOSTIC: No drop target detected');
       return;
     }
 
     const targetId = over.id as string;
+    console.log('🎯 DIAGNOSTIC: Drop target ID:', targetId);
 
     // SPECIAL CASE: Dropping on Available Drivers Pool to unassign
     if (targetId === 'available-drivers-pool') {
@@ -841,7 +862,10 @@ export default function Schedules() {
 
     // Parse target cell ID: cell-YYYY-MM-DD-TractorId-HH:MM
     const parts = targetId.split('-');
+    console.log('📋 DIAGNOSTIC: Parsing cell ID:', targetId, 'parts:', parts);
+
     if (parts.length < 6) {
+      console.log('❌ DIAGNOSTIC: Invalid cell ID format - too few parts');
       return;
     }
 
@@ -849,11 +873,26 @@ export default function Schedules() {
     const targetStartTime = parts[parts.length - 1];
     const targetContractId = parts.slice(4, parts.length - 1).join('-');
 
+    console.log('📋 DIAGNOSTIC: Parsed cell:', {
+      targetDate,
+      targetContractId,
+      targetStartTime
+    });
+
     // Find target occurrence in the target cell
     const targetCell = occurrencesByContract[targetContractId]?.[targetDate] || [];
+    console.log('📋 DIAGNOSTIC: Target cell occurrences:', targetCell);
+    console.log('📋 DIAGNOSTIC: Looking for startTime:', targetStartTime);
+
     const matchingOccurrences = targetCell.filter(occ => occ.startTime === targetStartTime);
+    console.log('📋 DIAGNOSTIC: Matching occurrences found:', matchingOccurrences.length, matchingOccurrences);
 
     if (matchingOccurrences.length === 0) {
+      console.log('❌ DIAGNOSTIC: NO MATCHING OCCURRENCES - Cannot drop');
+      console.log('📋 DIAGNOSTIC: Available startTimes in this cell:', targetCell.map(o => o.startTime));
+      console.log('📋 DIAGNOSTIC: occurrencesByContract keys:', Object.keys(occurrencesByContract));
+      console.log('📋 DIAGNOSTIC: dates for tractorId', targetContractId, ':', Object.keys(occurrencesByContract[targetContractId] || {}));
+
       toast({
         variant: "default",
         title: "Cannot Drop Here",
@@ -861,6 +900,8 @@ export default function Schedules() {
       });
       return;
     }
+
+    console.log('✅ DIAGNOSTIC: Found matching occurrence:', matchingOccurrences[0]);
 
     const targetOccurrence = matchingOccurrences[0];
 
@@ -1082,6 +1123,10 @@ export default function Schedules() {
       }
       grouped[tractorId][date].push(occ);
     });
+
+    console.log('📊 DIAGNOSTIC: Occurrences loaded:', calendarData.occurrences.length);
+    console.log('📊 DIAGNOSTIC: Grouped by tractorId:', Object.keys(grouped));
+    console.log('📊 DIAGNOSTIC: Full grouped structure:', grouped);
 
     return grouped;
   }, [calendarData]);
@@ -1573,13 +1618,22 @@ export default function Schedules() {
                       const dayOccurrences = (occurrencesByContract[contract.tractorId]?.[dayISO] || [])
                         .filter(occ => occ.startTime === contract.startTime);
 
+                      const cellId = `cell-${dayISO}-${contract.tractorId}-${contract.startTime}`;
+
+                      // Log cell creation with occurrence count
+                      if (dayOccurrences.length === 0) {
+                        console.log('⚠️ DIAGNOSTIC: Creating EMPTY cell:', cellId);
+                      } else {
+                        console.log('✅ DIAGNOSTIC: Creating cell with', dayOccurrences.length, 'occurrence(s):', cellId);
+                      }
+
                       return (
                         <DroppableCell
                           key={day.toISOString()}
-                          id={`cell-${dayISO}-${contract.tractorId}-${contract.startTime}`}
+                          id={cellId}
                           className="p-1.5 border-r last:border-r-0 align-top"
                           isDroppable={true}
-                          isSelected={selectedCells.has(`cell-${dayISO}-${contract.tractorId}-${contract.startTime}`)}
+                          isSelected={selectedCells.has(cellId)}
                           onToggleSelection={toggleCellSelection}
                         >
                           {dayOccurrences.length > 0 ? (
