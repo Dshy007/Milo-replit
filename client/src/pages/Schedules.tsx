@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, memo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format, startOfWeek, addWeeks, subWeeks, eachDayOfInterval, addDays } from "date-fns";
 import { ChevronLeft, ChevronRight, Calendar, User, Upload, X, LayoutGrid, List, UserMinus, Undo2, Redo2, CheckSquare, XSquare, Moon, Sun, Zap, Cpu } from "lucide-react";
@@ -80,8 +80,8 @@ function DraggableOccurrence({ occurrence, children }: { occurrence: ShiftOccurr
   );
 }
 
-// Droppable cell component
-function DroppableCell({
+// Droppable cell component - memoized to prevent re-renders during drag
+const DroppableCell = memo(function DroppableCell({
   id,
   children,
   className,
@@ -102,12 +102,8 @@ function DroppableCell({
     disabled: false, // Always enabled - validation happens in handleDragEnd
   });
 
-  // Debug cell registration
-  if (id.startsWith('cell-')) {
-    console.log('🔵 DIAGNOSTIC: Cell registered:', id, 'isDroppable:', isDroppable);
-  }
-
-  const style = {
+  // Memoize style to prevent unnecessary re-renders
+  const style = useMemo(() => ({
     backgroundColor: isOver ? 'rgba(34, 197, 94, 0.2)' : isSelected ? 'rgba(59, 130, 246, 0.1)' : undefined,
     boxShadow: isOver
       ? '0 0 0 2px rgb(34, 197, 94), inset 0 0 20px rgba(34, 197, 94, 0.2)'
@@ -115,7 +111,7 @@ function DroppableCell({
       ? '0 0 0 2px rgb(59, 130, 246), inset 0 0 20px rgba(59, 130, 246, 0.15)'
       : undefined,
     transition: 'all 0.15s ease',
-  };
+  }), [isOver, isSelected]);
 
   return (
     <td ref={setNodeRef} style={style} className={`${className} relative`} data-droppable={isDroppable ? "true" : "false"}>
@@ -134,30 +130,22 @@ function DroppableCell({
       {children}
     </td>
   );
-}
+});
 
 // Custom collision detection that looks at pointer position and finds the cell
 const customPointerCollision = (args: any) => {
-  const { x, y } = args.pointerCoordinates || { x: 0, y: 0 };
   const { droppableContainers } = args;
-
-  // Log available droppable containers
-  const allDroppableIds = Array.from(droppableContainers.values()).map((c: any) => c.id);
-  const cellDroppables = allDroppableIds.filter(id => String(id).startsWith('cell-'));
-  console.log('🔍 DIAGNOSTIC: Collision detection at', { x, y }, 'Total cells:', cellDroppables.length);
 
   // Try multiple collision detection strategies in order of preference
   // 1. pointerWithin - most accurate for mouse position
   const pointerCollisions = pointerWithin(args);
 
   if (pointerCollisions.length > 0) {
-    console.log('🔍 DIAGNOSTIC: pointerWithin found:', pointerCollisions.map((c: any) => c.id));
     // Prioritize calendar cells over sidebar pool
     const cellCollision = pointerCollisions.find((collision: any) =>
       String(collision.id).startsWith('cell-')
     );
     if (cellCollision) {
-      console.log('✅ DIAGNOSTIC: Collision detected:', cellCollision.id);
       return [cellCollision];
     }
     return pointerCollisions;
