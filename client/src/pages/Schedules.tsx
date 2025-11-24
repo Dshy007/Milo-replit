@@ -95,20 +95,11 @@ function DroppableCell({
   isSelected?: boolean;
   onToggleSelection?: (id: string) => void;
 }) {
+  // CRITICAL FIX: Never disable droppable - always register with DndContext
   const { isOver, setNodeRef } = useDroppable({
     id,
-    disabled: !isDroppable,
+    disabled: false, // Always enabled - validation happens in handleDragEnd
   });
-
-  // Debug: Log cell creation
-  if (id.startsWith('cell-')) {
-    console.log('📋 DroppableCell created:', id, 'isDroppable:', isDroppable);
-  }
-
-  // Debug when something hovers over this cell
-  if (isOver) {
-    console.log('🔵 Hovering over cell:', id, 'isDroppable:', isDroppable);
-  }
 
   const style = {
     backgroundColor: isOver ? 'rgba(34, 197, 94, 0.2)' : isSelected ? 'rgba(59, 130, 246, 0.1)' : undefined,
@@ -142,37 +133,25 @@ function DroppableCell({
 // Custom collision detection that looks at pointer position and finds the cell
 const customPointerCollision = (args: any) => {
   const { x, y } = args.pointerCoordinates || { x: 0, y: 0 };
-  const { droppableContainers } = args;
 
-  // Debug: Log all available droppable containers
-  const allDroppableIds = Array.from(droppableContainers.values()).map((c: any) => c.id);
-  const cellDroppables = allDroppableIds.filter(id => String(id).startsWith('cell-'));
-  const enabledCells = Array.from(droppableContainers.values()).filter((c: any) =>
-    String(c.id).startsWith('cell-') && !c.disabled
-  ).map((c: any) => c.id);
-  console.log('📦 Total droppables:', allDroppableIds.length, 'Calendar cells:', cellDroppables.length, 'Enabled cells:', enabledCells.length);
-  console.log('🖱️ Pointer at:', { x, y });
-
-  // First try pointerWithin - this is the most accurate
+  // Try multiple collision detection strategies in order of preference
+  // 1. pointerWithin - most accurate for mouse position
   const pointerCollisions = pointerWithin(args);
 
   if (pointerCollisions.length > 0) {
-    console.log('🔍 Pointer collisions detected:', pointerCollisions.map((c: any) => c.id));
-    // PRIORITY FIX: If we have multiple collisions, prioritize calendar cells over the pool
+    // Prioritize calendar cells over sidebar pool
     const cellCollision = pointerCollisions.find((collision: any) =>
       String(collision.id).startsWith('cell-')
     );
     if (cellCollision) {
-      console.log('✅ Prioritizing calendar cell:', cellCollision.id);
-      return [cellCollision]; // Return only the calendar cell
+      return [cellCollision];
     }
     return pointerCollisions;
   }
 
-  // Fallback 1: Try other collision detection algorithms
+  // 2. rectIntersection - more forgiving for drag operations
   const rectCollisions = rectIntersection(args);
   if (rectCollisions.length > 0) {
-    // PRIORITY FIX: Prioritize calendar cells
     const cellCollision = rectCollisions.find((collision: any) =>
       String(collision.id).startsWith('cell-')
     );
@@ -182,9 +161,9 @@ const customPointerCollision = (args: any) => {
     return rectCollisions;
   }
 
+  // 3. closestCenter - fallback for when pointer isn't directly over target
   const centerCollisions = closestCenter(args);
   if (centerCollisions.length > 0) {
-    // PRIORITY FIX: Prioritize calendar cells
     const cellCollision = centerCollisions.find((collision: any) =>
       String(collision.id).startsWith('cell-')
     );
@@ -194,17 +173,13 @@ const customPointerCollision = (args: any) => {
     return centerCollisions;
   }
 
-  // Fallback 2: Check if pointer is over a droppable cell by checking DOM
+  // 4. DOM-based fallback - walk up tree to find droppable cell
   const element = document.elementFromPoint(x, y);
-  console.log('🔍 Element under pointer:', element?.tagName, element?.className);
-
   if (element) {
-    // Walk up the DOM tree to find a droppable cell or div
     let current: HTMLElement | null = element as HTMLElement;
     let depth = 0;
-    while (current && current !== document.body && depth < 15) {
-      // Check if this element has a data-droppable-id attribute
-      if (current.dataset && current.dataset.droppable === 'true') {
+    while (current && current !== document.body && depth < 10) {
+      if (current.tagName === 'TD' && current.dataset?.droppable === 'true') {
         const droppable = args.droppableContainers.find((container: any) =>
           container.node.current === current
         );
@@ -212,20 +187,8 @@ const customPointerCollision = (args: any) => {
           return [{ id: droppable.id }];
         }
       }
-
-      // Check if this is a TD element
+      // Stop at non-droppable TD (bench column)
       if (current.tagName === 'TD') {
-        // If it has droppable="true", it's a valid drop target
-        if (current.dataset && current.dataset.droppable === 'true') {
-          const droppable = args.droppableContainers.find((container: any) =>
-            container.node.current === current
-          );
-          if (droppable) {
-            return [{ id: droppable.id }];
-          }
-        }
-        // If it's a TD without droppable or with droppable="false", stop looking
-        // This is the bench slot column or other non-droppable cell
         return [];
       }
       current = current.parentElement;
@@ -233,7 +196,6 @@ const customPointerCollision = (args: any) => {
     }
   }
 
-  console.log('❌ No collision detected at pointer position');
   return [];
 };
 
@@ -292,9 +254,9 @@ export default function Schedules() {
     })
   );
 
-  // Log collision detection strategy on mount
+  // Log setup on mount
   useMemo(() => {
-    console.log('🎮 Using collision detection: custom (pointer + DOM walk fallback)');
+    console.log('🎮 Drag-and-drop initialized with custom collision detection');
   }, []);
 
   // Fetch contracts to get static start times
@@ -811,20 +773,13 @@ export default function Schedules() {
 
   // Handle drag start event
   const handleDragStart = (event: DragStartEvent) => {
-    console.log('🎯 DRAG START:', {
-      activeId: event.active.id,
-      data: event.active.data.current,
-    });
-
     // Check if dragging an occurrence or a driver from sidebar
     if (event.active.data.current?.occurrence) {
       const draggedOccurrence = event.active.data.current.occurrence as ShiftOccurrence;
-      console.log('📦 Dragging occurrence:', draggedOccurrence.blockId, 'Driver:', draggedOccurrence.driverName);
       setActiveOccurrence(draggedOccurrence);
       setActiveDriver(null);
     } else if (event.active.data.current?.type === 'driver') {
       const driver = event.active.data.current.driver as Driver;
-      console.log('👤 Dragging driver:', driver.firstName, driver.lastName);
       setActiveDriver(driver);
       setActiveOccurrence(null);
     }
@@ -832,27 +787,17 @@ export default function Schedules() {
 
   // Handle drag end event
   const handleDragEnd = async (event: DragEndEvent) => {
-    const { active, over, collisions } = event;
-
-    console.log('🏁 DRAG END:', {
-      activeId: active.id,
-      overId: over?.id,
-      hasOver: !!over,
-      collisionsCount: collisions?.length,
-      collisionIds: collisions?.map((c: any) => c.id),
-    });
+    const { active, over } = event;
 
     // Clear the active dragged items
     setActiveOccurrence(null);
     setActiveDriver(null);
 
     if (!over) {
-      console.log('❌ NO DROP TARGET DETECTED - Item will snap back');
       return;
     }
 
     const targetId = over.id as string;
-    console.log('🎯 Drop target:', targetId);
 
     // SPECIAL CASE: Dropping on Available Drivers Pool to unassign
     if (targetId === 'available-drivers-pool') {
@@ -891,37 +836,24 @@ export default function Schedules() {
 
     // Regular calendar cell drops
     if (!targetId.startsWith('cell-')) {
-      console.log('⚠️ Not a calendar cell drop, exiting');
       return;
     }
 
     // Parse target cell ID: cell-YYYY-MM-DD-TractorId-HH:MM
-    // Note: HH:MM contains colon, not dash, so minimum 6 parts when split on '-'
     const parts = targetId.split('-');
     if (parts.length < 6) {
-      console.log('⚠️ Invalid cell ID format:', targetId, 'parts:', parts.length);
       return;
     }
 
-    // Date is always YYYY-MM-DD (parts 1, 2, 3)
     const targetDate = `${parts[1]}-${parts[2]}-${parts[3]}`;
-    // Start time is the last part (HH:MM format like "00:30")
     const targetStartTime = parts[parts.length - 1];
-    // Tractor ID is everything between date and time
     const targetContractId = parts.slice(4, parts.length - 1).join('-');
-    console.log('📅 Parsed target:', { targetDate, targetContractId, targetStartTime });
-    console.log('🔍 All parts:', parts);
 
     // Find target occurrence in the target cell
     const targetCell = occurrencesByContract[targetContractId]?.[targetDate] || [];
-    // Filter by start time to get the exact occurrence for this row
-    console.log('🔍 Filtering:', { targetStartTime, availableTimes: targetCell.map(o => o.startTime) });
     const matchingOccurrences = targetCell.filter(occ => occ.startTime === targetStartTime);
-    console.log('📋 Target cell occurrences:', matchingOccurrences.length, matchingOccurrences);
 
     if (matchingOccurrences.length === 0) {
-      console.log('⚠️ Empty cell - cannot drop here');
-      // Show feedback for empty cell drops
       toast({
         variant: "default",
         title: "Cannot Drop Here",
@@ -931,7 +863,6 @@ export default function Schedules() {
     }
 
     const targetOccurrence = matchingOccurrences[0];
-    console.log('✅ Target occurrence found:', targetOccurrence.blockId, 'at', targetOccurrence.startTime);
 
     // Case 1: Dragging a driver from the sidebar
     if (active.data.current?.type === 'driver') {
@@ -1152,8 +1083,6 @@ export default function Schedules() {
       grouped[tractorId][date].push(occ);
     });
 
-    console.log('📅 Occurrences by contract:', Object.keys(grouped).length, 'tractors with shifts');
-    console.log('📊 Total occurrences:', calendarData.occurrences.length);
     return grouped;
   }, [calendarData]);
 
@@ -1185,7 +1114,6 @@ export default function Schedules() {
         return a.tractorId.localeCompare(b.tractorId);
       }
     });
-    console.log('🔧 Sorted contracts for rendering:', sorted.length);
     return sorted;
   }, [contracts, sortBy, filterType]);
 
