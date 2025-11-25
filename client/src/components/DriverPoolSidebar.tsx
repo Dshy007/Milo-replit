@@ -66,8 +66,9 @@ function DraggableDriver({ driver }: { driver: Driver }) {
         </TooltipTrigger>
         <TooltipContent
           side="right"
-          align="center"
-          sideOffset={8}
+          align="start"
+          sideOffset={4}
+          alignOffset={-4}
           avoidCollisions={true}
           collisionPadding={8}
         >
