@@ -140,7 +140,14 @@ export async function getAssignmentSuggestions(
     const driverAssignments = existingAssignments.filter((a) => a.driverId === driver.id);
     if (driverAssignments.length > 0) {
       // Fetch blocks for existing assignments
-      const assignmentBlockIds = driverAssignments.map((a) => a.blockId);
+      const assignmentBlockIds = driverAssignments
+        .map((a) => a.blockId)
+        .filter((id): id is string => id !== null);
+
+      if (assignmentBlockIds.length === 0) {
+        continue; // Skip if no valid block IDs
+      }
+
       const assignmentBlocks = await db
         .select()
         .from(blocks)
@@ -264,7 +271,7 @@ export async function getAssignmentSuggestions(
         actualRestHours: restValidation.actualRestHours,
       },
       rolling6Status: {
-        isValid: validation.validationResult.validationStatus !== "violation",
+        isValid: validation.validationResult.validationStatus === "valid",
         messages: validation.validationResult.messages,
       },
       stats: driverStats

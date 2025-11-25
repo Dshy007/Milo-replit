@@ -134,7 +134,7 @@ const DroppableCell = memo(function DroppableCell({
 
 // Custom collision detection that looks at pointer position and finds the cell
 const customPointerCollision = (args: any) => {
-  const { droppableContainers } = args;
+  const { droppableContainers, pointerCoordinates } = args;
 
   // Try multiple collision detection strategies in order of preference
   // 1. pointerWithin - most accurate for mouse position
@@ -176,7 +176,8 @@ const customPointerCollision = (args: any) => {
   }
 
   // 4. DOM-based fallback - walk up tree to find droppable cell
-  const element = document.elementFromPoint(x, y);
+  if (!pointerCoordinates) return [];
+  const element = document.elementFromPoint(pointerCoordinates.x, pointerCoordinates.y);
   if (element) {
     let current: HTMLElement | null = element as HTMLElement;
     let depth = 0;
@@ -694,7 +695,7 @@ export default function Schedules() {
 
     try {
       // Find all occurrences in selected cells
-      for (const cellId of selectedCells) {
+      for (const cellId of Array.from(selectedCells)) {
         const parts = cellId.split('-');
         if (parts.length < 6) continue;
 
@@ -904,7 +905,7 @@ export default function Schedules() {
 
         try {
           // Assign driver to all selected cells
-          for (const cellId of selectedCells) {
+          for (const cellId of Array.from(selectedCells)) {
             const parts = cellId.split('-');
             if (parts.length < 6) continue;
 
@@ -1808,38 +1809,46 @@ export default function Schedules() {
               )}
             </tbody>
           </table>
+        </CardContent>
+      </Card>
+        </div>
 
-          {/* DragOverlay shows a floating clone while dragging */}
+          {/* DragOverlay shows a floating clone while dragging - MUST be outside scroll container */}
           <DragOverlay
             dropAnimation={null}
-            style={{
-              pointerEvents: 'none',
-              cursor: 'grabbing',
-            }}
           >
             {activeDriver ? (
-              <div className="w-48 p-3 rounded-lg bg-blue-500 border-2 border-blue-600 shadow-2xl pointer-events-none">
+              <div
+                className="p-3 rounded-lg bg-blue-500 border-2 border-blue-600 shadow-2xl pointer-events-none"
+                style={{
+                  width: 'max-content',
+                  maxWidth: '200px',
+                }}
+              >
                 <div className="flex items-center gap-2">
                   <User className="w-5 h-5 text-white flex-shrink-0" />
-                  <span className="font-semibold text-white text-sm">
+                  <span className="font-semibold text-white text-sm whitespace-nowrap">
                     {activeDriver.firstName} {activeDriver.lastName}
                   </span>
                 </div>
               </div>
             ) : activeOccurrence ? (
-              <div className="w-48 p-3 rounded-lg bg-blue-500 border-2 border-blue-600 shadow-2xl pointer-events-none">
+              <div
+                className="p-3 rounded-lg bg-blue-500 border-2 border-blue-600 shadow-2xl pointer-events-none"
+                style={{
+                  width: 'max-content',
+                  maxWidth: '200px',
+                }}
+              >
                 <div className="flex items-center gap-2">
                   <User className="w-5 h-5 text-white flex-shrink-0" />
-                  <span className="font-semibold text-white text-sm">
+                  <span className="font-semibold text-white text-sm whitespace-nowrap">
                     {activeOccurrence.driverName || 'Unassigned'}
                   </span>
                 </div>
               </div>
             ) : null}
           </DragOverlay>
-        </CardContent>
-      </Card>
-        </div>
         </DndContext>
       )}
 

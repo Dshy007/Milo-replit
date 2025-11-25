@@ -1,10 +1,10 @@
-import type { Express } from "express";
+import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { randomUUID } from "crypto";
 import { dbStorage } from "./db-storage";
 import { db } from "./db";
-import { 
-  insertUserSchema, insertTenantSchema, 
+import {
+  insertUserSchema, insertTenantSchema,
   insertDriverSchema, updateDriverSchema,
   insertTruckSchema, updateTruckSchema,
   insertRouteSchema, updateRouteSchema,
@@ -12,12 +12,12 @@ import {
   insertLoadSchema, updateLoadSchema,
   insertContractSchema, updateContractSchema,
   insertBlockSchema, updateBlockSchema,
-  insertBlockAssignmentSchema,
+  insertBlockAssignmentSchema, updateBlockAssignmentSchema,
   insertProtectedDriverRuleSchema, updateProtectedDriverRuleSchema,
   insertSpecialRequestSchema, updateSpecialRequestSchema,
   insertDriverAvailabilityPreferenceSchema, updateDriverAvailabilityPreferenceSchema,
   blocks, blockAssignments, assignmentHistory, driverContractStats, drivers, protectedDriverRules,
-  shiftOccurrences, shiftTemplates, contracts
+  shiftOccurrences, shiftTemplates, contracts, trucks
 } from "@shared/schema";
 import { eq, and, inArray, sql, gte, lte } from "drizzle-orm";
 import session from "express-session";
@@ -2575,7 +2575,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 const protectedRules = await dbStorage.getProtectedDriverRulesByDriver(driver.id);
                 
                 // Get all block assignments for the tenant to check for multi-driver conflicts
-                const allBlockAssignments = await dbStorage.getBlockAssignments(req.session.tenantId!);
+                const allBlockAssignments = await dbStorage.getBlockAssignmentsByTenant(req.session.tenantId!);
                 
                 const validationResult = await validateBlockAssignment(
                   driver,
@@ -2951,8 +2951,184 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
     }
   });
 
+  // ===== Claude AI Chat Endpoint =====
+
+  app.post("/api/chat/claude", requireAuth, async (req, res) => {
+    try {
+      const { message, history = [] } = req.body;
+
+      if (!message || typeof message !== "string") {
+        return res.status(400).json({ message: "Message is required" });
+      }
+
+      // Get user info for context
+      const user = await dbStorage.getUser(req.session.userId!);
+      const tenant = user?.tenantId ? await dbStorage.getTenant(user.tenantId) : null;
+
+      // Import Anthropic SDK and Claude tools
+      const { default: Anthropic } = await import("@anthropic-ai/sdk");
+      const { executeTool } = await import("./ai-functions");
+      const { convertToolsForClaude, getClaudeSystemPrompt } = await import("./claude-tools");
+
+      const anthropic = new Anthropic({
+        apiKey: process.env.ANTHROPIC_API_KEY
+      });
+
+      const systemPrompt = getClaudeSystemPrompt(
+        tenant?.name || "Unknown",
+        user?.username || "Unknown"
+      );
+
+      // Convert tools to Claude format
+      const claudeTools = convertToolsForClaude();
+
+      // Build messages array - Claude requires user/assistant alternation
+      const claudeMessages: any[] = [];
+
+      // Add history (ensuring proper alternation)
+      let lastRole: string | null = null;
+      history.forEach((msg: any) => {
+        if (msg.role === "assistant" || msg.role === "user") {
+          // Merge consecutive messages from same role
+          if (lastRole === msg.role && claudeMessages.length > 0) {
+            claudeMessages[claudeMessages.length - 1].content += "\n\n" + msg.content;
+          } else {
+            claudeMessages.push({
+              role: msg.role,
+              content: msg.content
+            });
+            lastRole = msg.role;
+          }
+        }
+      });
+
+      // Add current message
+      if (lastRole === "user" && claudeMessages.length > 0) {
+        claudeMessages[claudeMessages.length - 1].content += "\n\n" + message;
+      } else {
+        claudeMessages.push({
+          role: "user",
+          content: message
+        });
+      }
+
+      // Set up SSE headers for streaming
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+
+      // PHASE 1: Non-streaming tool use loop
+      const MAX_TOOL_ITERATIONS = 5;
+      let iteration = 0;
+      let continueLoop = true;
+
+      while (continueLoop && iteration < MAX_TOOL_ITERATIONS) {
+        iteration++;
+        console.log(`[Claude Chat] Iteration ${iteration}`);
+
+        // Make API call
+        const response = await anthropic.messages.create({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 4096,
+          system: systemPrompt,
+          messages: claudeMessages,
+          tools: claudeTools,
+        });
+
+        console.log(`[Claude Chat] Stop reason: ${response.stop_reason}`);
+
+        // Check if Claude wants to use tools
+        if (response.stop_reason === "tool_use") {
+          // Extract tool uses from content blocks
+          const toolUses = response.content.filter((block: any) => block.type === "tool_use");
+          console.log(`[Claude Chat] Processing ${toolUses.length} tool calls`);
+
+          // Add assistant's response to messages (including tool_use blocks)
+          claudeMessages.push({
+            role: "assistant",
+            content: response.content
+          });
+
+          // Execute all tools in parallel
+          const toolResults = await Promise.all(
+            toolUses.map(async (toolUse: any) => {
+              console.log(`[Claude Chat] Executing ${toolUse.name} with input:`, toolUse.input);
+
+              const result = await executeTool(
+                toolUse.name,
+                toolUse.input,
+                {
+                  tenantId: req.session.tenantId!,
+                  userId: req.session.userId!
+                }
+              );
+
+              console.log(`[Claude Chat] Tool ${toolUse.name} result length: ${result.length}`);
+
+              return {
+                type: "tool_result",
+                tool_use_id: toolUse.id,
+                content: result
+              };
+            })
+          );
+
+          // Add tool results as user message
+          claudeMessages.push({
+            role: "user",
+            content: toolResults
+          });
+
+        } else {
+          // No more tool use, we have the final response
+          continueLoop = false;
+
+          // Stream the final response
+          const textContent = response.content
+            .filter((block: any) => block.type === "text")
+            .map((block: any) => block.text)
+            .join("\n\n");
+
+          // Simulate streaming by chunking
+          const chunkSize = 50;
+          for (let i = 0; i < textContent.length; i += chunkSize) {
+            const chunk = textContent.substring(i, i + chunkSize);
+            res.write(`data: ${JSON.stringify({ content: chunk })}\n\n`);
+            await new Promise(resolve => setTimeout(resolve, 10));
+          }
+
+          // Send done signal
+          res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+          res.end();
+        }
+      }
+
+      // If we hit max iterations, send what we have
+      if (iteration >= MAX_TOOL_ITERATIONS) {
+        res.write(`data: ${JSON.stringify({
+          content: "\n\n[Reached maximum tool iteration limit]",
+          done: true
+        })}\n\n`);
+        res.end();
+      }
+
+    } catch (error: any) {
+      console.error("Claude Chat Error:", error);
+
+      if (!res.headersSent) {
+        res.status(500).json({
+          message: "Failed to get Claude response",
+          error: error.message
+        });
+      } else {
+        res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
+        res.end();
+      }
+    }
+  });
+
   // ===== Special Requests Routes =====
-  
+
   // GET /api/special-requests - List all special requests for tenant
   app.get("/api/special-requests", requireAuth, async (req, res) => {
     try {
@@ -3603,7 +3779,9 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
         .from(blockAssignments)
         .where(and(eq(blockAssignments.tenantId, tenantId), eq(blockAssignments.driverId, driverId)));
 
-      const assignmentBlockIds = driverExistingAssignments.map((a) => a.blockId);
+      const assignmentBlockIds = driverExistingAssignments
+        .map((a) => a.blockId)
+        .filter((id): id is string => id !== null);
       const assignmentBlocks = assignmentBlockIds.length > 0
         ? await db.select().from(blocks).where(inArray(blocks.id, assignmentBlockIds))
         : [];

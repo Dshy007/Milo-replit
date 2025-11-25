@@ -126,6 +126,10 @@ export async function analyzeCascadeEffect(
   }
   
   // Fetch the block and driver separately
+  if (!sourceAssignment.blockId) {
+    throw new Error("Assignment has no block ID");
+  }
+
   const sourceBlock = await db.query.blocks.findFirst({
     where: and(
       eq(blocks.id, sourceAssignment.blockId),

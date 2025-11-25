@@ -17,6 +17,7 @@ export default function Chat() {
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingMessage, setStreamingMessage] = useState("");
+  const [model, setModel] = useState<"openai" | "claude">("claude");
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when new messages arrive
@@ -40,7 +41,8 @@ export default function Chat() {
     setStreamingMessage("");
 
     try {
-      const response = await fetch("/api/chat", {
+      const endpoint = model === "claude" ? "/api/chat/claude" : "/api/chat";
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -149,17 +151,45 @@ export default function Chat() {
     <div className="flex flex-col h-full">
       {/* Header */}
       <div className="border-b border-border bg-card/50 backdrop-blur-sm px-6 py-4">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center justify-center w-10 h-10 rounded-full bg-primary/10">
-            <Sparkles className="w-5 h-5 text-primary" data-testid="chat-icon" />
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center justify-center w-10 h-10 rounded-full bg-primary/10">
+              <Sparkles className="w-5 h-5 text-primary" data-testid="chat-icon" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-foreground" data-testid="page-title">
+                Milo AI Assistant
+              </h1>
+              <p className="text-sm text-muted-foreground" data-testid="page-subtitle">
+                Your intelligent trucking operations assistant
+              </p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-2xl font-bold text-foreground" data-testid="page-title">
-              Milo AI Assistant
-            </h1>
-            <p className="text-sm text-muted-foreground" data-testid="page-subtitle">
-              Your intelligent trucking operations assistant
-            </p>
+
+          {/* Model Selector */}
+          <div className="flex items-center gap-2 bg-muted rounded-lg p-1">
+            <button
+              onClick={() => setModel("openai")}
+              className={`px-3 py-1.5 text-sm font-medium rounded transition-colors ${
+                model === "openai"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+              disabled={isStreaming}
+            >
+              GPT-5
+            </button>
+            <button
+              onClick={() => setModel("claude")}
+              className={`px-3 py-1.5 text-sm font-medium rounded transition-colors ${
+                model === "claude"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+              disabled={isStreaming}
+            >
+              Claude Sonnet 4
+            </button>
           </div>
         </div>
       </div>

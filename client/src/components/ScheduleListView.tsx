@@ -288,7 +288,7 @@ export function ScheduleListView({
           {filteredOccurrences.length} of {occurrences.length} results
           {searchQuery && (
             <Button
-              variant="link"
+              variant="ghost"
               size="sm"
               onClick={() => {
                 setSearchQuery("");

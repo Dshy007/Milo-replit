@@ -305,7 +305,9 @@ export async function validateCSVImport(
       ));
     
     // Manually fetch blocks for these assignments
-    const assignmentBlockIds = driverExistingAssignmentRows.map(a => a.blockId);
+    const assignmentBlockIds = driverExistingAssignmentRows
+      .map(a => a.blockId)
+      .filter((id): id is string => id !== null);
     const assignmentBlocks = assignmentBlockIds.length > 0
       ? await db.select().from(blocks).where(inArray(blocks.id, assignmentBlockIds))
       : [];
@@ -437,7 +439,9 @@ export async function commitCSVImport(
         ));
       
       // Manually fetch blocks for these assignments
-      const assignmentBlockIds = driverExistingAssignmentRows.map(a => a.blockId);
+      const assignmentBlockIds = driverExistingAssignmentRows
+        .map(a => a.blockId)
+        .filter((id): id is string => id !== null);
       const assignmentBlocks = assignmentBlockIds.length > 0
         ? await db.select().from(blocks).where(inArray(blocks.id, assignmentBlockIds))
         : [];

@@ -46,7 +46,7 @@ export interface AssignmentSubject {
   endTimestamp: Date;
   duration: number;
   soloType: string;
-  cycleId: string;
+  cycleId: string | null;
   patternGroup: "sunWed" | "wedSat";
 }
 
@@ -61,7 +61,7 @@ export function blockToAssignmentSubject(block: Block): AssignmentSubject {
     // Normalize to 4 decimal places to eliminate floating-point residue
     duration: Number.parseFloat(block.duration.toFixed(4)),
     soloType: block.soloType,
-    cycleId: block.cycleId || "",
+    cycleId: block.cycleId,
     patternGroup: block.patternGroup as "sunWed" | "wedSat",
   };
 }
@@ -75,9 +75,9 @@ export function shiftOccurrenceToAssignmentSubject(
   occurrence: ShiftOccurrence,
   template: ShiftTemplate
 ): AssignmentSubject {
-  const durationHours = (new Date(occurrence.scheduledEnd).getTime() - new Date(occurrence.scheduledStart).getTime()) / 
+  const durationHours = (new Date(occurrence.scheduledEnd).getTime() - new Date(occurrence.scheduledStart).getTime()) /
     (1000 * 60 * 60);
-  
+
   return {
     startTimestamp: new Date(occurrence.scheduledStart),
     endTimestamp: new Date(occurrence.scheduledEnd),
@@ -85,7 +85,7 @@ export function shiftOccurrenceToAssignmentSubject(
     // Prevents false DOT violations from accumulated precision errors
     duration: Number.parseFloat(durationHours.toFixed(4)),
     soloType: template.soloType,
-    cycleId: occurrence.cycleId || "",
+    cycleId: occurrence.cycleId,
     patternGroup: (occurrence.patternGroup || template.patternGroup) as "sunWed" | "wedSat",
   };
 }

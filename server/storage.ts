@@ -1,4 +1,4 @@
-import { 
+import {
   type User, type InsertUser,
   type Tenant, type InsertTenant,
   type Driver, type InsertDriver,
@@ -15,6 +15,20 @@ import {
   type ShiftOccurrence
 } from "@shared/schema";
 import { randomUUID } from "crypto";
+
+/**
+ * Converts undefined to null for database compatibility
+ * Zod schemas allow undefined, but Drizzle schemas use null
+ */
+function normalizeOptionalFields<T extends Record<string, any>>(obj: T): T {
+  const result = { ...obj };
+  for (const key in result) {
+    if (result[key] === undefined) {
+      result[key] = null as any;
+    }
+  }
+  return result;
+}
 
 export interface IStorage {
   // Users
@@ -204,12 +218,9 @@ export class MemStorage implements IStorage {
   async createDriver(insertDriver: InsertDriver): Promise<Driver> {
     const id = randomUUID();
     const driver: Driver = {
-      ...insertDriver,
       id,
+      ...normalizeOptionalFields(insertDriver),
       status: insertDriver.status || "active",
-      phoneNumber: insertDriver.phoneNumber || null,
-      email: insertDriver.email || null,
-      certifications: insertDriver.certifications || null,
       createdAt: new Date(),
       updatedAt: new Date()
     };
@@ -362,6 +373,7 @@ export class MemStorage implements IStorage {
     const contract: Contract = {
       ...insertContract,
       id,
+      status: insertContract.status || 'active',
       daysPerWeek: insertContract.daysPerWeek || 6,
       protectedDrivers: insertContract.protectedDrivers || false,
       createdAt: new Date()
@@ -448,9 +460,11 @@ export class MemStorage implements IStorage {
     const load: Load = {
       ...insertLoad,
       id,
-      scheduleId: insertLoad.scheduleId || null,
-      weight: insertLoad.weight || null,
-      description: insertLoad.description || null,
+      scheduleId: insertLoad.scheduleId ?? null,
+      weight: insertLoad.weight ?? null,
+      description: insertLoad.description ?? null,
+      hazmatClass: insertLoad.hazmatClass ?? null,
+      requiresPlacard: insertLoad.requiresPlacard ?? false,
       status: insertLoad.status || "pending",
       createdAt: new Date(),
       updatedAt: new Date()
@@ -519,7 +533,7 @@ export class MemStorage implements IStorage {
     const block: Block = {
       ...insertBlock,
       id,
-      validationMetadata: insertBlock.validationMetadata || null,
+      status: insertBlock.status || 'active',
       createdAt: new Date(),
       updatedAt: new Date()
     };
@@ -608,8 +622,9 @@ export class MemStorage implements IStorage {
     const assignment: BlockAssignment = {
       ...insertAssignment,
       id,
-      validationMetadata: insertAssignment.validationMetadata || null,
-      assignedAt: new Date()
+      blockId: insertAssignment.blockId ?? null,
+      createdAt: new Date(),
+      isActive: insertAssignment.isActive ?? true
     };
     this.blockAssignments.set(id, assignment);
     return assignment;
@@ -650,6 +665,9 @@ export class MemStorage implements IStorage {
     const rule: ProtectedDriverRule = {
       ...insertRule,
       id,
+      blockedDays: insertRule.blockedDays ?? null,
+      allowedDays: insertRule.allowedDays ?? null,
+      isProtected: insertRule.isProtected ?? true,
       createdAt: new Date(),
       updatedAt: new Date()
     };
@@ -695,8 +713,9 @@ export class MemStorage implements IStorage {
 
   async getSpecialRequestsByDateRange(tenantId: string, startDate: Date, endDate: Date): Promise<SpecialRequest[]> {
     return Array.from(this.specialRequests.values()).filter(
-      (req) => 
+      (req) =>
         req.tenantId === tenantId &&
+        req.affectedDate &&
         req.affectedDate >= startDate &&
         req.affectedDate <= endDate
     );
@@ -708,13 +727,20 @@ export class MemStorage implements IStorage {
     const newRequest: SpecialRequest = {
       ...request,
       id,
+      contractId: request.contractId ?? null,
+      status: request.status ?? null,
+      startDate: request.startDate ?? null,
+      endDate: request.endDate ?? null,
+      startTime: request.startTime ?? null,
+      endTime: request.endTime ?? null,
+      affectedDate: request.affectedDate ?? null,
       requestedAt: now,
       reviewedAt: null,
       reviewedBy: null,
-      notes: request.notes || null,
-      affectedBlockId: request.affectedBlockId || null,
-      swapCandidateId: request.swapCandidateId || null,
-      reason: request.reason || null,
+      notes: request.notes ?? null,
+      affectedBlockId: request.affectedBlockId ?? null,
+      swapCandidateId: request.swapCandidateId ?? null,
+      reason: request.reason ?? null,
       createdAt: now,
       updatedAt: now,
     };

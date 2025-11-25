@@ -4,6 +4,16 @@ import type { Driver, Schedule, Block, BlockAssignment, Contract } from "@shared
 import { startOfDay, endOfDay, addDays, format } from "date-fns";
 
 /**
+ * Helper function to assert non-null values
+ */
+function requireNonNull<T>(value: T | null | undefined, fieldName: string): T {
+  if (value === null || value === undefined) {
+    throw new Error(`Expected ${fieldName} to be non-null`);
+  }
+  return value;
+}
+
+/**
  * OpenAI Function Calling Tool Definitions
  * Using JSON Schema format for OpenAI API
  */
@@ -244,7 +254,7 @@ async function handleGetDriversByType(
   const allAssignments = await dbStorage.getBlockAssignmentsByTenant(tenantId);
   
   // Get blocks to determine solo types
-  const uniqueBlockIds = new Set(allAssignments.map(a => a.blockId));
+  const uniqueBlockIds = new Set(allAssignments.map(a => a.blockId).filter((id): id is string => id !== null));
   const blockMap = new Map<string, Block>();
   for (const blockId of Array.from(uniqueBlockIds)) {
     const block = await dbStorage.getBlock(blockId);
@@ -252,12 +262,12 @@ async function handleGetDriversByType(
       blockMap.set(blockId, block);
     }
   }
-  
+
   // Create a map of driverId -> soloType (from their most recent assignment)
   // Normalize soloType to lowercase for case-insensitive matching
   const driverTypeMap = new Map<string, string>();
   allAssignments.forEach(assignment => {
-    const block = blockMap.get(assignment.blockId);
+    const block = assignment.blockId ? blockMap.get(assignment.blockId) : null;
     if (block && !driverTypeMap.has(assignment.driverId)) {
       driverTypeMap.set(assignment.driverId, block.soloType.toLowerCase());
     }
@@ -327,7 +337,7 @@ async function handleGetDriverByNameOrId(
       const assignments = await dbStorage.getBlockAssignmentsByDriver(driver.id);
       let driverType = "unknown";
       if (assignments.length > 0) {
-        const firstBlock = await dbStorage.getBlock(assignments[0].blockId);
+        const firstBlock = await dbStorage.getBlock(requireNonNull(assignments[0].blockId, "blockId"));
         if (firstBlock) {
           driverType = firstBlock.soloType;
         }
@@ -376,7 +386,7 @@ async function handleGetDriverByNameOrId(
     const assignments = await dbStorage.getBlockAssignmentsByDriver(driver.id);
     let driverType = "unknown";
     if (assignments.length > 0) {
-      const firstBlock = await dbStorage.getBlock(assignments[0].blockId);
+      const firstBlock = await dbStorage.getBlock(requireNonNull(assignments[0].blockId, "blockId"));
       if (firstBlock) {
         driverType = firstBlock.soloType;
       }
@@ -470,7 +480,11 @@ async function handleGetAssignmentsByDate(
   
   // Create assignment map
   const assignmentMap = new Map<string, BlockAssignment>();
-  allAssignments.forEach(a => assignmentMap.set(a.blockId, a));
+  allAssignments.forEach(a => {
+    if (a.blockId) {
+      assignmentMap.set(a.blockId, a);
+    }
+  });
   
   // Get driver info for assigned blocks
   const driverMap = new Map<string, Driver>();
@@ -535,7 +549,11 @@ async function handleGetBlocksByDateRange(
   if (includeAssignments) {
     const allAssignments = await dbStorage.getBlockAssignmentsByTenant(tenantId);
     const assignmentMap = new Map<string, BlockAssignment>();
-    allAssignments.forEach(a => assignmentMap.set(a.blockId, a));
+    allAssignments.forEach(a => {
+      if (a.blockId) {
+        assignmentMap.set(a.blockId, a);
+      }
+    });
     
     const driverMap = new Map<string, Driver>();
     const uniqueDriverIds = new Set(allAssignments.map(a => a.driverId));
@@ -583,7 +601,11 @@ async function handleGetUpcomingAssignments(
   const allAssignments = await dbStorage.getBlockAssignmentsByTenant(tenantId);
   
   const assignmentMap = new Map<string, BlockAssignment>();
-  allAssignments.forEach(a => assignmentMap.set(a.blockId, a));
+  allAssignments.forEach(a => {
+    if (a.blockId) {
+      assignmentMap.set(a.blockId, a);
+    }
+  });
   
   const driverMap = new Map<string, Driver>();
   const uniqueDriverIds = new Set(allAssignments.map(a => a.driverId));
@@ -638,7 +660,7 @@ async function handleGetDriverWorkloadSummary(
   const allAssignments = await dbStorage.getBlockAssignmentsByTenant(tenantId);
   
   // Get blocks to determine solo types
-  const uniqueBlockIds = new Set(allAssignments.map(a => a.blockId));
+  const uniqueBlockIds = new Set(allAssignments.map(a => a.blockId).filter((id): id is string => id !== null));
   const blockMap = new Map<string, Block>();
   for (const blockId of Array.from(uniqueBlockIds)) {
     const block = await dbStorage.getBlock(blockId);
@@ -646,11 +668,11 @@ async function handleGetDriverWorkloadSummary(
       blockMap.set(blockId, block);
     }
   }
-  
+
   // Create driver type map from their block assignments
   const driverTypeMap = new Map<string, string>();
   allAssignments.forEach(assignment => {
-    const block = blockMap.get(assignment.blockId);
+    const block = assignment.blockId ? blockMap.get(assignment.blockId) : null;
     if (block && !driverTypeMap.has(assignment.driverId)) {
       driverTypeMap.set(assignment.driverId, block.soloType);
     }

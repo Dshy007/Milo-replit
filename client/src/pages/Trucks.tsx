@@ -104,7 +104,7 @@ export default function Trucks() {
 
   const addTruckMutation = useMutation({
     mutationFn: async (data: TruckFormData) => {
-      const cleanedData: InsertTruck = {
+      const cleanedData: Omit<InsertTruck, 'tenantId'> = {
         ...data,
         lastInspection: data.lastInspection ? new Date(data.lastInspection) : undefined,
         nextInspection: data.nextInspection ? new Date(data.nextInspection) : undefined,
@@ -290,10 +290,10 @@ export default function Trucks() {
     .filter((truck) => {
       const matchesSearch =
         truck.truckNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        truck.make.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        truck.model.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        truck.vin.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        truck.licensePlate.toLowerCase().includes(searchTerm.toLowerCase());
+        truck.make?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        truck.model?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        truck.vin?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        truck.licensePlate?.toLowerCase().includes(searchTerm.toLowerCase());
       const matchesStatus = statusFilter === "all" || truck.status === statusFilter;
       return matchesSearch && matchesStatus;
     })
@@ -595,6 +595,7 @@ export default function Trucks() {
                             placeholder="Freightliner"
                             data-testid="input-make"
                             {...field}
+                            value={field.value ?? ''}
                           />
                         </FormControl>
                         <FormMessage />
@@ -613,6 +614,7 @@ export default function Trucks() {
                             placeholder="Cascadia"
                             data-testid="input-model"
                             {...field}
+                            value={field.value ?? ''}
                           />
                         </FormControl>
                         <FormMessage />
@@ -657,6 +659,7 @@ export default function Trucks() {
                             placeholder="1FUJGHDV8ELXXXXXX"
                             data-testid="input-vin"
                             {...field}
+                            value={field.value ?? ''}
                           />
                         </FormControl>
                         <FormMessage />
@@ -675,6 +678,7 @@ export default function Trucks() {
                             placeholder="ABC-1234"
                             data-testid="input-license-plate"
                             {...field}
+                            value={field.value ?? ''}
                           />
                         </FormControl>
                         <FormMessage />
@@ -1032,6 +1036,7 @@ export default function Trucks() {
                           placeholder="Freightliner"
                           data-testid="input-edit-make"
                           {...field}
+                          value={field.value ?? ''}
                         />
                       </FormControl>
                       <FormMessage />
@@ -1050,6 +1055,7 @@ export default function Trucks() {
                           placeholder="Cascadia"
                           data-testid="input-edit-model"
                           {...field}
+                          value={field.value ?? ''}
                         />
                       </FormControl>
                       <FormMessage />
@@ -1094,6 +1100,7 @@ export default function Trucks() {
                           placeholder="1FUJGHDV8ELXXXXXX"
                           data-testid="input-edit-vin"
                           {...field}
+                          value={field.value ?? ''}
                         />
                       </FormControl>
                       <FormMessage />
@@ -1112,6 +1119,7 @@ export default function Trucks() {
                           placeholder="ABC-1234"
                           data-testid="input-edit-license-plate"
                           {...field}
+                          value={field.value ?? ''}
                         />
                       </FormControl>
                       <FormMessage />
