@@ -182,7 +182,7 @@ export default function Dashboard() {
                 </div>
               </Link>
 
-              <Link href="/csv-import">
+              <Link href="/import">
                 <div className="flex items-start gap-3 p-4 border border-border rounded-lg hover-elevate active-elevate-2 transition-all cursor-pointer" data-testid="link-import-schedules">
                   <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
                     <Upload className="w-4 h-4 text-primary" />
@@ -220,7 +220,7 @@ export default function Dashboard() {
                   View Schedules
                 </Button>
               </Link>
-              <Link href="/csv-import">
+              <Link href="/import">
                 <Button className="w-full justify-start" variant="outline" data-testid="button-import-csv">
                   <FileSpreadsheet className="w-4 h-4 mr-2" />
                   Import Schedule
