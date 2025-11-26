@@ -278,6 +278,26 @@ export default function Schedules() {
     }>;
     violationCount: number;
     warningCount: number;
+    // Bump detection from cascade analysis
+    bumps: Array<{
+      occurrenceId: string;
+      driverId: string;
+      driverName: string;
+      blockId: string;
+      serviceDate: string;
+      scheduledTime: string;
+      canonicalTime: string;
+      bumpMinutes: number;
+      bumpHours: number;
+      severity: "info" | "warning" | "alert";
+    }>;
+    bumpCount: number;
+    bumpStats: {
+      total: number;
+      info: number;
+      warning: number;
+      alert: number;
+    };
   } | null>(null);
 
   // Use global theme
@@ -1150,11 +1170,20 @@ export default function Schedules() {
         violations: result.violations,
         violationCount: result.violationCount,
         warningCount: result.warningCount,
+        bumps: result.bumps || [],
+        bumpCount: result.bumpCount || 0,
+        bumpStats: result.bumpStats || { total: 0, info: 0, warning: 0, alert: 0 },
       });
+
+      // Build smart summary message
+      const parts: string[] = [];
+      if (result.violationCount > 0) parts.push(`${result.violationCount} HOS violation${result.violationCount > 1 ? 's' : ''}`);
+      if (result.warningCount > 0) parts.push(`${result.warningCount} warning${result.warningCount > 1 ? 's' : ''}`);
+      if (result.bumpCount > 0) parts.push(`${result.bumpCount} time bump${result.bumpCount > 1 ? 's' : ''}`);
 
       toast({
         title: "Analysis Complete",
-        description: `Found ${result.violationCount} violations and ${result.warningCount} warnings`,
+        description: parts.length > 0 ? `Found ${parts.join(', ')}` : "All assignments within compliance",
         variant: result.violationCount > 0 ? "destructive" : "default",
       });
 
@@ -1175,6 +1204,12 @@ export default function Schedules() {
     if (!analysisResults) return null;
     const violation = analysisResults.violations.find(v => v.occurrenceId === occurrenceId);
     return violation?.type || null;
+  }, [analysisResults]);
+
+  // Get bump info for an occurrence (only available after analysis)
+  const getOccurrenceBump = useCallback((occurrenceId: string) => {
+    if (!analysisResults) return null;
+    return analysisResults.bumps.find(b => b.occurrenceId === occurrenceId) || null;
   }, [analysisResults]);
 
   // Check if an occurrence matches search query
@@ -1439,10 +1474,19 @@ export default function Schedules() {
               >
                 <Shield className="w-4 h-4 mr-2" />
                 Analyze Now
-                {analysisResults && (analysisResults.violationCount > 0 || analysisResults.warningCount > 0) && (
-                  <Badge variant="destructive" className="ml-2 text-xs">
-                    {analysisResults.violationCount + analysisResults.warningCount}
-                  </Badge>
+                {analysisResults && (
+                  <>
+                    {(analysisResults.violationCount > 0 || analysisResults.warningCount > 0) && (
+                      <Badge variant="destructive" className="ml-2 text-xs">
+                        {analysisResults.violationCount + analysisResults.warningCount}
+                      </Badge>
+                    )}
+                    {analysisResults.bumpCount > 0 && (
+                      <Badge variant="outline" className="ml-1 text-xs bg-yellow-500/20 text-yellow-300 border-yellow-500/50">
+                        {analysisResults.bumpCount} bump{analysisResults.bumpCount > 1 ? 's' : ''}
+                      </Badge>
+                    )}
+                  </>
                 )}
               </Button>
 
@@ -1860,14 +1904,27 @@ export default function Schedules() {
                                               </Badge>
                                             </>
                                           )}
-                                          {occ.bumpMinutes !== 0 && (
-                                            <>
-                                              <span>•</span>
-                                              <span className={`font-medium ${getBumpIndicatorColor(occ.bumpMinutes)}`} data-testid={`bump-indicator-${occ.occurrenceId}`}>
-                                                {formatBumpTime(occ.bumpMinutes)}
-                                              </span>
-                                            </>
-                                          )}
+                                          {/* Bump indicator - only shows AFTER cascade analysis */}
+                                          {(() => {
+                                            const bump = getOccurrenceBump(occ.occurrenceId);
+                                            if (!bump) return null;
+                                            return (
+                                              <>
+                                                <span>•</span>
+                                                <span
+                                                  className={`font-medium ${
+                                                    bump.severity === "alert" ? "text-red-600 dark:text-red-400" :
+                                                    bump.severity === "warning" ? "text-yellow-600 dark:text-yellow-400" :
+                                                    "text-blue-600 dark:text-blue-400"
+                                                  }`}
+                                                  data-testid={`bump-indicator-${occ.occurrenceId}`}
+                                                  title={`Scheduled: ${bump.scheduledTime} | Canonical: ${bump.canonicalTime}`}
+                                                >
+                                                  {formatBumpTime(bump.bumpMinutes)}
+                                                </span>
+                                              </>
+                                            );
+                                          })()}
                                         </div>
                                       </button>
 

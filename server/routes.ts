@@ -19,7 +19,7 @@ import {
   blocks, blockAssignments, assignmentHistory, driverContractStats, drivers, protectedDriverRules,
   shiftOccurrences, shiftTemplates, contracts, trucks
 } from "@shared/schema";
-import { eq, and, inArray, sql, gte, lte } from "drizzle-orm";
+import { eq, and, inArray, sql, gte, lte, not } from "drizzle-orm";
 import session from "express-session";
 import { fromZodError } from "zod-validation-error";
 import bcrypt from "bcryptjs";
@@ -2048,31 +2048,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Missing required fields: weekStart, weekEnd" });
       }
 
-      // Get all shift occurrences for the week
-      const occurrences = await db
+      // Get deletable shift occurrences (filter in database for performance)
+      const deletableOccurrences = await db
         .select()
         .from(shiftOccurrences)
         .where(and(
           eq(shiftOccurrences.tenantId, tenantId),
           gte(shiftOccurrences.serviceDate, weekStart),
-          lte(shiftOccurrences.serviceDate, weekEnd)
+          lte(shiftOccurrences.serviceDate, weekEnd),
+          // Filter out in_progress and completed shifts in DB query
+          not(inArray(shiftOccurrences.status, ["in_progress", "completed"]))
         ));
 
-      // Delete all occurrences (skip in_progress or completed)
       let deletedCount = 0;
-      for (const occ of occurrences) {
-        if (occ.status !== "in_progress" && occ.status !== "completed") {
-          const deleted = await dbStorage.deleteShiftOccurrence(occ.id, tenantId);
-          if (deleted) {
-            deletedCount++;
-          }
-        }
+
+      if (deletableOccurrences.length > 0) {
+        // Bulk delete for performance
+        const idsToDelete = deletableOccurrences.map(occ => occ.id);
+
+        // Delete assignments first (assignments are stored in blockAssignments with shiftOccurrenceId)
+        await db.delete(blockAssignments)
+          .where(and(
+            eq(blockAssignments.tenantId, tenantId),
+            inArray(blockAssignments.shiftOccurrenceId, idsToDelete)
+          ));
+
+        // Then delete occurrences
+        await db.delete(shiftOccurrences)
+          .where(and(
+            eq(shiftOccurrences.tenantId, tenantId),
+            inArray(shiftOccurrences.id, idsToDelete)
+          ));
+
+        deletedCount = deletableOccurrences.length;
       }
 
       res.json({
         message: `Deleted ${deletedCount} shift occurrences`,
-        count: deletedCount,
-        total: occurrences.length
+        count: deletedCount
       });
     } catch (error: any) {
       console.error("Error clearing shifts:", error);
@@ -3706,6 +3719,237 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
     } catch (error: any) {
       console.error("Excel import error:", error);
       res.status(500).json({ message: "Failed to import Excel file", error: error.message });
+    }
+  });
+
+  // ==================== ON-DEMAND COMPLIANCE ANALYSIS ====================
+
+  // POST /api/schedules/analyze-compliance - Run Rolling-6 compliance analysis on current schedule
+  app.post("/api/schedules/analyze-compliance", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { weekStart } = req.body; // Optional: analyze specific week
+
+      console.log("[COMPLIANCE-ANALYSIS] Starting on-demand analysis...");
+
+      // Fetch all active assignments with shift occurrences
+      const allAssignments = await db
+        .select()
+        .from(blockAssignments)
+        .where(and(
+          eq(blockAssignments.tenantId, tenantId),
+          eq(blockAssignments.isActive, true)
+        ));
+
+      // Fetch all shift occurrences
+      const allOccurrences = await db
+        .select()
+        .from(shiftOccurrences)
+        .where(eq(shiftOccurrences.tenantId, tenantId));
+
+      // Fetch all drivers
+      const allDrivers = await db
+        .select()
+        .from(drivers)
+        .where(eq(drivers.tenantId, tenantId));
+
+      // Fetch shift templates for duration/soloType info
+      const allTemplates = await db
+        .select()
+        .from(shiftTemplates)
+        .where(eq(shiftTemplates.tenantId, tenantId));
+
+      // Fetch protected rules
+      const protectedRules = await db
+        .select()
+        .from(protectedDriverRules)
+        .where(eq(protectedDriverRules.tenantId, tenantId));
+
+      // Build lookup maps
+      const occurrenceMap = new Map(allOccurrences.map(o => [o.id, o]));
+      const driverMap = new Map(allDrivers.map(d => [d.id, d]));
+      const templateMap = new Map(allTemplates.map(t => [t.id, t]));
+
+      // Import validation functions
+      const { validateRolling6Compliance, shiftOccurrenceToAssignmentSubject, validateProtectedDriverRules } = await import("./rolling6-calculator");
+
+      // Results structure
+      const violations: Array<{
+        occurrenceId: string;
+        driverId: string;
+        driverName: string;
+        blockId: string;
+        serviceDate: string;
+        startTime: string;
+        type: "violation" | "warning";
+        messages: string[];
+        metrics?: Record<string, any>;
+      }> = [];
+
+      // Bump detection results (time shifts from canonical schedule)
+      const bumps: Array<{
+        occurrenceId: string;
+        driverId: string;
+        driverName: string;
+        blockId: string;
+        serviceDate: string;
+        scheduledTime: string;
+        canonicalTime: string;
+        bumpMinutes: number;
+        bumpHours: number;
+        severity: "info" | "warning" | "alert"; // info: ≤1h, warning: 1-2h, alert: >2h
+      }> = [];
+
+      let analyzed = 0;
+      const total = allAssignments.length;
+
+      // Analyze each assignment
+      for (const assignment of allAssignments) {
+        if (!assignment.shiftOccurrenceId || !assignment.driverId) continue;
+
+        const occurrence = occurrenceMap.get(assignment.shiftOccurrenceId);
+        const driver = driverMap.get(assignment.driverId);
+
+        if (!occurrence || !driver) continue;
+
+        const template = templateMap.get(occurrence.templateId);
+        if (!template) continue;
+
+        // Filter to this week if specified
+        if (weekStart) {
+          const occDate = new Date(occurrence.serviceDate);
+          const weekStartDate = new Date(weekStart);
+          const weekEndDate = new Date(weekStart);
+          weekEndDate.setDate(weekEndDate.getDate() + 7);
+
+          if (occDate < weekStartDate || occDate >= weekEndDate) {
+            continue;
+          }
+        }
+
+        analyzed++;
+
+        // Bump detection: compare scheduled time vs canonical time
+        if (template.canonicalStartTime && occurrence.scheduledStart) {
+          const [canonicalHour, canonicalMin] = template.canonicalStartTime.split(':').map(Number);
+          const canonicalMinutesOfDay = canonicalHour * 60 + canonicalMin;
+
+          const scheduledTime = new Date(occurrence.scheduledStart);
+          const scheduledMinutesOfDay = scheduledTime.getHours() * 60 + scheduledTime.getMinutes();
+
+          // Calculate bump with cross-midnight handling
+          let bumpMinutes = scheduledMinutesOfDay - canonicalMinutesOfDay;
+          if (bumpMinutes < -720) bumpMinutes += 1440; // Handle cross-midnight
+          if (bumpMinutes > 720) bumpMinutes -= 1440;
+
+          // Only report non-zero bumps
+          if (bumpMinutes !== 0) {
+            const absBumpMinutes = Math.abs(bumpMinutes);
+            const severity = absBumpMinutes <= 60 ? "info" : absBumpMinutes <= 120 ? "warning" : "alert";
+
+            bumps.push({
+              occurrenceId: occurrence.id,
+              driverId: driver.id,
+              driverName: `${driver.firstName} ${driver.lastName}`,
+              blockId: occurrence.externalBlockId || occurrence.id,
+              serviceDate: occurrence.serviceDate,
+              scheduledTime: occurrence.startTime,
+              canonicalTime: template.canonicalStartTime,
+              bumpMinutes,
+              bumpHours: parseFloat((bumpMinutes / 60).toFixed(1)),
+              severity,
+            });
+          }
+        }
+
+        // Build assignment subject for validation
+        const subject = shiftOccurrenceToAssignmentSubject(occurrence, template);
+
+        // Get driver's other assignments for context
+        const driverAssignments = allAssignments
+          .filter(a => a.driverId === driver.id && a.id !== assignment.id)
+          .map(a => {
+            const occ = occurrenceMap.get(a.shiftOccurrenceId!);
+            const tmpl = occ ? templateMap.get(occ.templateId) : null;
+            if (!occ || !tmpl) return null;
+            return {
+              ...a,
+              block: {
+                id: occ.id,
+                startTimestamp: `${occ.serviceDate}T${occ.startTime}:00`,
+                endTimestamp: `${occ.serviceDate}T${occ.endTime || occ.startTime}:00`,
+                duration: tmpl.durationHours,
+              }
+            };
+          })
+          .filter(Boolean) as any[];
+
+        // Run Rolling-6 validation
+        const validationResult = await validateRolling6Compliance(
+          driver,
+          subject,
+          driverAssignments
+        );
+
+        // Check protected driver rules (returns string[] of violation messages)
+        const protectedViolations = validateProtectedDriverRules(
+          driver,
+          subject,
+          protectedRules
+        );
+
+        // Collect violations/warnings from Rolling-6
+        if (validationResult.validationStatus === "violation" || validationResult.validationStatus === "warning") {
+          violations.push({
+            occurrenceId: occurrence.id,
+            driverId: driver.id,
+            driverName: `${driver.firstName} ${driver.lastName}`,
+            blockId: occurrence.externalBlockId || occurrence.id,
+            serviceDate: occurrence.serviceDate,
+            startTime: occurrence.startTime,
+            type: validationResult.validationStatus,
+            messages: validationResult.messages,
+            metrics: validationResult.metrics,
+          });
+        }
+
+        // Collect violations from protected driver rules
+        if (protectedViolations && protectedViolations.length > 0) {
+          violations.push({
+            occurrenceId: occurrence.id,
+            driverId: driver.id,
+            driverName: `${driver.firstName} ${driver.lastName}`,
+            blockId: occurrence.externalBlockId || occurrence.id,
+            serviceDate: occurrence.serviceDate,
+            startTime: occurrence.startTime,
+            type: "violation",
+            messages: protectedViolations,
+          });
+        }
+      }
+
+      console.log(`[COMPLIANCE-ANALYSIS] Complete: ${analyzed} assignments analyzed, ${violations.length} HOS issues, ${bumps.length} time bumps found`);
+
+      res.json({
+        success: true,
+        analyzed,
+        total,
+        violationCount: violations.filter(v => v.type === "violation").length,
+        warningCount: violations.filter(v => v.type === "warning").length,
+        violations,
+        // Bump analysis results
+        bumps,
+        bumpCount: bumps.length,
+        bumpStats: {
+          total: bumps.length,
+          info: bumps.filter(b => b.severity === "info").length,
+          warning: bumps.filter(b => b.severity === "warning").length,
+          alert: bumps.filter(b => b.severity === "alert").length,
+        },
+      });
+    } catch (error: any) {
+      console.error("Compliance analysis error:", error);
+      res.status(500).json({ message: "Failed to analyze compliance", error: error.message });
     }
   });
 

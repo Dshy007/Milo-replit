@@ -7,9 +7,9 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider, ProtectedRoute } from "@/lib/auth";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
-import { ChatLauncher } from "@/components/ChatLauncher";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import Landing from "@/pages/Landing";
+import Landing3DCSS from "@/components/Landing3DCSS";
 import Login from "@/pages/Login";
 import Signup from "@/pages/Signup";
 import Dashboard from "@/pages/Dashboard";
@@ -44,24 +44,15 @@ function ProtectedLayout({ children }: { children: ReactNode }) {
             {children}
           </main>
         </div>
-        <ChatLauncher />
       </div>
     </SidebarProvider>
   );
 }
 
 function Router() {
-  const [location, setLocation] = useLocation();
-
-  // Auto-redirect to dashboard on root
-  if (location === "/") {
-    setLocation("/dashboard");
-    return null;
-  }
-
   return (
     <Switch>
-      <Route path="/" component={Landing} />
+      <Route path="/" component={Landing3DCSS} />
       <Route path="/login" component={Login} />
       <Route path="/signup" component={Signup} />
       <Route path="/dashboard">

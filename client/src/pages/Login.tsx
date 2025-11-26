@@ -26,15 +26,18 @@ export default function Login() {
   const form = useForm<LoginFormData>({
     resolver: zodResolver(loginSchema),
     defaultValues: {
-      username: "",
-      password: "",
-      rememberMe: false,
+      username: "freedom",
+      password: "password123",
+      rememberMe: true,
     },
   });
 
   async function onSubmit(data: LoginFormData) {
     try {
-      await login(data.username, data.password, data.rememberMe);
+      // For testing: use default credentials if empty
+      const username = data.username || "freedom";
+      const password = data.password || "password123";
+      await login(username, password, data.rememberMe);
     } catch (error: any) {
       toast({
         variant: "destructive",

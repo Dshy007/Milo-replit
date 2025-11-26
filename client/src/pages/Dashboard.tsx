@@ -1,11 +1,151 @@
+import { useState, useEffect } from "react";
 import { useAuth } from "@/lib/auth";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Truck, Calendar, Users, Sparkles, Upload, FileSpreadsheet, Moon, Sun, Zap, Cpu } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Truck, Calendar, Users, Sparkles, Upload, FileSpreadsheet, Moon, Sun, Zap, Cpu, Brain, MessageSquare } from "lucide-react";
 import { ComplianceHeatmap } from "@/components/ComplianceHeatmap";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { useTheme } from "@/contexts/ThemeContext";
+
+// Milo Concierge Component - Your personal butler
+function MiloConcierge({
+  username,
+  onClose,
+  onDontShowAgain
+}: {
+  username: string;
+  onClose: () => void;
+  onDontShowAgain: () => void;
+}) {
+  const [typedText, setTypedText] = useState('');
+  const [showServices, setShowServices] = useState(false);
+  const [dontShow, setDontShow] = useState(false);
+
+  // Capitalize first letter of username
+  const displayName = username.charAt(0).toUpperCase() + username.slice(1);
+
+  // Format today's date nicely
+  const today = new Date();
+  const dateString = today.toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric'
+  });
+
+  // Build a butler-like greeting
+  const getGreeting = () => {
+    const hour = new Date().getHours();
+    const timeGreeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+
+    return `${timeGreeting}, ${displayName}. Today is ${dateString}. How may I be of service?`;
+  };
+
+  const greeting = getGreeting();
+
+  useEffect(() => {
+    let index = 0;
+    const timer = setInterval(() => {
+      if (index < greeting.length) {
+        setTypedText(greeting.slice(0, index + 1));
+        index++;
+      } else {
+        clearInterval(timer);
+        setTimeout(() => setShowServices(true), 300);
+      }
+    }, 50);
+
+    return () => clearInterval(timer);
+  }, [greeting]);
+
+  const handleClose = () => {
+    if (dontShow) {
+      onDontShowAgain();
+    }
+    onClose();
+  };
+
+  // Concierge services Milo can help with
+  const services = [
+    { icon: Calendar, label: "View schedules", action: "/schedules", color: "text-blue-500" },
+    { icon: Users, label: "Manage drivers", action: "/drivers", color: "text-green-500" },
+    { icon: Truck, label: "Fleet status", action: "/trucks", color: "text-amber-500" },
+    { icon: MessageSquare, label: "Ask me anything", action: "/chat", color: "text-purple-500" },
+  ];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+      <div className="bg-card rounded-2xl p-6 w-full max-w-md border border-border shadow-2xl animate-in fade-in zoom-in-95 duration-300">
+        {/* Header */}
+        <div className="flex items-center justify-center gap-3 mb-5">
+          <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center shadow-lg">
+            <Brain className="w-8 h-8 text-white" />
+          </div>
+        </div>
+
+        <div className="text-center mb-1">
+          <h3 className="text-lg font-semibold text-foreground">Milo</h3>
+          <p className="text-xs text-muted-foreground">Your Personal Concierge</p>
+        </div>
+
+        {/* Message */}
+        <div className="bg-muted/50 rounded-xl p-4 mb-5 mt-4 min-h-[60px]">
+          <p className="text-sm text-foreground leading-relaxed text-center">
+            {typedText}
+            {typedText.length < greeting.length && (
+              <span className="inline-block w-0.5 h-4 bg-primary ml-1 animate-pulse" />
+            )}
+          </p>
+        </div>
+
+        {/* Concierge Services */}
+        {showServices && (
+          <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
+            <div className="grid grid-cols-2 gap-2">
+              {services.map((service, i) => (
+                <Link key={i} href={service.action}>
+                  <button
+                    onClick={handleClose}
+                    className="w-full flex items-center justify-center gap-2 p-3 rounded-lg bg-muted/50 hover:bg-muted transition-all text-center group"
+                  >
+                    <service.icon className={`w-4 h-4 ${service.color} group-hover:scale-110 transition-transform`} />
+                    <span className="text-sm text-foreground">{service.label}</span>
+                  </button>
+                </Link>
+              ))}
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-between pt-4 border-t border-border">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="dontShowConcierge"
+                  checked={dontShow}
+                  onCheckedChange={(checked) => setDontShow(checked as boolean)}
+                  className="w-3.5 h-3.5"
+                />
+                <label
+                  htmlFor="dontShowConcierge"
+                  className="text-xs text-muted-foreground cursor-pointer"
+                >
+                  Don't show on login
+                </label>
+              </div>
+              <button
+                onClick={handleClose}
+                className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 type DashboardStats = {
   totalDrivers: number;
@@ -19,6 +159,26 @@ type DashboardStats = {
 export default function Dashboard() {
   const { user } = useAuth();
   const { themeMode, setThemeMode } = useTheme();
+  const [showWelcome, setShowWelcome] = useState(false);
+
+  // Check if we should show the welcome modal - only once per session
+  useEffect(() => {
+    const hideForever = localStorage.getItem('milo-hide-welcome');
+    const shownThisSession = sessionStorage.getItem('milo-shown-this-session');
+
+    // Only show if: not permanently hidden AND not already shown this session
+    if (!hideForever && !shownThisSession) {
+      // Mark as shown for this session immediately
+      sessionStorage.setItem('milo-shown-this-session', 'true');
+      // Small delay to let the dashboard load first
+      const timer = setTimeout(() => setShowWelcome(true), 500);
+      return () => clearTimeout(timer);
+    }
+  }, []);
+
+  const handleDontShowAgain = () => {
+    localStorage.setItem('milo-hide-welcome', 'true');
+  };
 
   // Fetch dashboard stats
   const { data: stats, isLoading } = useQuery<DashboardStats>({
@@ -27,6 +187,15 @@ export default function Dashboard() {
 
   return (
     <div className="p-6">
+        {/* Milo Concierge */}
+        {showWelcome && user && (
+          <MiloConcierge
+            username={user.username}
+            onClose={() => setShowWelcome(false)}
+            onDontShowAgain={handleDontShowAgain}
+          />
+        )}
+
         <div className="mb-8 flex items-center justify-between">
           <div>
             <h2 className="text-3xl font-bold text-foreground mb-2" data-testid="text-welcome">Welcome back, {user?.username}!</h2>

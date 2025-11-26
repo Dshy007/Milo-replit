@@ -142,11 +142,11 @@ function AnimatedTruck() {
           <rect x="43" y="64" width="6" height="10" rx="1" className="fill-gray-900" />
 
           {/* === TRACTOR (SINGLE CAB - Day Cab, Short Hood) === */}
-          {/* Main cab body - red to match trailer branding */}
-          <path d="M102 22 L102 57 L135 57 L135 38 L125 22 Z" className="fill-red-600" />
+          {/* Main cab body - blue */}
+          <path d="M102 22 L102 57 L135 57 L135 38 L125 22 Z" className="fill-blue-600" />
 
           {/* Cab roof fairing */}
-          <path d="M102 22 L102 15 L125 15 L125 22 Z" className="fill-red-700" />
+          <path d="M102 22 L102 15 L125 15 L125 22 Z" className="fill-blue-700" />
 
           {/* Windshield */}
           <path d="M106 24 L106 40 L128 40 L128 35 L120 24 Z" className="fill-sky-200" />
@@ -154,18 +154,18 @@ function AnimatedTruck() {
           <path d="M108 26 L108 34 L116 34 L116 29 L113 26 Z" className="fill-white/40" />
 
           {/* Door */}
-          <rect x="106" y="42" width="22" height="13" rx="1" className="fill-red-700" />
+          <rect x="106" y="42" width="22" height="13" rx="1" className="fill-blue-700" />
           <circle cx="124" cy="50" r="2" className="fill-gray-400" />
 
           {/* Door window */}
           <rect x="108" y="44" width="18" height="7" rx="1" className="fill-sky-200" />
 
           {/* Hood (engine compartment) - shorter nose */}
-          <rect x="135" y="40" width="18" height="17" rx="2" className="fill-red-600" />
+          <rect x="135" y="40" width="18" height="17" rx="2" className="fill-blue-600" />
 
           {/* Hood details - vents */}
-          <rect x="137" y="44" width="13" height="2" rx="0.5" className="fill-red-800" />
-          <rect x="137" y="48" width="13" height="2" rx="0.5" className="fill-red-800" />
+          <rect x="137" y="44" width="13" height="2" rx="0.5" className="fill-blue-800" />
+          <rect x="137" y="48" width="13" height="2" rx="0.5" className="fill-blue-800" />
 
           {/* Grille */}
           <rect x="151" y="42" width="5" height="12" rx="1" className="fill-gray-300" />
