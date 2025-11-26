@@ -1,7 +1,9 @@
-import { useState, useMemo, memo } from "react";
+import { useState, useMemo, memo, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format, startOfWeek, addWeeks, subWeeks, eachDayOfInterval, addDays } from "date-fns";
-import { ChevronLeft, ChevronRight, Calendar, User, Upload, X, LayoutGrid, List, UserMinus, Undo2, Redo2, CheckSquare, XSquare, Moon, Sun, Zap, Cpu } from "lucide-react";
+import { ChevronLeft, ChevronRight, Calendar, User, Upload, X, LayoutGrid, List, UserMinus, Undo2, Redo2, CheckSquare, XSquare, Moon, Sun, Zap, Cpu, Shield, AlertTriangle, Search } from "lucide-react";
+import { ImportOverlay } from "@/components/ImportOverlay";
+import { MatrixAnalysisOverlay } from "@/components/MatrixAnalysisOverlay";
 import { useTheme } from "@/contexts/ThemeContext";
 import { DndContext, DragEndEvent, DragStartEvent, useDraggable, useDroppable, DragOverlay, PointerSensor, useSensor, useSensors, pointerWithin, closestCenter, rectIntersection, closestCorners } from "@dnd-kit/core";
 import { Button } from "@/components/ui/button";
@@ -245,6 +247,39 @@ export default function Schedules() {
   // Bulk selection state
   const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set());
 
+  // Search state
+  const [searchQuery, setSearchQuery] = useState("");
+
+  // Import result state for overlay
+  const [importResult, setImportResult] = useState<{
+    success: boolean;
+    message: string;
+    created?: number;
+    assigned?: number;
+    unassigned?: number;
+    failed?: number;
+    errors?: string[];
+    warnings?: string[];
+  } | null>(null);
+
+  // Compliance analysis state
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisProgress, setAnalysisProgress] = useState(0);
+  const [analysisResults, setAnalysisResults] = useState<{
+    violations: Array<{
+      occurrenceId: string;
+      driverId: string;
+      driverName: string;
+      blockId: string;
+      serviceDate: string;
+      startTime: string;
+      type: "violation" | "warning";
+      messages: string[];
+    }>;
+    violationCount: number;
+    warningCount: number;
+  } | null>(null);
+
   // Use global theme
   const { themeMode, setThemeMode, themeStyles } = useTheme();
 
@@ -423,51 +458,40 @@ export default function Schedules() {
         body: formData,
         credentials: "include",
       });
-      
+
       if (!response.ok) {
         const error = await response.json();
         throw new Error(error.message || "Failed to import schedule");
       }
-      
+
       return response.json();
     },
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
-      
+
       // Log full result for debugging
       console.log("Import result:", result);
 
-      // Show errors if any
-      if (result.errors && result.errors.length > 0) {
-        const errorPreview = result.errors.slice(0, 5).join("\n");
-        const moreErrors = result.errors.length > 5 ? `\n...and ${result.errors.length - 5} more errors` : "";
+      // Show result in overlay
+      setImportResult({
+        success: true,
+        message: result.message || `Imported ${result.created || 0} shifts successfully`,
+        created: result.created || 0,
+        assigned: result.assigned || 0,
+        unassigned: result.unassigned || 0,
+        failed: result.failed || 0,
+        errors: result.errors,
+        warnings: result.warnings,
+      });
 
-        toast({
-          variant: result.created > 0 ? "default" : "destructive",
-          title: result.created > 0 ? "Partial Import" : "Import Failed",
-          description: `${result.message}\n\nErrors:\n${errorPreview}${moreErrors}`,
-        });
-      } else if (result.warnings && result.warnings.length > 0) {
-        // Show warnings only if no errors
-        toast({
-          title: "Import Successful with Warnings",
-          description: `${result.message}\n\nWarnings:\n${result.warnings.slice(0, 3).join("\n")}`,
-        });
-      } else {
-        toast({
-          title: "Import Successful",
-          description: result.message || `Imported ${result.created || 0} blocks successfully`,
-        });
-      }
-      
-      setIsImportDialogOpen(false);
       setImportFile(null);
     },
     onError: (error: Error) => {
-      toast({
-        variant: "destructive",
-        title: "Import Failed",
-        description: error.message || "Failed to import schedule",
+      setImportResult({
+        success: false,
+        message: error.message || "Failed to import schedule",
+        failed: 1,
+        errors: [error.message || "Unknown error"],
       });
     },
   });
@@ -489,6 +513,8 @@ export default function Schedules() {
       return;
     }
 
+    // Close dialog immediately so truck overlay can show
+    setIsImportDialogOpen(false);
     importMutation.mutate({ file: importFile });
   };
 
@@ -1080,6 +1106,86 @@ export default function Schedules() {
     return { weekStart, weekDays };
   }, [currentDate]);
 
+  // Compliance analysis handler
+  const handleAnalyzeCompliance = useCallback(async () => {
+    setIsAnalyzing(true);
+    setAnalysisProgress(0);
+    setAnalysisResults(null);
+
+    try {
+      // Simulate progress updates for visual effect
+      const progressInterval = setInterval(() => {
+        setAnalysisProgress(prev => {
+          if (prev >= 90) {
+            clearInterval(progressInterval);
+            return prev;
+          }
+          return prev + Math.random() * 15;
+        });
+      }, 200);
+
+      const weekStartStr = format(weekRange.weekStart, "yyyy-MM-dd");
+
+      const response = await fetch('/api/schedules/analyze-compliance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ weekStart: weekStartStr }),
+      });
+
+      clearInterval(progressInterval);
+      setAnalysisProgress(100);
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Analysis failed');
+      }
+
+      const result = await response.json();
+
+      // Brief delay to show 100% before closing
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      setAnalysisResults({
+        violations: result.violations,
+        violationCount: result.violationCount,
+        warningCount: result.warningCount,
+      });
+
+      toast({
+        title: "Analysis Complete",
+        description: `Found ${result.violationCount} violations and ${result.warningCount} warnings`,
+        variant: result.violationCount > 0 ? "destructive" : "default",
+      });
+
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Analysis Failed",
+        description: error.message || "Failed to analyze compliance",
+      });
+    } finally {
+      setIsAnalyzing(false);
+      setAnalysisProgress(0);
+    }
+  }, [weekRange.weekStart, toast]);
+
+  // Check if an occurrence has a violation
+  const getOccurrenceViolationStatus = useCallback((occurrenceId: string): "violation" | "warning" | null => {
+    if (!analysisResults) return null;
+    const violation = analysisResults.violations.find(v => v.occurrenceId === occurrenceId);
+    return violation?.type || null;
+  }, [analysisResults]);
+
+  // Check if an occurrence matches search query
+  const matchesSearch = useCallback((occ: ShiftOccurrence): boolean => {
+    if (!searchQuery.trim()) return true;
+    const query = searchQuery.toLowerCase().trim();
+    const driverMatch = occ.driverName?.toLowerCase().includes(query);
+    const blockMatch = occ.blockId?.toLowerCase().includes(query);
+    return driverMatch || blockMatch || false;
+  }, [searchQuery]);
+
   // Fetch week's calendar data
   const { data: calendarData, isLoading: calendarLoading } = useQuery<CalendarResponse>({
     queryKey: ["/api/schedules/calendar", format(weekRange.weekStart, "yyyy-MM-dd"), format(addDays(weekRange.weekStart, 6), "yyyy-MM-dd")],
@@ -1093,6 +1199,12 @@ export default function Schedules() {
       return await res.json();
     },
   });
+
+  // Count search matches for feedback
+  const searchMatchCount = useMemo(() => {
+    if (!searchQuery.trim() || !calendarData) return 0;
+    return calendarData.occurrences.filter(matchesSearch).length;
+  }, [searchQuery, calendarData, matchesSearch]);
 
   // Group occurrences by contract (tractor), then by date
   // This allows each row to show one tractor's schedule across the week
@@ -1211,10 +1323,25 @@ export default function Schedules() {
   }
 
   return (
-    <div
-      className="flex flex-col h-full"
-      onClick={handleClickOutside}
-    >
+    <>
+      {/* Matrix Analysis Overlay */}
+      <MatrixAnalysisOverlay
+        isAnalyzing={isAnalyzing}
+        analysisProgress={analysisProgress}
+        analysisMessage="Analyzing compliance..."
+      />
+
+      {/* Import Overlay with Truck Animation */}
+      <ImportOverlay
+        isImporting={importMutation.isPending}
+        importResult={importResult}
+        onClose={() => setImportResult(null)}
+      />
+
+      <div
+        className="flex flex-col h-full"
+        onClick={handleClickOutside}
+      >
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col p-6 gap-4 overflow-hidden">
         {/* Header */}
@@ -1303,6 +1430,23 @@ export default function Schedules() {
           </Dialog>
 
               <Button
+                variant="default"
+                size="sm"
+                onClick={handleAnalyzeCompliance}
+                disabled={isAnalyzing}
+                className="bg-green-600 hover:bg-green-700 text-white"
+                data-testid="button-analyze-compliance"
+              >
+                <Shield className="w-4 h-4 mr-2" />
+                Analyze Now
+                {analysisResults && (analysisResults.violationCount > 0 || analysisResults.warningCount > 0) && (
+                  <Badge variant="destructive" className="ml-2 text-xs">
+                    {analysisResults.violationCount + analysisResults.warningCount}
+                  </Badge>
+                )}
+              </Button>
+
+              <Button
                 variant="destructive"
                 size="sm"
                 onClick={() => setShowClearAllDialog(true)}
@@ -1330,6 +1474,34 @@ export default function Schedules() {
                 Next Week
                 <ChevronRight className="w-4 h-4" />
               </Button>
+            </div>
+
+            {/* Search */}
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1 min-w-[200px]">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <input
+                  type="text"
+                  placeholder="Search driver or block ID..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-9 pr-8 py-1.5 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary/50"
+                  data-testid="input-search"
+                />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery("")}
+                    className="absolute right-2 top-1/2 transform -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+              {searchQuery && (
+                <Badge variant={searchMatchCount > 0 ? "default" : "secondary"} className="whitespace-nowrap">
+                  {searchMatchCount} found
+                </Badge>
+              )}
             </div>
 
             {/* Undo/Redo */}
@@ -1629,8 +1801,12 @@ export default function Schedules() {
                           {dayOccurrences.length > 0 ? (
                             <div className="space-y-1">
                               {dayOccurrences.map((occ) => {
+                                const isSearchMatch = searchQuery && matchesSearch(occ);
                                 return (
-                                  <div key={occ.occurrenceId} className="space-y-1">
+                                  <div
+                                    key={occ.occurrenceId}
+                                    className={`space-y-1 ${isSearchMatch ? 'ring-2 ring-yellow-400 ring-offset-1 rounded-md bg-yellow-400/10' : ''}`}
+                                  >
                                     {/* STATIC SECTION - Never moves */}
                                     <div className="relative group">
                                       <button
@@ -1718,11 +1894,33 @@ export default function Schedules() {
                                           <Tooltip>
                                             <TooltipTrigger asChild>
                                               <div className="relative group">
+                                                {/* Violation indicator icon */}
+                                                {getOccurrenceViolationStatus(occ.occurrenceId) && (
+                                                  <div className="absolute -top-1 -right-1 z-20">
+                                                    <AlertTriangle
+                                                      className={`w-4 h-4 ${
+                                                        getOccurrenceViolationStatus(occ.occurrenceId) === 'violation'
+                                                          ? 'text-red-500'
+                                                          : 'text-amber-500'
+                                                      }`}
+                                                    />
+                                                  </div>
+                                                )}
                                                 <div
-                                                  className="w-full p-1.5 rounded-b-md border border-t-0 text-xs transition-colors cursor-grab active:cursor-grabbing"
+                                                  className={`w-full p-1.5 rounded-b-md border border-t-0 text-xs transition-colors cursor-grab active:cursor-grabbing ${
+                                                    getOccurrenceViolationStatus(occ.occurrenceId) === 'violation'
+                                                      ? 'violation-gradient'
+                                                      : getOccurrenceViolationStatus(occ.occurrenceId) === 'warning'
+                                                      ? 'warning-gradient'
+                                                      : ''
+                                                  }`}
                                                   style={{
-                                                    backgroundColor: themeMode === 'day' ? undefined : 'rgba(59, 130, 246, 0.15)',
-                                                    borderColor: themeMode === 'day' ? undefined : 'rgba(59, 130, 246, 0.3)',
+                                                    backgroundColor: getOccurrenceViolationStatus(occ.occurrenceId)
+                                                      ? undefined
+                                                      : (themeMode === 'day' ? undefined : 'rgba(59, 130, 246, 0.15)'),
+                                                    borderColor: getOccurrenceViolationStatus(occ.occurrenceId)
+                                                      ? undefined
+                                                      : (themeMode === 'day' ? undefined : 'rgba(59, 130, 246, 0.3)'),
                                                     color: themeMode === 'day' ? undefined : themeStyles.color
                                                   }}
                                                 >
@@ -1998,5 +2196,6 @@ export default function Schedules() {
         )}
       </div>
     </div>
+    </>
   );
 }
