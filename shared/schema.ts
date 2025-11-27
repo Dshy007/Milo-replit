@@ -1117,9 +1117,220 @@ export const assignmentPredictions = pgTable("assignment_predictions", {
 
 export const insertAssignmentPredictionSchema = createInsertSchema(assignmentPredictions, {
   appliedAt: z.coerce.date().optional().nullable(),
-}).omit({ 
-  id: true, 
-  createdAt: true 
+}).omit({
+  id: true,
+  createdAt: true
 });
 export type InsertAssignmentPrediction = z.infer<typeof insertAssignmentPredictionSchema>;
 export type AssignmentPrediction = typeof assignmentPredictions.$inferSelect;
+
+// ══════════════════════════════════════════════════════════════════════════════
+//                         NEURAL INTELLIGENCE TABLES
+//                    "Where Silicon Minds Learn to Dispatch"
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Neural Agents - The Team Registry
+// Stores configuration for each AI agent (Architect, Scout, Analyst, Executor)
+export const neuralAgents = pgTable("neural_agents", {
+  id: varchar("id").primaryKey(), // "architect", "scout", "analyst", "executor"
+  displayName: text("display_name").notNull(), // "Claude - The Architect"
+  provider: text("provider").notNull(), // "anthropic", "google", "openai", "manus"
+  model: text("model").notNull(), // "claude-sonnet-4", "gemini-pro", etc.
+  systemPrompt: text("system_prompt").notNull(), // Full prompt with all rules
+  capabilities: text("capabilities").array(), // ["reasoning", "real_time", "execution"]
+  status: text("status").notNull().default("active"), // "active", "degraded", "offline"
+  lastHealthCheck: timestamp("last_health_check"),
+  config: jsonb("config"), // Provider-specific settings
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const insertNeuralAgentSchema = createInsertSchema(neuralAgents).omit({
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertNeuralAgent = z.infer<typeof insertNeuralAgentSchema>;
+export type NeuralAgent = typeof neuralAgents.$inferSelect;
+
+// Neural Thoughts - Every Branch in the Decision Tree
+// Stores the organic branching thought process for each decision
+export const neuralThoughts = pgTable("neural_thoughts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+  parentId: varchar("parent_id"), // Self-reference for tree structure (handled by app logic)
+  agentId: varchar("agent_id").notNull().references(() => neuralAgents.id),
+  sessionId: varchar("session_id").references(() => aiChatSessions.id),
+
+  thoughtType: text("thought_type").notNull(), // "question", "hypothesis", "conclusion", "action"
+  content: text("content").notNull(), // The actual thought
+  confidence: integer("confidence").notNull().default(0), // 0-100
+  status: text("status").notNull().default("exploring"), // "exploring", "promising", "converged", "ruled_out"
+
+  evidence: jsonb("evidence"), // Supporting data
+  metadata: jsonb("metadata"), // Tool calls, timings, etc.
+
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  expiresAt: timestamp("expires_at").notNull(), // 6 weeks from creation
+}, (table) => ({
+  tenantIdx: index("neural_thoughts_tenant_idx").on(table.tenantId),
+  parentIdx: index("neural_thoughts_parent_idx").on(table.parentId),
+  sessionIdx: index("neural_thoughts_session_idx").on(table.sessionId),
+  statusIdx: index("neural_thoughts_status_idx").on(table.status),
+  expiresIdx: index("neural_thoughts_expires_idx").on(table.expiresAt),
+}));
+
+export const insertNeuralThoughtSchema = createInsertSchema(neuralThoughts, {
+  expiresAt: z.coerce.date(),
+}).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertNeuralThought = z.infer<typeof insertNeuralThoughtSchema>;
+export type NeuralThought = typeof neuralThoughts.$inferSelect;
+
+// Neural Patterns - Learned Insights That Grow Stronger Over Time
+// Stores patterns like "Maria performs well in rain conditions"
+export const neuralPatterns = pgTable("neural_patterns", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+
+  patternType: text("pattern_type").notNull(), // "driver", "route", "schedule", "weather", "operational"
+  subjectId: varchar("subject_id"), // FK to driver/block/route if applicable
+  subjectType: text("subject_type"), // "driver", "block", "route", "user"
+
+  pattern: text("pattern").notNull(), // The learned insight
+  confidence: integer("confidence").notNull().default(50), // 0-100, grows with confirmation
+  observations: integer("observations").notNull().default(1), // How many times observed
+
+  lastObserved: timestamp("last_observed").defaultNow().notNull(),
+  firstObserved: timestamp("first_observed").defaultNow().notNull(),
+  evidence: jsonb("evidence"), // Array of supporting instances
+
+  status: text("status").notNull().default("hypothesis"), // "hypothesis", "confirmed", "deprecated"
+
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  expiresAt: timestamp("expires_at").notNull(), // Resets on each observation
+}, (table) => ({
+  tenantIdx: index("neural_patterns_tenant_idx").on(table.tenantId),
+  typeIdx: index("neural_patterns_type_idx").on(table.patternType),
+  subjectIdx: index("neural_patterns_subject_idx").on(table.subjectId),
+  statusIdx: index("neural_patterns_status_idx").on(table.status),
+  confidenceIdx: index("neural_patterns_confidence_idx").on(table.confidence),
+}));
+
+export const insertNeuralPatternSchema = createInsertSchema(neuralPatterns, {
+  lastObserved: z.coerce.date().optional(),
+  firstObserved: z.coerce.date().optional(),
+  expiresAt: z.coerce.date(),
+}).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertNeuralPattern = z.infer<typeof insertNeuralPatternSchema>;
+export type NeuralPattern = typeof neuralPatterns.$inferSelect;
+
+// Neural Profiles - Deep Knowledge About Entities (Drivers, Routes, etc.)
+// Stores learned traits, preferences, strengths, and concerns
+export const neuralProfiles = pgTable("neural_profiles", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+
+  entityType: text("entity_type").notNull(), // "driver", "block", "route", "user"
+  entityId: varchar("entity_id").notNull(),
+
+  learnedTraits: jsonb("learned_traits").notNull().default({}),
+  // Structure:
+  // {
+  //   "preferences": ["morning shifts", "Route A"],
+  //   "strengths": ["rain driving", "on-time"],
+  //   "concerns": ["fatigue after 8h"],
+  //   "reliability_score": 94,
+  //   "best_for": ["solo1", "sunWed"],
+  //   "avoid": ["late nights"]
+  // }
+
+  interactionCount: integer("interaction_count").notNull().default(0),
+  lastUpdated: timestamp("last_updated").defaultNow().notNull(),
+  expiresAt: timestamp("expires_at").notNull(), // 6 weeks from last update
+}, (table) => ({
+  tenantIdx: index("neural_profiles_tenant_idx").on(table.tenantId),
+  entityIdx: index("neural_profiles_entity_idx").on(table.entityType, table.entityId),
+  uniqueEntity: uniqueIndex("neural_profiles_unique").on(table.tenantId, table.entityType, table.entityId),
+}));
+
+export const insertNeuralProfileSchema = createInsertSchema(neuralProfiles, {
+  lastUpdated: z.coerce.date().optional(),
+  expiresAt: z.coerce.date(),
+}).omit({
+  id: true,
+});
+export type InsertNeuralProfile = z.infer<typeof insertNeuralProfileSchema>;
+export type NeuralProfile = typeof neuralProfiles.$inferSelect;
+
+// Neural Decisions - Audit Trail of Every AI Choice
+// Stores what was decided, why, and what happened
+export const neuralDecisions = pgTable("neural_decisions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+  sessionId: varchar("session_id").references(() => aiChatSessions.id),
+  thoughtId: varchar("thought_id").references(() => neuralThoughts.id),
+  agentId: varchar("agent_id").notNull().references(() => neuralAgents.id),
+
+  decision: text("decision").notNull(),
+  reasoning: jsonb("reasoning").notNull(), // Branch path that led here
+  actionTaken: jsonb("action_taken"), // What was executed (if any)
+
+  dotStatus: text("dot_status"), // "valid", "warning", "violation"
+  protectedRuleCheck: jsonb("protected_rule_check"), // Pass/fail with details
+
+  outcome: text("outcome").notNull().default("pending"), // "pending", "success", "partial", "failed"
+  outcomeNotes: text("outcome_notes"),
+  userFeedback: text("user_feedback"), // thumbs up/down + comment
+
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  tenantIdx: index("neural_decisions_tenant_idx").on(table.tenantId),
+  sessionIdx: index("neural_decisions_session_idx").on(table.sessionId),
+  outcomeIdx: index("neural_decisions_outcome_idx").on(table.outcome),
+  agentIdx: index("neural_decisions_agent_idx").on(table.agentId),
+}));
+
+export const insertNeuralDecisionSchema = createInsertSchema(neuralDecisions).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertNeuralDecision = z.infer<typeof insertNeuralDecisionSchema>;
+export type NeuralDecision = typeof neuralDecisions.$inferSelect;
+
+// Neural Routing - How Tasks Flow Through the System
+// Logs which agent handled each request and why
+export const neuralRouting = pgTable("neural_routing", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+  sessionId: varchar("session_id").references(() => aiChatSessions.id),
+
+  userInput: text("user_input").notNull(),
+  detectedIntent: text("detected_intent").notNull(), // "lookup", "analysis", "action", "weather"
+
+  routedTo: varchar("routed_to").notNull().references(() => neuralAgents.id),
+  routingReason: text("routing_reason").notNull(),
+  fallbackChain: jsonb("fallback_chain"), // ["architect", "analyst", "scout"]
+
+  responseTimeMs: integer("response_time_ms"),
+  success: boolean("success").notNull().default(true),
+  errorMessage: text("error_message"),
+
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  tenantIdx: index("neural_routing_tenant_idx").on(table.tenantId),
+  intentIdx: index("neural_routing_intent_idx").on(table.detectedIntent),
+  agentIdx: index("neural_routing_agent_idx").on(table.routedTo),
+  sessionIdx: index("neural_routing_session_idx").on(table.sessionId),
+}));
+
+export const insertNeuralRoutingSchema = createInsertSchema(neuralRouting).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertNeuralRouting = z.infer<typeof insertNeuralRoutingSchema>;
+export type NeuralRouting = typeof neuralRouting.$inferSelect;
