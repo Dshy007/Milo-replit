@@ -3,6 +3,8 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { format, startOfWeek, addWeeks, subWeeks, eachDayOfInterval, addDays } from "date-fns";
 import { ChevronLeft, ChevronRight, Calendar, User, Upload, X, LayoutGrid, List, UserMinus, Undo2, Redo2, CheckSquare, XSquare, Moon, Sun, Zap, Cpu, Shield, AlertTriangle, Search } from "lucide-react";
 import { ImportOverlay } from "@/components/ImportOverlay";
+import { ImportWizard } from "@/components/ImportWizard";
+import { ActualsComparisonReview } from "@/components/ActualsComparisonReview";
 import { MatrixAnalysisOverlay } from "@/components/MatrixAnalysisOverlay";
 import { useTheme } from "@/contexts/ThemeContext";
 import { DndContext, DragEndEvent, DragStartEvent, useDraggable, useDroppable, DragOverlay, PointerSensor, useSensor, useSensors, pointerWithin, closestCenter, rectIntersection, closestCorners } from "@dnd-kit/core";
@@ -14,10 +16,8 @@ import { Label } from "@/components/ui/label";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -209,8 +209,9 @@ export default function Schedules() {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedOccurrence, setSelectedOccurrence] = useState<ShiftOccurrence | null>(null);
   const [isAssignmentModalOpen, setIsAssignmentModalOpen] = useState(false);
-  const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
+  const [isImportWizardOpen, setIsImportWizardOpen] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
+  const [pendingImportFiles, setPendingImportFiles] = useState<Array<{ file: File; type: string }>>([]);
   const [shiftToDelete, setShiftToDelete] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<"time" | "type">("time");
   const [filterType, setFilterType] = useState<"all" | "solo1" | "solo2" | "team">("all");
@@ -261,6 +262,30 @@ export default function Schedules() {
     errors?: string[];
     warnings?: string[];
   } | null>(null);
+
+  // Actuals comparison state
+  const [isActualsReviewOpen, setIsActualsReviewOpen] = useState(false);
+  const [actualsComparison, setActualsComparison] = useState<{
+    summary: {
+      totalChanges: number;
+      noShows: number;
+      driverSwaps: number;
+      timeChanges: number;
+      newBlocks: number;
+      missingBlocks: number;
+      dateRange: { start: string; end: string };
+    };
+    changes: Array<{
+      type: 'no_show' | 'driver_swap' | 'time_change' | 'new_block' | 'missing_block';
+      blockId: string;
+      serviceDate: string;
+      expected?: { driverName: string | null; startTime: string };
+      actual?: { driverName: string | null; startTime: string };
+      description: string;
+    }>;
+    pendingFile: File | null;
+  } | null>(null);
+  const [isComparingActuals, setIsComparingActuals] = useState(false);
 
   // Compliance analysis state
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -523,6 +548,77 @@ export default function Schedules() {
     }
   };
 
+  // Handle import from the new wizard
+  const handleWizardImport = async (files: Array<{ file: File; type: string }>, importType: "new_week" | "actuals" | "both") => {
+    // Store the import type for potential actuals processing
+    setPendingImportFiles(files);
+
+    // Close the wizard
+    setIsImportWizardOpen(false);
+
+    if (files.length === 0) return;
+
+    // For actuals import, first compare against existing records
+    if (importType === "actuals") {
+      setIsComparingActuals(true);
+
+      try {
+        const formData = new FormData();
+        formData.append("file", files[0].file);
+
+        const response = await fetch("/api/schedules/compare-actuals", {
+          method: "POST",
+          body: formData,
+          credentials: "include",
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || "Failed to compare actuals");
+        }
+
+        const result = await response.json();
+
+        // Store the comparison results and open review dialog
+        setActualsComparison({
+          summary: result.summary,
+          changes: result.changes,
+          pendingFile: files[0].file,
+        });
+        setIsActualsReviewOpen(true);
+      } catch (error: any) {
+        toast({
+          variant: "destructive",
+          title: "Comparison Failed",
+          description: error.message || "Failed to compare actuals file",
+        });
+      } finally {
+        setIsComparingActuals(false);
+      }
+    } else {
+      // For new week import, proceed directly with the import
+      importMutation.mutate({ file: files[0].file });
+    }
+  };
+
+  // Handle applying actuals changes after review
+  const handleApplyActuals = () => {
+    if (!actualsComparison?.pendingFile) return;
+
+    // Import the file (which will update records)
+    importMutation.mutate({ file: actualsComparison.pendingFile });
+
+    // Close the review dialog
+    setIsActualsReviewOpen(false);
+    setActualsComparison(null);
+  };
+
+  // Handle canceling actuals review
+  const handleCancelActualsReview = () => {
+    setIsActualsReviewOpen(false);
+    setActualsComparison(null);
+  };
+
   const handleImport = () => {
     if (!importFile) {
       toast({
@@ -534,7 +630,7 @@ export default function Schedules() {
     }
 
     // Close dialog immediately so truck overlay can show
-    setIsImportDialogOpen(false);
+    setIsImportWizardOpen(false);
     importMutation.mutate({ file: importFile });
   };
 
@@ -1400,69 +1496,15 @@ export default function Schedules() {
           <div className="flex items-center gap-3 flex-wrap">
             {/* Navigation & Import */}
             <div className="flex items-center gap-2">
-              <Dialog open={isImportDialogOpen} onOpenChange={setIsImportDialogOpen}>
-                <DialogTrigger asChild>
-                  <Button variant="default" size="sm" data-testid="button-import-schedule">
-                    <Upload className="w-4 h-4 mr-2" />
-                    Import Schedule
-                  </Button>
-                </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Import Schedule from Excel</DialogTitle>
-                <DialogDescription>
-                  Upload Amazon roster Excel file to import blocks and driver assignments
-                </DialogDescription>
-              </DialogHeader>
-              
-              <div className="space-y-4">
-                <Alert>
-                  <AlertDescription>
-                    <strong>Expected format:</strong> Amazon Excel with columns Block ID, Driver Name, Operator ID, Stop 1/2 Planned Arrival Date/Time
-                  </AlertDescription>
-                </Alert>
-
-                <div>
-                  <label className="text-sm font-medium mb-1.5 block">
-                    Select Excel file:
-                  </label>
-                  <input
-                    type="file"
-                    accept=".xlsx,.xls,.csv"
-                    onChange={handleFileSelect}
-                    className="w-full text-sm"
-                    data-testid="input-import-file"
-                  />
-                </div>
-
-                {importFile && (
-                  <div className="text-sm text-muted-foreground">
-                    Selected: {importFile.name}
-                  </div>
-                )}
-
-                <div className="flex justify-end gap-2">
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      setIsImportDialogOpen(false);
-                      setImportFile(null);
-                    }}
-                    data-testid="button-cancel-import"
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    onClick={handleImport}
-                    disabled={!importFile || importMutation.isPending}
-                    data-testid="button-confirm-import"
-                  >
-                    {importMutation.isPending ? "Importing..." : "Import"}
-                  </Button>
-                </div>
-              </div>
-            </DialogContent>
-          </Dialog>
+              <Button
+                variant="default"
+                size="sm"
+                onClick={() => setIsImportWizardOpen(true)}
+                data-testid="button-import-schedule"
+              >
+                <Upload className="w-4 h-4 mr-2" />
+                Import Schedule
+              </Button>
 
               <Button
                 variant="default"
@@ -2110,149 +2152,168 @@ export default function Schedules() {
       {/* List View */}
       {viewMode === "list" && calendarData && (
         <Card className="flex-1 overflow-hidden">
-          <CardContent className="p-4 h-full">
-            <ScheduleListView
-              occurrences={calendarData.occurrences}
-              showRate={showRate}
-              sortBy={sortBy}
-              filterType={filterType}
-            />
-          </CardContent>
+            <CardContent className="p-4 h-full">
+              <ScheduleListView
+                occurrences={calendarData.occurrences}
+                showRate={showRate}
+                sortBy={sortBy}
+                filterType={filterType}
+              />
+            </CardContent>
         </Card>
       )}
 
-        {/* Driver Assignment Modal - Temporarily disabled until modal is updated for occurrences */}
-        {/* TODO: Update DriverAssignmentModal to work with occurrenceId instead of blockId */}
-        {selectedOccurrence && false && (
-          <DriverAssignmentModal
-            block={null}
-            isOpen={isAssignmentModalOpen}
-            onClose={handleCloseModal}
-          />
-        )}
+      {/* Driver Assignment Modal - Temporarily disabled until modal is updated for occurrences */}
+      {/* TODO: Update DriverAssignmentModal to work with occurrenceId instead of blockId */}
+      {selectedOccurrence && false && (
+        <DriverAssignmentModal
+          block={null}
+          isOpen={isAssignmentModalOpen}
+          onClose={handleCloseModal}
+        />
+      )}
 
-        {/* Delete Confirmation Dialog */}
-        <AlertDialog open={!!shiftToDelete} onOpenChange={(open) => !open && setShiftToDelete(null)}>
-          <AlertDialogContent data-testid="dialog-confirm-delete">
-            <AlertDialogHeader>
-              <AlertDialogTitle>Delete Shift?</AlertDialogTitle>
-              <AlertDialogDescription>
-                This will permanently remove this shift occurrence from the calendar. This action cannot be undone.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel data-testid="button-cancel-delete">Cancel</AlertDialogCancel>
-              <AlertDialogAction
-                onClick={confirmDelete}
-                disabled={deleteMutation.isPending}
-                data-testid="button-confirm-delete"
-                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              >
-                {deleteMutation.isPending ? "Deleting..." : "Delete"}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={!!shiftToDelete} onOpenChange={(open) => !open && setShiftToDelete(null)}>
+        <AlertDialogContent data-testid="dialog-confirm-delete">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Shift?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently remove this shift occurrence from the calendar. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-delete">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmDelete}
+              disabled={deleteMutation.isPending}
+              data-testid="button-confirm-delete"
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleteMutation.isPending ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
-        {/* Clear All Confirmation Dialog */}
-        <AlertDialog open={showClearAllDialog} onOpenChange={setShowClearAllDialog}>
-          <AlertDialogContent data-testid="dialog-confirm-clear-all">
-            <AlertDialogHeader>
-              <AlertDialogTitle>Clear All Shifts for This Week?</AlertDialogTitle>
-              <AlertDialogDescription>
-                This will permanently delete ALL shift occurrences for the week of {format(weekRange.weekStart, "MMM d")} - {format(addDays(weekRange.weekStart, 6), "MMM d, yyyy")}. 
-                This action cannot be undone.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel data-testid="button-cancel-clear-all">Cancel</AlertDialogCancel>
-              <AlertDialogAction
-                onClick={handleClearAll}
-                disabled={clearAllMutation.isPending}
-                data-testid="button-confirm-clear-all"
-                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              >
-                {clearAllMutation.isPending ? "Clearing..." : "Clear All"}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+      {/* Clear All Confirmation Dialog */}
+      <AlertDialog open={showClearAllDialog} onOpenChange={setShowClearAllDialog}>
+        <AlertDialogContent data-testid="dialog-confirm-clear-all">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Clear All Shifts for This Week?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete ALL shift occurrences for the week of {format(weekRange.weekStart, "MMM d")} - {format(addDays(weekRange.weekStart, 6), "MMM d, yyyy")}.
+              This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-clear-all">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleClearAll}
+              disabled={clearAllMutation.isPending}
+              data-testid="button-confirm-clear-all"
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {clearAllMutation.isPending ? "Clearing..." : "Clear All"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
-        {/* Assignment Confirmation Dialog */}
-        <AlertDialog open={!!pendingAssignment} onOpenChange={(open) => !open && setPendingAssignment(null)}>
-          <AlertDialogContent data-testid="dialog-confirm-assignment">
-            <AlertDialogHeader>
-              <AlertDialogTitle>
-                {pendingAssignment?.type === 'replace' ? 'Replace Driver?' : 'Assign Driver?'}
-              </AlertDialogTitle>
-              <AlertDialogDescription>
-                {pendingAssignment?.type === 'replace' ? (
-                  <>
-                    Replace <strong>{pendingAssignment.targetOccurrence.driverName}</strong> with{' '}
-                    <strong>{pendingAssignment.driver.firstName} {pendingAssignment.driver.lastName}</strong> on{' '}
-                    <strong>{pendingAssignment.targetOccurrence.blockId}</strong>
-                    {' '}({format(new Date(pendingAssignment.targetOccurrence.serviceDate), 'MMM d, yyyy')} at {pendingAssignment.targetOccurrence.startTime})?
-                  </>
-                ) : (
-                  <>
-                    Assign <strong>{pendingAssignment?.driver.firstName} {pendingAssignment?.driver.lastName}</strong> to{' '}
-                    <strong>{pendingAssignment?.targetOccurrence.blockId}</strong>
-                    {' '}({pendingAssignment && format(new Date(pendingAssignment.targetOccurrence.serviceDate), 'MMM d, yyyy')} at {pendingAssignment?.targetOccurrence.startTime})?
-                  </>
-                )}
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel data-testid="button-cancel-assignment">Cancel</AlertDialogCancel>
-              <AlertDialogAction
-                onClick={confirmAssignment}
-                disabled={updateAssignmentMutation.isPending}
-                data-testid="button-confirm-assignment"
-                className="bg-primary text-primary-foreground hover:bg-primary/90"
-              >
-                {updateAssignmentMutation.isPending ? "Assigning..." : "Confirm"}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-
-        {/* Context Menu for Unassigned Blocks */}
-        {contextMenu && (
-          <div
-            className="fixed bg-card border border-border rounded-md shadow-lg py-1 z-50 min-w-[200px] max-h-[400px] overflow-y-auto"
-            style={{
-              top: contextMenu.y,
-              left: contextMenu.x,
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="px-3 py-2 text-xs font-semibold text-muted-foreground border-b">
-              Assign Driver to {contextMenu.occurrence.blockId}
-            </div>
-            <div className="py-1">
-              {allDrivers
-                .filter(d => d.status === 'active' && d.loadEligible)
-                .sort((a, b) => `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`))
-                .map(driver => (
-                  <button
-                    key={driver.id}
-                    onClick={() => handleAssignFromContextMenu(driver.id)}
-                    className="w-full px-3 py-2 text-left text-sm hover:bg-muted/50 transition-colors flex items-center gap-2"
-                  >
-                    <User className="w-4 h-4 text-muted-foreground" />
-                    <span>{driver.firstName} {driver.lastName}</span>
-                  </button>
-                ))}
-              {allDrivers.filter(d => d.status === 'active' && d.loadEligible).length === 0 && (
-                <div className="px-3 py-2 text-sm text-muted-foreground text-center">
-                  No available drivers
-                </div>
+      {/* Assignment Confirmation Dialog */}
+      <AlertDialog open={!!pendingAssignment} onOpenChange={(open) => !open && setPendingAssignment(null)}>
+        <AlertDialogContent data-testid="dialog-confirm-assignment">
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {pendingAssignment?.type === 'replace' ? 'Replace Driver?' : 'Assign Driver?'}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingAssignment?.type === 'replace' ? (
+                <>
+                  Replace <strong>{pendingAssignment.targetOccurrence.driverName}</strong> with{' '}
+                  <strong>{pendingAssignment.driver.firstName} {pendingAssignment.driver.lastName}</strong> on{' '}
+                  <strong>{pendingAssignment.targetOccurrence.blockId}</strong>
+                  {' '}({format(new Date(pendingAssignment.targetOccurrence.serviceDate), 'MMM d, yyyy')} at {pendingAssignment.targetOccurrence.startTime})?
+                </>
+              ) : (
+                <>
+                  Assign <strong>{pendingAssignment?.driver.firstName} {pendingAssignment?.driver.lastName}</strong> to{' '}
+                  <strong>{pendingAssignment?.targetOccurrence.blockId}</strong>
+                  {' '}({pendingAssignment && format(new Date(pendingAssignment.targetOccurrence.serviceDate), 'MMM d, yyyy')} at {pendingAssignment?.targetOccurrence.startTime})?
+                </>
               )}
-            </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-assignment">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmAssignment}
+              disabled={updateAssignmentMutation.isPending}
+              data-testid="button-confirm-assignment"
+              className="bg-primary text-primary-foreground hover:bg-primary/90"
+            >
+              {updateAssignmentMutation.isPending ? "Assigning..." : "Confirm"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Import Wizard */}
+      <ImportWizard
+        open={isImportWizardOpen}
+        onOpenChange={setIsImportWizardOpen}
+        onImport={handleWizardImport}
+        currentWeekStart={weekRange.weekStart}
+      />
+
+      {/* Actuals Comparison Review */}
+      <ActualsComparisonReview
+        open={isActualsReviewOpen}
+        onOpenChange={setIsActualsReviewOpen}
+        summary={actualsComparison?.summary || null}
+        changes={actualsComparison?.changes || []}
+        onApply={handleApplyActuals}
+        onCancel={handleCancelActualsReview}
+        isApplying={importMutation.isPending}
+      />
+
+      {/* Context Menu for Unassigned Blocks */}
+      {contextMenu && (
+        <div
+          className="fixed bg-card border border-border rounded-md shadow-lg py-1 z-50 min-w-[200px] max-h-[400px] overflow-y-auto"
+          style={{
+            top: contextMenu.y,
+            left: contextMenu.x,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="px-3 py-2 text-xs font-semibold text-muted-foreground border-b">
+            Assign Driver to {contextMenu.occurrence.blockId}
           </div>
-        )}
-      </div>
+          <div className="py-1">
+            {allDrivers
+              .filter(d => d.status === 'active' && d.loadEligible)
+              .sort((a, b) => `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`))
+              .map(driver => (
+                <button
+                  key={driver.id}
+                  onClick={() => handleAssignFromContextMenu(driver.id)}
+                  className="w-full px-3 py-2 text-left text-sm hover:bg-muted/50 transition-colors flex items-center gap-2"
+                >
+                  <User className="w-4 h-4 text-muted-foreground" />
+                  <span>{driver.firstName} {driver.lastName}</span>
+                </button>
+              ))}
+            {allDrivers.filter(d => d.status === 'active' && d.loadEligible).length === 0 && (
+              <div className="px-3 py-2 text-sm text-muted-foreground text-center">
+                No available drivers
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
-    </>
+  </div>
+  </>
   );
 }

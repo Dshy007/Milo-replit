@@ -185,6 +185,27 @@ export const AI_TOOLS = [
         required: ["searchQuery"]
       }
     }
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "getWeather",
+      description: "Get current weather and forecast for a location. CRITICAL FOR DRIVER SAFETY - use this when users ask about weather conditions, road safety, or planning routes. Weather affects driving conditions, visibility, and safety decisions.",
+      parameters: {
+        type: "object",
+        properties: {
+          location: {
+            type: "string",
+            description: "City name, state, or zip code (e.g., 'Kansas City, MO', 'Los Angeles', '90210')"
+          },
+          includeForecast: {
+            type: "boolean",
+            description: "Whether to include multi-day forecast (default: true)"
+          }
+        },
+        required: ["location"]
+      }
+    }
   }
 ];
 
@@ -250,6 +271,9 @@ export async function executeTool(
 
       case "recallPastConversation":
         return await handleRecallPastConversation(args, context);
+
+      case "getWeather":
+        return await handleGetWeather(args, context);
 
       default:
         return JSON.stringify({ error: `Unknown function: ${functionName}` });
@@ -807,4 +831,213 @@ async function handleRecallPastConversation(
     message: `Found ${results.totalMatches} relevant message${results.totalMatches > 1 ? 's' : ''} from past conversations.`,
     matches: formattedMatches
   });
+}
+
+// ==================== WEATHER FUNCTIONS ====================
+
+interface GeocodingResult {
+  results?: Array<{
+    name: string;
+    admin1?: string;
+    country: string;
+    latitude: number;
+    longitude: number;
+  }>;
+}
+
+interface WeatherResponse {
+  current?: {
+    temperature_2m: number;
+    apparent_temperature: number;
+    relative_humidity_2m: number;
+    precipitation: number;
+    weather_code: number;
+    wind_speed_10m: number;
+    wind_gusts_10m: number;
+    visibility: number;
+  };
+  daily?: {
+    time: string[];
+    weather_code: number[];
+    temperature_2m_max: number[];
+    temperature_2m_min: number[];
+    precipitation_sum: number[];
+    precipitation_probability_max: number[];
+    wind_speed_10m_max: number[];
+  };
+}
+
+// Weather code descriptions for driver safety
+function getWeatherDescription(code: number): { condition: string; drivingAlert?: string } {
+  const weatherCodes: Record<number, { condition: string; drivingAlert?: string }> = {
+    0: { condition: "Clear sky" },
+    1: { condition: "Mainly clear" },
+    2: { condition: "Partly cloudy" },
+    3: { condition: "Overcast" },
+    45: { condition: "Fog", drivingAlert: "⚠️ REDUCED VISIBILITY - Use fog lights, reduce speed" },
+    48: { condition: "Depositing rime fog", drivingAlert: "⚠️ ICY CONDITIONS POSSIBLE - Roads may be slippery" },
+    51: { condition: "Light drizzle", drivingAlert: "Wet roads - increase following distance" },
+    53: { condition: "Moderate drizzle", drivingAlert: "Wet roads - reduce speed" },
+    55: { condition: "Dense drizzle", drivingAlert: "⚠️ Poor visibility - reduce speed significantly" },
+    56: { condition: "Light freezing drizzle", drivingAlert: "🚨 ICE ALERT - Roads extremely slippery" },
+    57: { condition: "Dense freezing drizzle", drivingAlert: "🚨 SEVERE ICE - Consider delaying travel" },
+    61: { condition: "Slight rain", drivingAlert: "Wet roads - drive cautiously" },
+    63: { condition: "Moderate rain", drivingAlert: "⚠️ Reduced visibility - slow down" },
+    65: { condition: "Heavy rain", drivingAlert: "🚨 HEAVY RAIN - Poor visibility, hydroplaning risk" },
+    66: { condition: "Light freezing rain", drivingAlert: "🚨 ICE STORM - Roads extremely dangerous" },
+    67: { condition: "Heavy freezing rain", drivingAlert: "🚨 SEVERE ICE STORM - Avoid travel if possible" },
+    71: { condition: "Slight snow", drivingAlert: "⚠️ Snow on roads - reduce speed, chains may be needed" },
+    73: { condition: "Moderate snow", drivingAlert: "🚨 SNOW - Slippery roads, reduced visibility" },
+    75: { condition: "Heavy snow", drivingAlert: "🚨 HEAVY SNOW - Consider delaying travel" },
+    77: { condition: "Snow grains", drivingAlert: "⚠️ Icy conditions possible" },
+    80: { condition: "Slight rain showers" },
+    81: { condition: "Moderate rain showers", drivingAlert: "⚠️ Variable conditions - stay alert" },
+    82: { condition: "Violent rain showers", drivingAlert: "🚨 SEVERE RAIN - Pull over if visibility poor" },
+    85: { condition: "Slight snow showers", drivingAlert: "⚠️ Snow squalls - sudden visibility drops" },
+    86: { condition: "Heavy snow showers", drivingAlert: "🚨 HEAVY SNOW - Whiteout conditions possible" },
+    95: { condition: "Thunderstorm", drivingAlert: "🚨 THUNDERSTORM - Lightning risk, potential hail" },
+    96: { condition: "Thunderstorm with slight hail", drivingAlert: "🚨 HAIL - Pull over under shelter" },
+    99: { condition: "Thunderstorm with heavy hail", drivingAlert: "🚨 SEVERE HAIL - Seek shelter immediately" }
+  };
+  return weatherCodes[code] || { condition: "Unknown" };
+}
+
+async function handleGetWeather(
+  args: { location: string; includeForecast?: boolean },
+  _context: FunctionContext
+): Promise<string> {
+  const { location, includeForecast = true } = args;
+
+  try {
+    // Step 1: Geocode the location
+    const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(location)}&count=1&language=en&format=json`;
+    const geoResponse = await fetch(geoUrl);
+
+    if (!geoResponse.ok) {
+      return JSON.stringify({
+        error: true,
+        message: `Could not find location: ${location}. Try a city name like "Kansas City, MO" or "Los Angeles".`
+      });
+    }
+
+    const geoData: GeocodingResult = await geoResponse.json();
+
+    if (!geoData.results || geoData.results.length === 0) {
+      return JSON.stringify({
+        error: true,
+        message: `Location "${location}" not found. Try a specific city name like "Kansas City, MO".`
+      });
+    }
+
+    const place = geoData.results[0];
+    const { latitude, longitude, name, admin1, country } = place;
+    const locationName = admin1 ? `${name}, ${admin1}, ${country}` : `${name}, ${country}`;
+
+    // Step 2: Get weather data
+    const weatherParams = [
+      `latitude=${latitude}`,
+      `longitude=${longitude}`,
+      'current=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,wind_gusts_10m,visibility',
+      'daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,wind_speed_10m_max',
+      'temperature_unit=fahrenheit',
+      'wind_speed_unit=mph',
+      'precipitation_unit=inch',
+      'timezone=auto',
+      'forecast_days=5'
+    ].join('&');
+
+    const weatherUrl = `https://api.open-meteo.com/v1/forecast?${weatherParams}`;
+    const weatherResponse = await fetch(weatherUrl);
+
+    if (!weatherResponse.ok) {
+      return JSON.stringify({
+        error: true,
+        message: "Weather service temporarily unavailable. Please try again."
+      });
+    }
+
+    const weather: WeatherResponse = await weatherResponse.json();
+
+    if (!weather.current) {
+      return JSON.stringify({
+        error: true,
+        message: "No weather data available for this location."
+      });
+    }
+
+    const current = weather.current;
+    const currentCondition = getWeatherDescription(current.weather_code);
+    const visibilityMiles = (current.visibility / 1609.34).toFixed(1); // Convert meters to miles
+
+    // Build current conditions
+    const result: any = {
+      location: locationName,
+      coordinates: { latitude, longitude },
+      current: {
+        temperature: `${Math.round(current.temperature_2m)}°F`,
+        feelsLike: `${Math.round(current.apparent_temperature)}°F`,
+        condition: currentCondition.condition,
+        humidity: `${current.relative_humidity_2m}%`,
+        wind: `${Math.round(current.wind_speed_10m)} mph`,
+        windGusts: `${Math.round(current.wind_gusts_10m)} mph`,
+        visibility: `${visibilityMiles} miles`,
+        precipitation: `${current.precipitation} in`
+      },
+      drivingSafety: {
+        alert: currentCondition.drivingAlert || "✅ Normal driving conditions",
+        conditions: []
+      }
+    };
+
+    // Add safety conditions
+    const safetyConditions: string[] = [];
+    if (current.wind_gusts_10m > 40) {
+      safetyConditions.push("⚠️ High winds - Watch for crosswinds on open roads");
+    }
+    if (parseFloat(visibilityMiles) < 1) {
+      safetyConditions.push("🚨 Very poor visibility - Use extreme caution");
+    } else if (parseFloat(visibilityMiles) < 3) {
+      safetyConditions.push("⚠️ Reduced visibility - Turn on headlights");
+    }
+    if (current.precipitation > 0.1) {
+      safetyConditions.push("Precipitation active - Roads may be wet/slippery");
+    }
+    result.drivingSafety.conditions = safetyConditions;
+
+    // Add forecast if requested
+    if (includeForecast && weather.daily) {
+      const forecast = weather.daily.time.map((date, i) => {
+        const dayCondition = getWeatherDescription(weather.daily!.weather_code[i]);
+        return {
+          date: format(new Date(date), 'EEE, MMM d'),
+          high: `${Math.round(weather.daily!.temperature_2m_max[i])}°F`,
+          low: `${Math.round(weather.daily!.temperature_2m_min[i])}°F`,
+          condition: dayCondition.condition,
+          precipChance: `${weather.daily!.precipitation_probability_max[i]}%`,
+          precipAmount: `${weather.daily!.precipitation_sum[i]} in`,
+          maxWind: `${Math.round(weather.daily!.wind_speed_10m_max[i])} mph`,
+          drivingAlert: dayCondition.drivingAlert
+        };
+      });
+      result.forecast = forecast;
+
+      // Check for upcoming hazardous conditions
+      const upcomingAlerts = forecast
+        .filter(day => day.drivingAlert)
+        .map(day => `${day.date}: ${day.drivingAlert}`);
+
+      if (upcomingAlerts.length > 0) {
+        result.upcomingHazards = upcomingAlerts;
+      }
+    }
+
+    return JSON.stringify(result);
+
+  } catch (error: any) {
+    console.error("Weather API error:", error);
+    return JSON.stringify({
+      error: true,
+      message: `Failed to get weather: ${error.message}. Try again in a moment.`
+    });
+  }
 }
