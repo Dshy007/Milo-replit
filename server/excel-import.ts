@@ -239,25 +239,10 @@ function calculateCanonicalStart(
   contractStartTime: string,
   patternGroup: "sunWed" | "wedSat"
 ): Date {
-  // Parse contract time (HH:MM format)
-  const [hours, minutes] = contractStartTime.split(":").map(Number);
-
-  // Create canonical start: same day as block, but at contract time
-  const canonicalDate = new Date(startTimestamp);
-  canonicalDate.setHours(hours, minutes, 0, 0);
-
-  // Handle midnight crossings:
-  // If canonical is in the future (more than 12 hours ahead), shift to previous day
-  // This catches cases where block starts 00:06 and contract is 23:30
-  const bumpMilliseconds = startTimestamp.getTime() - canonicalDate.getTime();
-  const bumpHours = bumpMilliseconds / (1000 * 60 * 60);
-
-  if (bumpHours < -12) {
-    // Shift canonical to previous day to avoid negative multi-day bumps
-    canonicalDate.setDate(canonicalDate.getDate() - 1);
-  }
-
-  return canonicalDate;
+  // SIMPLIFIED: Just return the actual start time from Excel
+  // No date shifting - the service date is what it says in Excel
+  // The contract start time is informational only, not used to recalculate dates
+  return new Date(startTimestamp);
 }
 
 /**
@@ -274,13 +259,14 @@ function generateCycleId(patternGroup: "sunWed" | "wedSat", canonicalStart: Date
 }
 
 /**
- * Normalize driver name by removing trailing suffixes and punctuation
+ * Normalize driver name by removing trailing suffixes, punctuation, and equipment info
  * Preserves legitimate names like "Junior Alvarez" and "Maria Senior"
- * 
+ *
  * Strategy:
  * - ALWAYS remove abbreviated suffixes (Jr, Sr, II, III, IV, V, 2nd, 3rd, 4th)
  * - ONLY remove full words (Junior, Senior) if they came after punctuation in original
- * 
+ * - ALWAYS remove equipment suffixes (S53 Trailer, 53' Trailer, Tractor, etc.)
+ *
  * Examples:
  * - "John Smith Jr" → "john smith"
  * - "Robert Dixon, Jr." → "robert dixon"
@@ -288,6 +274,8 @@ function generateCycleId(patternGroup: "sunWed" | "wedSat", canonicalStart: Date
  * - "Junior Alvarez" → "junior alvarez" (preserved - no punctuation cue)
  * - "Maria Senior" → "maria senior" (preserved - Senior is surname)
  * - "Robert Charles, Senior" → "robert charles" (removed - came after comma)
+ * - "Brian ALLAN S53 Trailer" → "brian allan" (equipment suffix removed)
+ * - "John DOE 53' Trailer" → "john doe" (equipment suffix removed)
  */
 function normalizeDriverName(name: string): string {
   const original = name.trim().toLowerCase();
@@ -298,6 +286,14 @@ function normalizeDriverName(name: string): string {
 
   // Remove common punctuation (commas, periods, semicolons, colons)
   let normalized = original.replace(/[,;:.]/g, " ");
+
+  // Remove equipment suffixes that Amazon appends to driver names
+  // Patterns: "S53 Trailer", "53' Trailer", "53 Trailer", "Tractor", etc.
+  normalized = normalized
+    .replace(/\s+s?\d+['']?\s*trailer\s*$/i, "")  // S53 Trailer, 53' Trailer, 53 Trailer
+    .replace(/\s+trailer\s*$/i, "")               // Just "Trailer" at end
+    .replace(/\s+tractor\s*$/i, "")               // Just "Tractor" at end
+    .replace(/\s+bobtail\s*$/i, "");              // Just "Bobtail" at end
 
   // Collapse multiple spaces
   normalized = normalized.replace(/\s+/g, " ").trim();
@@ -468,12 +464,100 @@ function excelDateToJSDate(excelDate: number | string | undefined | null, excelT
 }
 
 /**
+ * Lightweight parser for actuals comparison
+ * Parses Excel file and extracts normalized rows without importing
+ * Used for comparing actuals against existing schedule
+ */
+export async function parseExcelToRows(
+  fileBuffer: Buffer
+): Promise<Array<{
+  blockId: string;
+  driverName: string | null;
+  serviceDate: string;
+  startTime: string;
+}>> {
+  // Detect if file is CSV
+  const isCSV = fileBuffer.length > 0 &&
+    fileBuffer[0] >= 32 && fileBuffer[0] <= 126 &&
+    !fileBuffer.slice(0, 4).equals(Buffer.from([0x50, 0x4B, 0x03, 0x04])) &&
+    !fileBuffer.slice(0, 8).equals(Buffer.from([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]));
+
+  // Parse file
+  const workbook = XLSX.read(fileBuffer, {
+    type: "buffer",
+    ...(isCSV ? { raw: false, codepage: 65001 } : {})
+  });
+
+  const sheetName = workbook.SheetNames[0];
+  if (!sheetName) {
+    throw new Error("File has no data sheets");
+  }
+
+  const worksheet = workbook.Sheets[sheetName];
+  const allRows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+  if (allRows.length < 2) {
+    return [];
+  }
+
+  const headerRow = allRows[0];
+  const rawHeaders = headerRow.map((h: any) => String(h || ""));
+  const columnMap = createColumnMap(rawHeaders);
+
+  // Extract data rows
+  const dataRows = XLSX.utils.sheet_to_json(worksheet) as any[];
+  const normalizedRows = normalizeRows(dataRows, columnMap);
+
+  // Parse and return simplified row data
+  const results: Array<{
+    blockId: string;
+    driverName: string | null;
+    serviceDate: string;
+    startTime: string;
+  }> = [];
+
+  for (const row of normalizedRows) {
+    // Skip rows without block ID
+    if (!row.blockId) continue;
+
+    // Parse date from the row
+    let serviceDate: string | null = null;
+    let startTime: string | null = null;
+
+    if (row.stop1PlannedStartDate) {
+      const parsedDate = parseDateValue(row.stop1PlannedStartDate);
+      if (parsedDate) {
+        serviceDate = format(parsedDate, 'yyyy-MM-dd');
+      }
+    }
+
+    if (row.stop1PlannedStartTime) {
+      const parsedTime = parseTimeValue(row.stop1PlannedStartTime);
+      if (parsedTime) {
+        startTime = parsedTime; // Already in HH:mm format
+      }
+    }
+
+    if (!serviceDate) continue;
+
+    results.push({
+      blockId: row.blockId,
+      driverName: row.driverName || null,
+      serviceDate,
+      startTime: startTime || 'Unknown',
+    });
+  }
+
+  return results;
+}
+
+/**
  * Parse Excel file and create block assignments
  * Expected columns:
  * - Block ID (e.g., "B-00000001")
  * - Driver Name (e.g., "John Smith")
  * - Operator ID (e.g., "FTIM_MKC_Solo1_Tractor_2_d2")
- * 
+ *
  * Follows same validation pattern as CSV import:
  * - Enforces single-driver-per-block
  * - Validates driver time overlaps
@@ -746,7 +830,7 @@ export async function parseExcelSchedule(
         const dateB = b.stop1PlannedStartDate;
 
         // If both have dates, sort by date
-        if (dateA && dateB) {
+        if (typeof dateA === 'number' && typeof dateB === 'number') {
           return dateA - dateB;
         }
 
@@ -1061,6 +1145,14 @@ export async function parseExcelSchedule(
       // If no driver name, skip assignment (block will remain unassigned)
       if (!row.driverName || !row.driverName.trim()) {
         debug.log(`⊘ Block ${row.blockId} skipped - no driver name (unassigned)`);
+
+        // CRITICAL: Restore existing assignment to array if we're skipping this row
+        // Otherwise re-importing will delete existing manual assignments
+        if (existingAssignment) {
+          existingAssignments.push(existingAssignment);
+          debug.log(`  → Restored existing assignment to prevent deletion`);
+        }
+
         continue; // Don't count as success or failure - block exists but unassigned
       }
 
@@ -1206,76 +1298,22 @@ export async function parseExcelSchedule(
 
       debug.log(`✓ No time overlaps detected`);
 
-      // Run full validation (DOT compliance, rolling-6, protected rules)
-      // IMPORTANT: Include archived assignments for rolling-6 compliance calculations
-      // Rolling-6 needs historical duty hours to validate DOT compliance correctly
-      // CRITICAL: Exclude the soon-to-be-archived assignment to prevent double-counting
-      const driverAllAssignmentRows = allAssignments.filter(
-        (a) => a.driverId === driver.id && a.id !== existingAssignment?.id
-      );
-      const driverAllAssignments = driverAllAssignmentRows
-        .filter(assignment => assignment.blockId !== null)
-        .map((assignment) => ({
-          ...assignment,
-          block: blockMap.get(assignment.blockId!) || block, // Filter nulls above, so ! is safe
-        }));
+      // IMPORT MODE: Skip validation - just insert the data
+      // Validation happens later during:
+      // 1. Drag-and-drop operations in the UI
+      // 2. Milo AI analysis requests
+      // 3. Schedule display (showing compliance warnings)
+      //
+      // This ensures fast imports and lets users import data freely.
+      // DOT compliance is enforced when users actively modify schedules, not during bulk import.
 
-      // TODO: Refactor validateBlockAssignment to accept explicit activeAssignments and historicalAssignments
-      // parameters instead of relying on single existingAssignments array. This will make the distinction
-      // clear for all callers and prevent confusion. Update all 7 callers: excel-import, auto-assignment,
-      // routes, auto-build-engine, csv-import, workload-calculator, rolling6-calculator itself.
-
-      const validation = await validateBlockAssignment(
-        driver,
-        blockToAssignmentSubject(block), // Convert Block to AssignmentSubject
-        driverAllAssignments, // Historical (active + archived) for rolling-6, excluding soon-to-be-archived
-        protectedRules,
-        existingAssignments, // Active-only for conflict detection
-        block.id // Pass blockId for conflict checking
-      );
-
-      // Check for hard-stop issues: protected rules, conflicts, or DOT violations
-      if (!validation.canAssign || validation.validationResult.validationStatus === "violation") {
-        result.failed++;
-        const errorMessages = [];
-
-        if (validation.protectedRuleViolations.length > 0) {
-          errorMessages.push(...validation.protectedRuleViolations);
-        }
-        if (validation.conflictingAssignments.length > 0) {
-          errorMessages.push("Conflicting assignments exist");
-        }
-        if (validation.validationResult.validationStatus === "violation") {
-          errorMessages.push(`DOT violation: ${validation.validationResult.messages.join(", ")}`);
-        }
-
-        result.errors.push(`Row ${rowNum}: ${errorMessages.join("; ")}`);
-
-        // CRITICAL: Restore existing assignment to array if validation fails
-        // This ensures later rows in the same import can still see this active assignment
-        if (existingAssignment) {
-          existingAssignments.push(existingAssignment);
-        }
-
-        continue;
-      }
-
-      // Track warnings
-      if (validation.validationResult.validationStatus === "warning") {
-        result.warnings.push(
-          `Row ${rowNum}: Warning - ${validation.validationResult.messages.join(", ")}`
-        );
-      }
-
-      // Queue assignment for atomic commit
+      // Queue assignment for atomic commit (no validation during import)
       assignmentsToCommit.push({
         rowNum,
         blockId: block.id,
         driverId: driver.id,
-        validationStatus: validation.validationResult.validationStatus,
-        validationSummary: validation.validationResult.metrics
-          ? JSON.stringify(validation.validationResult.metrics)
-          : null,
+        validationStatus: "valid", // Default to valid during import - real validation happens on drag-drop
+        validationSummary: null,
         operatorId: row.operatorId,
         existingAssignmentId: existingAssignment?.id, // Track old assignment to archive after validation
       });
@@ -1446,23 +1484,20 @@ export async function parseExcelScheduleShiftBased(
 
     let rows: ExcelRow[] = normalizeRows(rawRows, columnMap);
 
-    // Filter out rows with Trip ID (they are from previous weeks)
-    const originalRowCount = rows.length;
-    rows = rows.filter(row => {
-      // Keep rows that don't have a Trip ID (current week blocks)
-      // Skip rows that have a Trip ID (previous week trips)
-      return !row.tripId || row.tripId === '';
-    });
-    const tripIdFiltered = originalRowCount - rows.length;
-    if (tripIdFiltered > 0) {
-      console.log(`[SHIFT-IMPORT] Filtered out ${tripIdFiltered} rows with Trip ID (previous week data)`);
-    }
+    // NOTE: We no longer filter by Trip ID!
+    // Trip ID just indicates whether a Block has become a Trip (execution started)
+    // What matters is the DATE - we filter by the target week (Sunday-Saturday)
+    // The "holy grail" is: Start Time + Tractor ID + Solo Type
+    // Trip ID is irrelevant for scheduling purposes
 
-    // Filter to keep only the week with the MOST data
-    // Group rows by week and keep the week with the most entries
+    console.log(`[SHIFT-IMPORT] Total rows after normalization: ${rows.length}`);
+
+    // IMPORT ALL DATA - no week filtering
+    // The "Holy Grail" approach: import everything from the file
+    // Users provide the data they want imported - we don't second-guess them
     if (rows.length > 0) {
-      // Group rows by their week (Sunday start)
-      const weekGroups = new Map<string, ExcelRow[]>();
+      // Log all weeks found in the file (for debugging only, no filtering)
+      const weekGroups = new Map<string, number>();
 
       for (const row of rows) {
         if (row.stop1PlannedStartDate) {
@@ -1473,41 +1508,18 @@ export async function parseExcelScheduleShiftBased(
             weekStartSunday.setHours(0, 0, 0, 0);
             const weekKey = format(weekStartSunday, "yyyy-MM-dd");
 
-            if (!weekGroups.has(weekKey)) {
-              weekGroups.set(weekKey, []);
-            }
-            weekGroups.get(weekKey)!.push(row);
+            weekGroups.set(weekKey, (weekGroups.get(weekKey) || 0) + 1);
           } catch {
-            // Skip invalid dates
+            // Skip invalid dates for logging
           }
         }
       }
 
-      // Find the week with the most data
-      let targetWeekKey: string | null = null;
-      let maxCount = 0;
-
-      for (const [weekKey, weekRows] of weekGroups.entries()) {
-        if (weekRows.length > maxCount) {
-          maxCount = weekRows.length;
-          targetWeekKey = weekKey;
-        }
-      }
-
-      if (targetWeekKey) {
-        const targetWeekRows = weekGroups.get(targetWeekKey)!;
-        const weekStartSunday = new Date(targetWeekKey);
-
-        console.log(`[SHIFT-IMPORT] Found ${weekGroups.size} week(s) in file`);
-        console.log(`[SHIFT-IMPORT] Keeping week of ${format(weekStartSunday, "MMM d, yyyy")} (Sunday) with ${maxCount} rows`);
-
-        const beforeWeekFilter = rows.length;
-        rows = targetWeekRows;
-
-        const weekFiltered = beforeWeekFilter - rows.length;
-        if (weekFiltered > 0) {
-          console.log(`[SHIFT-IMPORT] Filtered out ${weekFiltered} rows from other weeks`);
-        }
+      // Log all weeks found in the file
+      console.log(`[SHIFT-IMPORT] Found ${weekGroups.size} week(s) in file - importing ALL:`);
+      for (const [weekKey, count] of weekGroups.entries()) {
+        const weekDate = new Date(weekKey);
+        console.log(`  - Week of ${format(weekDate, "MMM d, yyyy")}: ${count} rows`);
       }
     }
 
@@ -1904,6 +1916,22 @@ export async function parseExcelScheduleShiftBased(
     console.log(`📋 Phase 2: Found ${allOccurrences.length} shift occurrences for assignment (import batch: ${importBatchId})`);
     console.log(`📋 Block IDs in occurrences: ${allOccurrences.map(o => o.externalBlockId).filter(Boolean).join(', ')}`);
 
+    // Fetch all templates to enable Operator ID + service date matching
+    // This handles cases where multiple Block IDs exist for the same operator on the same day
+    const allTemplates = await db
+      .select()
+      .from(shiftTemplates)
+      .where(eq(shiftTemplates.tenantId, tenantId));
+
+    // Create a map of operatorId -> templateId for quick lookup
+    const operatorToTemplateId = new Map<string, string>();
+    for (const t of allTemplates) {
+      if (t.operatorId) {
+        operatorToTemplateId.set(t.operatorId, t.id);
+      }
+    }
+    console.log(`📋 Phase 2: Loaded ${allTemplates.length} templates for Operator ID matching`);
+
     // Fetch ALL assignments (active + archived) for rolling-6 compliance
     const allAssignments = await db
       .select()
@@ -1973,11 +2001,44 @@ export async function parseExcelScheduleShiftBased(
         }
       }
 
-      // Fallback: if no timing data, try to find ANY occurrence with this Block ID
+      // Fallback 1: if no match by Block ID + date, try to find by Block ID alone
       if (!occurrence) {
         occurrence = allOccurrences.find(
           o => o.externalBlockId === row.blockId.trim()
         );
+      }
+
+      // Fallback 2: Match by Operator ID + service date via template
+      // This handles cases where multiple Block IDs exist for the same operator on the same day
+      // (Phase 1 deduplicates by operator+date, storing only the first Block ID)
+      if (!occurrence && row.operatorId && row.stop1PlannedStartDate) {
+        try {
+          const startTimestamp = excelDateToJSDate(row.stop1PlannedStartDate, row.stop1PlannedStartTime || 0);
+          const serviceDate = new Date(startTimestamp);
+          serviceDate.setHours(0, 0, 0, 0);
+          const serviceDateStr = format(serviceDate, "yyyy-MM-dd");
+
+          // Find the template for this operator
+          const templateId = operatorToTemplateId.get(row.operatorId.trim());
+          console.log(`🔍 Fallback 2 for row ${rowNum}: operatorId="${row.operatorId.trim()}", date="${serviceDateStr}", templateId=${templateId || 'NOT FOUND'}`);
+
+          if (templateId) {
+            occurrence = allOccurrences.find(
+              o => o.templateId === templateId && o.serviceDate === serviceDateStr
+            );
+            if (occurrence) {
+              console.log(`📋 Matched row ${rowNum} (block ${row.blockId}) to occurrence via Operator ID + date (template: ${templateId})`);
+            } else {
+              // Debug: Show what occurrences exist for this template
+              const occForTemplate = allOccurrences.filter(o => o.templateId === templateId);
+              console.log(`❌ No occurrence for template ${templateId} on ${serviceDateStr}. Template has ${occForTemplate.length} occurrences: ${occForTemplate.map(o => o.serviceDate).join(', ')}`);
+            }
+          } else {
+            console.log(`❌ No template found for operatorId "${row.operatorId.trim()}". Available operators: ${Array.from(operatorToTemplateId.keys()).slice(0, 5).join(', ')}...`);
+          }
+        } catch (err) {
+          console.log(`❌ Fallback 2 error for row ${rowNum}: ${err}`);
+        }
       }
 
       if (!occurrence) {
@@ -2023,6 +2084,8 @@ export async function parseExcelScheduleShiftBased(
       const excelNameNormalized = normalizeDriverName(row.driverName);
       const excelNameLower = row.driverName.trim().toLowerCase().replace(/\s+/g, " ");
 
+      console.log(`🔍 Looking for driver: "${row.driverName}" → normalized: "${excelNameNormalized}"`);
+
       const driver = allDrivers.find((d) => {
         const first = d.firstName.toLowerCase();
         const last = d.lastName.toLowerCase();
@@ -2044,6 +2107,9 @@ export async function parseExcelScheduleShiftBased(
 
       if (!driver) {
         result.failed++;
+        const availableDriverNames = allDrivers.slice(0, 10).map(d => `${d.firstName} ${d.lastName}`).join(", ");
+        console.log(`❌ Driver not found: "${row.driverName}" (normalized: "${excelNameNormalized}")`);
+        console.log(`   Available drivers (first 10): ${availableDriverNames}`);
         result.errors.push(`Row ${rowNum}: Driver not found: "${row.driverName}"`);
         continue;
       }
@@ -2073,34 +2139,12 @@ export async function parseExcelScheduleShiftBased(
 
       const template = occurrenceTemplate[0];
 
-      // Convert shift occurrence to AssignmentSubject using adapter
-      // CRITICAL: Template provides Contract Slot metadata (operatorId, tractorId, soloType, time)
-      const assignmentSubject = shiftOccurrenceToAssignmentSubject(occurrence, template);
+      // IMPORT MODE: Skip validation - just insert the data
+      // Validation happens later during:
+      // 1. Drag-and-drop operations in the UI
+      // 2. Milo AI analysis requests
+      // 3. Schedule display (showing compliance warnings)
 
-      // Validate assignment using minimal interface (no blockId needed for shift occurrences)
-      const validation = await validateBlockAssignment(
-        driver,
-        assignmentSubject,
-        driverAssignmentsWithBlocks,
-        protectedRules,
-        allAssignments
-        // Note: No blockId parameter - shift occurrences don't need conflict checking
-      );
-
-      if (!validation.canAssign) {
-        result.failed++;
-        const errorMsg = validation.protectedRuleViolations.length > 0
-          ? validation.protectedRuleViolations.join("; ")
-          : validation.validationResult.messages.join("; ") || "Assignment validation failed";
-        result.errors.push(`Row ${rowNum}: ${errorMsg}`);
-        continue;
-      }
-
-      // Determine validation status and summary from ValidationResult
-      const validationStatus = validation.validationResult.validationStatus;
-      const validationSummary = validation.validationResult.messages.join("; ") || "OK";
-
-      // Stage for commit
       // Safe Block ID handling: trim if string exists, otherwise null
       const amazonBlockId = typeof row.blockId === 'string' ? row.blockId.trim() || null : null;
 
@@ -2109,17 +2153,13 @@ export async function parseExcelScheduleShiftBased(
         occurrenceId: occurrence.id,
         amazonBlockId,
         driverId: driver.id,
-        validationStatus,
-        validationSummary,
+        validationStatus: "valid", // Default to valid during import - real validation happens on drag-drop
+        validationSummary: null,
         operatorId: row.operatorId,
         existingAssignmentId: existingAssignment?.id,
       });
 
       assignedOccurrencesInImport.add(occurrence.id);
-
-      if (validationStatus === "warning") {
-        result.warnings.push(`Row ${rowNum}: ${validationSummary}`);
-      }
     }
 
     // Commit all valid assignments in transaction

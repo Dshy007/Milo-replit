@@ -293,11 +293,9 @@ export class MemStorage implements IStorage {
   async createTruck(insertTruck: InsertTruck): Promise<Truck> {
     const id = randomUUID();
     const truck: Truck = {
-      ...insertTruck,
       id,
+      ...normalizeOptionalFields(insertTruck),
       status: insertTruck.status || "available",
-      lastInspection: insertTruck.lastInspection || null,
-      nextInspection: insertTruck.nextInspection || null,
       createdAt: new Date(),
       updatedAt: new Date()
     };
@@ -332,11 +330,8 @@ export class MemStorage implements IStorage {
   async createRoute(insertRoute: InsertRoute): Promise<Route> {
     const id = randomUUID();
     const route: Route = {
-      ...insertRoute,
       id,
-      distance: insertRoute.distance || null,
-      estimatedDuration: insertRoute.estimatedDuration || null,
-      notes: insertRoute.notes || null,
+      ...normalizeOptionalFields(insertRoute),
       createdAt: new Date(),
       updatedAt: new Date()
     };
@@ -371,8 +366,8 @@ export class MemStorage implements IStorage {
   async createContract(insertContract: InsertContract): Promise<Contract> {
     const id = randomUUID();
     const contract: Contract = {
-      ...insertContract,
       id,
+      ...normalizeOptionalFields(insertContract),
       status: insertContract.status || 'active',
       daysPerWeek: insertContract.daysPerWeek || 6,
       protectedDrivers: insertContract.protectedDrivers || false,
@@ -531,8 +526,8 @@ export class MemStorage implements IStorage {
   async createBlock(insertBlock: InsertBlock): Promise<Block> {
     const id = randomUUID();
     const block: Block = {
-      ...insertBlock,
       id,
+      ...normalizeOptionalFields(insertBlock),
       status: insertBlock.status || 'active',
       createdAt: new Date(),
       updatedAt: new Date()
@@ -620,11 +615,10 @@ export class MemStorage implements IStorage {
   async createBlockAssignment(insertAssignment: InsertBlockAssignment): Promise<BlockAssignment> {
     const id = randomUUID();
     const assignment: BlockAssignment = {
-      ...insertAssignment,
       id,
-      blockId: insertAssignment.blockId ?? null,
-      createdAt: new Date(),
-      isActive: insertAssignment.isActive ?? true
+      ...normalizeOptionalFields(insertAssignment),
+      isActive: insertAssignment.isActive ?? true,
+      createdAt: new Date()
     };
     this.blockAssignments.set(id, assignment);
     return assignment;
@@ -663,10 +657,8 @@ export class MemStorage implements IStorage {
   async createProtectedDriverRule(insertRule: InsertProtectedDriverRule): Promise<ProtectedDriverRule> {
     const id = randomUUID();
     const rule: ProtectedDriverRule = {
-      ...insertRule,
       id,
-      blockedDays: insertRule.blockedDays ?? null,
-      allowedDays: insertRule.allowedDays ?? null,
+      ...normalizeOptionalFields(insertRule),
       isProtected: insertRule.isProtected ?? true,
       createdAt: new Date(),
       updatedAt: new Date()
@@ -725,22 +717,11 @@ export class MemStorage implements IStorage {
     const id = randomUUID();
     const now = new Date();
     const newRequest: SpecialRequest = {
-      ...request,
       id,
-      contractId: request.contractId ?? null,
-      status: request.status ?? null,
-      startDate: request.startDate ?? null,
-      endDate: request.endDate ?? null,
-      startTime: request.startTime ?? null,
-      endTime: request.endTime ?? null,
-      affectedDate: request.affectedDate ?? null,
+      ...normalizeOptionalFields(request),
       requestedAt: now,
       reviewedAt: null,
       reviewedBy: null,
-      notes: request.notes ?? null,
-      affectedBlockId: request.affectedBlockId ?? null,
-      swapCandidateId: request.swapCandidateId ?? null,
-      reason: request.reason ?? null,
       createdAt: now,
       updatedAt: now,
     };

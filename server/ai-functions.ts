@@ -164,6 +164,27 @@ export const AI_TOOLS = [
         required: ["startDate", "endDate"]
       }
     }
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "recallPastConversation",
+      description: "Search through past conversations with this user to recall what was discussed before. Use this when the user references something from a previous chat, asks 'what did we discuss about X', 'who worked last weekend', or when context from past conversations would be helpful. This searches the last 6 weeks of chat history.",
+      parameters: {
+        type: "object",
+        properties: {
+          searchQuery: {
+            type: "string",
+            description: "Keywords or phrases to search for in past conversations (e.g., 'last weekend', 'Solo1 workload', 'John Smith schedule', 'replacement driver')"
+          },
+          limit: {
+            type: "number",
+            description: "Maximum number of results to return (default: 5, max: 10)"
+          }
+        },
+        required: ["searchQuery"]
+      }
+    }
   }
 ];
 
@@ -226,7 +247,10 @@ export async function executeTool(
       
       case "getDriverWorkloadSummary":
         return await handleGetDriverWorkloadSummary(args, context);
-      
+
+      case "recallPastConversation":
+        return await handleRecallPastConversation(args, context);
+
       default:
         return JSON.stringify({ error: `Unknown function: ${functionName}` });
     }
@@ -731,11 +755,56 @@ async function handleGetDriverWorkloadSummary(
       solo1Count: byType.solo1.length,
       solo2Count: byType.solo2.length,
       teamCount: byType.team.length,
-      averageDaysWorked: workloads.length > 0 
+      averageDaysWorked: workloads.length > 0
         ? (workloads.reduce((sum, w) => sum + w.daysWorked, 0) / workloads.length).toFixed(1)
         : 0
     },
     byType,
     drivers: workloads
+  });
+}
+
+// ==================== MEMORY/CONVERSATION FUNCTIONS ====================
+
+async function handleRecallPastConversation(
+  args: { searchQuery: string; limit?: number },
+  context: FunctionContext
+): Promise<string> {
+  const { searchQuery, limit = 5 } = args;
+  const { tenantId, userId } = context;
+
+  // Limit to max 10 results
+  const actualLimit = Math.min(Math.max(limit, 1), 10);
+
+  const results = await dbStorage.searchPastConversations(
+    tenantId,
+    userId,
+    searchQuery,
+    6, // 6 weeks of history
+    actualLimit
+  );
+
+  if (results.totalMatches === 0) {
+    return JSON.stringify({
+      found: false,
+      message: `No past conversations found matching "${searchQuery}" in the last 6 weeks.`,
+      suggestion: "This might be a new topic we haven't discussed before. Would you like me to look up this information now?"
+    });
+  }
+
+  // Format results for the AI to understand
+  const formattedMatches = results.matches.map(match => ({
+    date: format(match.messageDate, 'EEEE, MMM d, yyyy h:mm a'),
+    conversationTitle: match.sessionTitle || "Untitled conversation",
+    whoSaid: match.role === "user" ? "You asked" : "I responded",
+    content: match.contentSnippet
+  }));
+
+  return JSON.stringify({
+    found: true,
+    searchQuery,
+    totalMatches: results.totalMatches,
+    message: `Found ${results.totalMatches} relevant message${results.totalMatches > 1 ? 's' : ''} from past conversations.`,
+    matches: formattedMatches
   });
 }

@@ -9,6 +9,7 @@ export interface WorkloadSummary {
   workloadLevel: "ideal" | "warning" | "critical" | "underutilized"; // 4=ideal, 5=warning, 6=critical, <4=underutilized
   totalHours: number;
   blocksThisWeek: string[]; // Block IDs
+  blockIds?: string[]; // Optional array of block IDs (used in routes.ts:3347)
 }
 
 export interface SwapCandidate {

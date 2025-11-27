@@ -2,7 +2,7 @@ import { eq, and, gte, lte, inArray, sql as drizzleSql } from "drizzle-orm";
 import { db } from "./db";
 import { blocks, blockAssignments, drivers, contracts } from "@shared/schema";
 import type { Block, BlockAssignment, Driver } from "@shared/schema";
-import { validateRolling6Compliance, calculateDutyHours } from "./rolling6-calculator";
+import { validateRolling6Compliance, calculateDutyHours, blockToAssignmentSubject } from "./rolling6-calculator";
 import { subDays, addDays, format } from "date-fns";
 
 export interface CascadeAnalysisRequest {
@@ -216,13 +216,13 @@ export async function analyzeCascadeEffect(
   
   // Create a map of blocks by ID for fast lookup
   const blocksMap = new Map(allBlocks.map(b => [b.id, b]));
-  
+
   // Manually join assignments with blocks
   const relevantAssignments = allAssignments
-    .filter(a => blocksMap.has(a.blockId))
+    .filter(a => a.blockId !== null && blocksMap.has(a.blockId))
     .map(a => ({
       ...a,
-      block: blocksMap.get(a.blockId)!,
+      block: blocksMap.get(a.blockId!)!,
     })) as Array<BlockAssignment & { block: Block }>;
   
   const sourceDriverAssignments = relevantAssignments.filter(
@@ -264,7 +264,7 @@ export async function analyzeCascadeEffect(
     // Validate target driver can take this assignment
     const validationResult = await validateRolling6Compliance(
       targetDriver,
-      sourceBlock,
+      blockToAssignmentSubject(sourceBlock),
       afterTargetAssignments,
     );
     
@@ -306,13 +306,13 @@ export async function analyzeCascadeEffect(
       // Validate both drivers
       const sourceValidation = await validateRolling6Compliance(
         sourceDriver,
-        targetAssignment.block,
+        blockToAssignmentSubject(targetAssignment.block),
         afterSourceAssignments,
       );
-      
+
       const targetValidation = await validateRolling6Compliance(
         targetDriver,
-        sourceBlock,
+        blockToAssignmentSubject(sourceBlock),
         afterTargetAssignments,
       );
       
@@ -445,13 +445,17 @@ export async function executeCascadeChange(
   }
   
   // Fetch the block
+  if (!sourceAssignment.blockId) {
+    throw new Error("Assignment has no block ID");
+  }
+
   const sourceBlock = await db.query.blocks.findFirst({
     where: and(
       eq(blocks.id, sourceAssignment.blockId),
       eq(blocks.tenantId, tenantId),
     ),
   });
-  
+
   if (!sourceBlock) {
     throw new Error("Block not found");
   }

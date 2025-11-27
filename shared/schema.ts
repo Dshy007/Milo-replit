@@ -1028,7 +1028,50 @@ export const insertAnalysisResultSchema = createInsertSchema(analysisResults).om
 export type InsertAnalysisResult = z.infer<typeof insertAnalysisResultSchema>;
 export type AnalysisResult = typeof analysisResults.$inferSelect;
 
-// AI Assistant Query History
+// AI Chat Sessions (Milo conversations with memory)
+export const aiChatSessions = pgTable("ai_chat_sessions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  title: text("title"), // Auto-generated from first message or user-set
+  lastMessageAt: timestamp("last_message_at").defaultNow().notNull(),
+  messageCount: integer("message_count").notNull().default(0),
+  isActive: boolean("is_active").notNull().default(true), // False when archived
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  userIdx: index("ai_chat_sessions_user_idx").on(table.userId),
+  lastMessageIdx: index("ai_chat_sessions_last_message_idx").on(table.lastMessageAt),
+  activeIdx: index("ai_chat_sessions_active_idx").on(table.isActive),
+}));
+
+export const insertAiChatSessionSchema = createInsertSchema(aiChatSessions, {
+  lastMessageAt: z.coerce.date().optional(),
+}).omit({ id: true, createdAt: true });
+export type InsertAiChatSession = z.infer<typeof insertAiChatSessionSchema>;
+export type AiChatSession = typeof aiChatSessions.$inferSelect;
+
+// AI Chat Messages (Individual messages within a session)
+export const aiChatMessages = pgTable("ai_chat_messages", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sessionId: varchar("session_id").notNull().references(() => aiChatSessions.id, { onDelete: "cascade" }),
+  role: text("role").notNull(), // "user" or "assistant"
+  content: text("content").notNull(),
+  tokensUsed: integer("tokens_used"), // Track API usage for assistant messages
+  toolCalls: jsonb("tool_calls"), // Store any tool/function calls made
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  sessionIdx: index("ai_chat_messages_session_idx").on(table.sessionId),
+  createdAtIdx: index("ai_chat_messages_created_at_idx").on(table.createdAt),
+}));
+
+export const insertAiChatMessageSchema = createInsertSchema(aiChatMessages).omit({
+  id: true,
+  createdAt: true
+});
+export type InsertAiChatMessage = z.infer<typeof insertAiChatMessageSchema>;
+export type AiChatMessage = typeof aiChatMessages.$inferSelect;
+
+// AI Assistant Query History (legacy - kept for backward compatibility)
 export const aiQueryHistory = pgTable("ai_query_history", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
@@ -1045,9 +1088,9 @@ export const aiQueryHistory = pgTable("ai_query_history", {
   createdAtIdx: index("ai_query_created_at_idx").on(table.createdAt),
 }));
 
-export const insertAiQueryHistorySchema = createInsertSchema(aiQueryHistory).omit({ 
-  id: true, 
-  createdAt: true 
+export const insertAiQueryHistorySchema = createInsertSchema(aiQueryHistory).omit({
+  id: true,
+  createdAt: true
 });
 export type InsertAiQueryHistory = z.infer<typeof insertAiQueryHistorySchema>;
 export type AiQueryHistory = typeof aiQueryHistory.$inferSelect;

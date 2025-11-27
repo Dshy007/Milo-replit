@@ -1,8 +1,8 @@
 import { db } from "./db";
-import { 
+import {
   users, tenants, drivers, trucks, routes, contracts, schedules, loads,
   blocks, blockAssignments, protectedDriverRules, specialRequests, driverAvailabilityPreferences,
-  shiftOccurrences,
+  shiftOccurrences, aiChatSessions, aiChatMessages,
   type User, type InsertUser,
   type Tenant, type InsertTenant,
   type Driver, type InsertDriver,
@@ -16,9 +16,11 @@ import {
   type ProtectedDriverRule, type InsertProtectedDriverRule,
   type SpecialRequest, type InsertSpecialRequest,
   type DriverAvailabilityPreference, type InsertDriverAvailabilityPreference,
-  type ShiftOccurrence
+  type ShiftOccurrence,
+  type AiChatSession, type InsertAiChatSession,
+  type AiChatMessage, type InsertAiChatMessage
 } from "@shared/schema";
-import { eq, and, gte, lte } from "drizzle-orm";
+import { eq, and, gte, lte, desc, sql, inArray } from "drizzle-orm";
 import type { IStorage } from "./storage";
 
 export class DbStorage implements IStorage {
@@ -517,6 +519,202 @@ export class DbStorage implements IStorage {
   async deleteSpecialRequest(id: string): Promise<boolean> {
     const result = await db.delete(specialRequests).where(eq(specialRequests.id, id)).returning();
     return result.length > 0;
+  }
+
+  // AI Chat Sessions
+  async getChatSession(id: string): Promise<AiChatSession | undefined> {
+    const result = await db.select().from(aiChatSessions).where(eq(aiChatSessions.id, id)).limit(1);
+    return result[0];
+  }
+
+  async getChatSessionsByUser(tenantId: string, userId: string, limit = 20): Promise<AiChatSession[]> {
+    return await db.select().from(aiChatSessions)
+      .where(
+        and(
+          eq(aiChatSessions.tenantId, tenantId),
+          eq(aiChatSessions.userId, userId),
+          eq(aiChatSessions.isActive, true)
+        )
+      )
+      .orderBy(desc(aiChatSessions.lastMessageAt))
+      .limit(limit);
+  }
+
+  async getRecentChatSessions(tenantId: string, userId: string, weeksBack = 6): Promise<AiChatSession[]> {
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - (weeksBack * 7));
+
+    return await db.select().from(aiChatSessions)
+      .where(
+        and(
+          eq(aiChatSessions.tenantId, tenantId),
+          eq(aiChatSessions.userId, userId),
+          eq(aiChatSessions.isActive, true),
+          gte(aiChatSessions.lastMessageAt, cutoffDate)
+        )
+      )
+      .orderBy(desc(aiChatSessions.lastMessageAt));
+  }
+
+  async createChatSession(session: InsertAiChatSession): Promise<AiChatSession> {
+    const result = await db.insert(aiChatSessions).values(session).returning();
+    return result[0];
+  }
+
+  async updateChatSession(id: string, updates: Partial<InsertAiChatSession>): Promise<AiChatSession | undefined> {
+    const result = await db.update(aiChatSessions).set(updates).where(eq(aiChatSessions.id, id)).returning();
+    return result[0];
+  }
+
+  async archiveChatSession(id: string): Promise<boolean> {
+    const result = await db.update(aiChatSessions)
+      .set({ isActive: false })
+      .where(eq(aiChatSessions.id, id))
+      .returning();
+    return result.length > 0;
+  }
+
+  async deleteOldChatSessions(tenantId: string, weeksToKeep = 6): Promise<number> {
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - (weeksToKeep * 7));
+
+    const result = await db.delete(aiChatSessions)
+      .where(
+        and(
+          eq(aiChatSessions.tenantId, tenantId),
+          lte(aiChatSessions.lastMessageAt, cutoffDate)
+        )
+      )
+      .returning();
+    return result.length;
+  }
+
+  // AI Chat Messages
+  async getChatMessages(sessionId: string): Promise<AiChatMessage[]> {
+    return await db.select().from(aiChatMessages)
+      .where(eq(aiChatMessages.sessionId, sessionId))
+      .orderBy(aiChatMessages.createdAt);
+  }
+
+  async getRecentChatMessages(sessionId: string, limit = 50): Promise<AiChatMessage[]> {
+    return await db.select().from(aiChatMessages)
+      .where(eq(aiChatMessages.sessionId, sessionId))
+      .orderBy(desc(aiChatMessages.createdAt))
+      .limit(limit);
+  }
+
+  async createChatMessage(message: InsertAiChatMessage): Promise<AiChatMessage> {
+    const result = await db.insert(aiChatMessages).values(message).returning();
+
+    // Update session's last message time and count
+    await db.update(aiChatSessions)
+      .set({
+        lastMessageAt: new Date(),
+        messageCount: sql`${aiChatSessions.messageCount} + 1`
+      })
+      .where(eq(aiChatSessions.id, message.sessionId));
+
+    return result[0];
+  }
+
+  async getChatHistorySummary(tenantId: string, userId: string, weeksBack = 6): Promise<{
+    sessions: AiChatSession[];
+    recentTopics: string[];
+  }> {
+    const sessions = await this.getRecentChatSessions(tenantId, userId, weeksBack);
+
+    // Extract topics from session titles
+    const recentTopics = sessions
+      .filter(s => s.title)
+      .map(s => s.title as string)
+      .slice(0, 10);
+
+    return { sessions, recentTopics };
+  }
+
+  /**
+   * Search past conversations for specific content
+   * Used by Milo to recall past discussions on-demand
+   */
+  async searchPastConversations(
+    tenantId: string,
+    userId: string,
+    searchQuery: string,
+    weeksBack = 6,
+    limit = 10
+  ): Promise<{
+    matches: Array<{
+      sessionId: string;
+      sessionTitle: string | null;
+      messageDate: Date;
+      role: string;
+      contentSnippet: string;
+      fullContent: string;
+    }>;
+    totalMatches: number;
+  }> {
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - weeksBack * 7);
+
+    // Get all sessions for user within time range
+    const sessions = await db.select()
+      .from(aiChatSessions)
+      .where(
+        and(
+          eq(aiChatSessions.tenantId, tenantId),
+          eq(aiChatSessions.userId, userId),
+          eq(aiChatSessions.isActive, true),
+          gte(aiChatSessions.lastMessageAt, cutoffDate)
+        )
+      );
+
+    if (sessions.length === 0) {
+      return { matches: [], totalMatches: 0 };
+    }
+
+    const sessionIds = sessions.map(s => s.id);
+    const sessionMap = new Map(sessions.map(s => [s.id, s]));
+
+    // Search messages content using case-insensitive ILIKE
+    const searchPattern = `%${searchQuery}%`;
+    const messages = await db.select()
+      .from(aiChatMessages)
+      .where(
+        and(
+          inArray(aiChatMessages.sessionId, sessionIds),
+          sql`${aiChatMessages.content} ILIKE ${searchPattern}`
+        )
+      )
+      .orderBy(desc(aiChatMessages.createdAt))
+      .limit(limit);
+
+    const matches = messages.map(msg => {
+      const session = sessionMap.get(msg.sessionId);
+      // Extract a snippet around the search term
+      const lowerContent = msg.content.toLowerCase();
+      const lowerQuery = searchQuery.toLowerCase();
+      const matchIndex = lowerContent.indexOf(lowerQuery);
+
+      let snippet = msg.content;
+      if (matchIndex !== -1 && msg.content.length > 150) {
+        const start = Math.max(0, matchIndex - 50);
+        const end = Math.min(msg.content.length, matchIndex + searchQuery.length + 100);
+        snippet = (start > 0 ? "..." : "") +
+                  msg.content.slice(start, end) +
+                  (end < msg.content.length ? "..." : "");
+      }
+
+      return {
+        sessionId: msg.sessionId,
+        sessionTitle: session?.title || null,
+        messageDate: msg.createdAt,
+        role: msg.role,
+        contentSnippet: snippet,
+        fullContent: msg.content
+      };
+    });
+
+    return { matches, totalMatches: matches.length };
   }
 }
 

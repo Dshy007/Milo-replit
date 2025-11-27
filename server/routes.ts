@@ -2982,14 +2982,45 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
       const { default: Anthropic } = await import("@anthropic-ai/sdk");
       const { executeTool } = await import("./ai-functions");
       const { convertToolsForClaude, getClaudeSystemPrompt } = await import("./claude-tools");
+      type ChatHistoryContext = import("./claude-tools").ChatHistoryContext;
 
       const anthropic = new Anthropic({
         apiKey: process.env.ANTHROPIC_API_KEY
       });
 
+      // Fetch lightweight chat history indicator (session count only - actual retrieval is on-demand)
+      let chatHistoryContext: ChatHistoryContext | undefined;
+      try {
+        if (user?.tenantId) {
+          const historySummary = await dbStorage.getChatHistorySummary(
+            user.tenantId,
+            req.session.userId!,
+            6 // 6 weeks of history
+          );
+          if (historySummary.sessions.length > 0) {
+            chatHistoryContext = {
+              recentTopics: [], // Topics loaded on-demand via recallPastConversation tool
+              sessionCount: historySummary.sessions.length,
+              lastSessionDate: historySummary.sessions[0]?.lastMessageAt
+                ? new Date(historySummary.sessions[0].lastMessageAt).toLocaleDateString('en-US', {
+                    weekday: 'long',
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric'
+                  })
+                : undefined
+            };
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching chat history indicator:", error);
+        // Continue without memory context
+      }
+
       const systemPrompt = getClaudeSystemPrompt(
         tenant?.name || "Unknown",
-        user?.username || "Unknown"
+        user?.username || "Unknown",
+        chatHistoryContext
       );
 
       // Convert tools to Claude format
@@ -3722,6 +3753,240 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
     }
   });
 
+  // POST /api/schedules/compare-actuals - Compare actuals Excel against existing records
+  // Returns a diff showing what changed (no-shows, swaps, time bumps)
+  app.post("/api/schedules/compare-actuals", requireAuth, upload.single('file'), async (req: any, res: any) => {
+    try {
+      const tenantId = req.session.tenantId!;
+
+      if (!req.file) {
+        return res.status(400).json({ message: "No file uploaded" });
+      }
+
+      // Parse the actuals file to extract rows
+      const { parseExcelToRows } = await import("./excel-import");
+      const parsedRows = await parseExcelToRows(req.file.buffer);
+
+      if (!parsedRows || parsedRows.length === 0) {
+        return res.status(400).json({ message: "No valid rows found in file" });
+      }
+
+      // Get the week range from the parsed data
+      const dates = parsedRows
+        .filter((r: any) => r.serviceDate)
+        .map((r: any) => new Date(r.serviceDate));
+
+      if (dates.length === 0) {
+        return res.status(400).json({ message: "No valid dates found in file" });
+      }
+
+      const minDate = new Date(Math.min(...dates.map((d: Date) => d.getTime())));
+      const maxDate = new Date(Math.max(...dates.map((d: Date) => d.getTime())));
+
+      // Fetch existing shift occurrences for this date range
+      const existingOccurrences = await db
+        .select({
+          occurrence: shiftOccurrences,
+          assignment: blockAssignments,
+          template: shiftTemplates,
+          driver: drivers,
+        })
+        .from(shiftOccurrences)
+        .leftJoin(blockAssignments, and(
+          eq(blockAssignments.shiftOccurrenceId, shiftOccurrences.id),
+          eq(blockAssignments.isActive, true)
+        ))
+        .leftJoin(shiftTemplates, eq(shiftTemplates.id, shiftOccurrences.templateId))
+        .leftJoin(drivers, eq(drivers.id, blockAssignments.driverId))
+        .where(and(
+          eq(shiftOccurrences.tenantId, tenantId),
+          gte(shiftOccurrences.serviceDate, format(minDate, 'yyyy-MM-dd')),
+          lte(shiftOccurrences.serviceDate, format(maxDate, 'yyyy-MM-dd'))
+        ));
+
+      // Build lookup map by blockId + serviceDate for matching
+      const existingByKey = new Map<string, typeof existingOccurrences[0]>();
+      for (const record of existingOccurrences) {
+        const key = `${record.occurrence.externalBlockId}:${record.occurrence.serviceDate}`;
+        existingByKey.set(key, record);
+      }
+
+      // Compare changes
+      const changes: Array<{
+        type: 'no_show' | 'driver_swap' | 'time_change' | 'new_block' | 'missing_block';
+        blockId: string;
+        serviceDate: string;
+        expected?: {
+          driverName: string | null;
+          startTime: string;
+        };
+        actual?: {
+          driverName: string | null;
+          startTime: string;
+        };
+        description: string;
+      }> = [];
+
+      const processedKeys = new Set<string>();
+
+      // Check each row in the actuals file
+      for (const row of parsedRows) {
+        if (!row.blockId || !row.serviceDate) continue;
+
+        const key = `${row.blockId}:${row.serviceDate}`;
+        processedKeys.add(key);
+
+        const existing = existingByKey.get(key);
+
+        if (!existing) {
+          // New block in actuals that wasn't in our schedule
+          changes.push({
+            type: 'new_block',
+            blockId: row.blockId,
+            serviceDate: row.serviceDate,
+            actual: {
+              driverName: row.driverName || null,
+              startTime: row.startTime || 'Unknown',
+            },
+            description: `Block ${row.blockId} appeared in actuals but wasn't in the original schedule`,
+          });
+          continue;
+        }
+
+        const expectedDriverName = existing.driver
+          ? `${existing.driver.firstName} ${existing.driver.lastName}`.trim()
+          : null;
+        const actualDriverName = row.driverName?.trim() || null;
+
+        // Check for driver changes
+        if (expectedDriverName !== actualDriverName) {
+          if (!actualDriverName || actualDriverName.toLowerCase() === 'unassigned') {
+            // No-show: we had a driver assigned but actual shows unassigned
+            changes.push({
+              type: 'no_show',
+              blockId: row.blockId,
+              serviceDate: row.serviceDate,
+              expected: {
+                driverName: expectedDriverName,
+                startTime: format(new Date(existing.occurrence.scheduledStart), 'HH:mm'),
+              },
+              actual: {
+                driverName: null,
+                startTime: row.startTime || 'Unknown',
+              },
+              description: `${expectedDriverName} was assigned but didn't show. Block ran unassigned.`,
+            });
+          } else if (!expectedDriverName) {
+            // We had it unassigned but someone drove it
+            changes.push({
+              type: 'driver_swap',
+              blockId: row.blockId,
+              serviceDate: row.serviceDate,
+              expected: {
+                driverName: null,
+                startTime: format(new Date(existing.occurrence.scheduledStart), 'HH:mm'),
+              },
+              actual: {
+                driverName: actualDriverName,
+                startTime: row.startTime || 'Unknown',
+              },
+              description: `Block was unassigned but ${actualDriverName} drove it.`,
+            });
+          } else {
+            // Different driver
+            changes.push({
+              type: 'driver_swap',
+              blockId: row.blockId,
+              serviceDate: row.serviceDate,
+              expected: {
+                driverName: expectedDriverName,
+                startTime: format(new Date(existing.occurrence.scheduledStart), 'HH:mm'),
+              },
+              actual: {
+                driverName: actualDriverName,
+                startTime: row.startTime || 'Unknown',
+              },
+              description: `${expectedDriverName} was replaced by ${actualDriverName}.`,
+            });
+          }
+        }
+
+        // Check for significant time changes (more than 30 min bump)
+        if (row.startTime && existing.occurrence.scheduledStart) {
+          const expectedTime = format(new Date(existing.occurrence.scheduledStart), 'HH:mm');
+          const actualTime = row.startTime;
+
+          // Parse times to compare
+          const [expH, expM] = expectedTime.split(':').map(Number);
+          const [actH, actM] = actualTime.split(':').map(Number);
+          const expMinutes = expH * 60 + expM;
+          const actMinutes = actH * 60 + actM;
+          const diffMinutes = Math.abs(expMinutes - actMinutes);
+
+          if (diffMinutes > 30) {
+            changes.push({
+              type: 'time_change',
+              blockId: row.blockId,
+              serviceDate: row.serviceDate,
+              expected: {
+                driverName: expectedDriverName,
+                startTime: expectedTime,
+              },
+              actual: {
+                driverName: actualDriverName,
+                startTime: actualTime,
+              },
+              description: `Start time changed from ${expectedTime} to ${actualTime} (${diffMinutes > 0 ? '+' : ''}${actMinutes - expMinutes} min).`,
+            });
+          }
+        }
+      }
+
+      // Check for missing blocks (we had them scheduled but they're not in actuals)
+      for (const [key, existing] of existingByKey) {
+        if (!processedKeys.has(key)) {
+          const expectedDriverName = existing.driver
+            ? `${existing.driver.firstName} ${existing.driver.lastName}`.trim()
+            : null;
+
+          changes.push({
+            type: 'missing_block',
+            blockId: existing.occurrence.externalBlockId || 'Unknown',
+            serviceDate: existing.occurrence.serviceDate,
+            expected: {
+              driverName: expectedDriverName,
+              startTime: format(new Date(existing.occurrence.scheduledStart), 'HH:mm'),
+            },
+            description: `Block ${existing.occurrence.externalBlockId} was scheduled but not in actuals (cancelled?).`,
+          });
+        }
+      }
+
+      // Summary stats
+      const summary = {
+        totalChanges: changes.length,
+        noShows: changes.filter(c => c.type === 'no_show').length,
+        driverSwaps: changes.filter(c => c.type === 'driver_swap').length,
+        timeChanges: changes.filter(c => c.type === 'time_change').length,
+        newBlocks: changes.filter(c => c.type === 'new_block').length,
+        missingBlocks: changes.filter(c => c.type === 'missing_block').length,
+        dateRange: {
+          start: format(minDate, 'yyyy-MM-dd'),
+          end: format(maxDate, 'yyyy-MM-dd'),
+        },
+      };
+
+      res.json({
+        success: true,
+        summary,
+        changes,
+      });
+    } catch (error: any) {
+      console.error("Actuals comparison error:", error);
+      res.status(500).json({ message: "Failed to compare actuals", error: error.message });
+    }
+  });
+
   // ==================== ON-DEMAND COMPLIANCE ANALYSIS ====================
 
   // POST /api/schedules/analyze-compliance - Run Rolling-6 compliance analysis on current schedule
@@ -4427,17 +4692,17 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
     try {
       const tenantId = req.session.tenantId!;
       const userId = req.session.userId!;
-      
+
       const { query, context } = req.body;
-      
+
       if (!query) {
         return res.status(400).json({ message: "Missing required field: query" });
       }
 
       // Check if OpenAI key is available
       if (!process.env.OPENAI_API_KEY) {
-        return res.status(503).json({ 
-          message: "AI assistant not configured. Please add OPENAI_API_KEY to environment variables." 
+        return res.status(503).json({
+          message: "AI assistant not configured. Please add OPENAI_API_KEY to environment variables."
         });
       }
 
@@ -4451,6 +4716,133 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
     } catch (error: any) {
       console.error("AI query error:", error);
       res.status(500).json({ message: "Failed to process AI query", error: error.message });
+    }
+  });
+
+  // ===== Chat Session Management =====
+
+  // Get all chat sessions for the current user (last 6 weeks)
+  app.get("/api/chat/sessions", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const userId = req.session.userId!;
+      const weeksBack = parseInt(req.query.weeksBack as string) || 6;
+
+      const sessions = await dbStorage.getRecentChatSessions(tenantId, userId, weeksBack);
+      res.json(sessions);
+    } catch (error: any) {
+      console.error("Error fetching chat sessions:", error);
+      res.status(500).json({ message: "Failed to fetch chat sessions", error: error.message });
+    }
+  });
+
+  // Get a specific chat session with its messages
+  app.get("/api/chat/sessions/:sessionId", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { sessionId } = req.params;
+      const tenantId = req.session.tenantId!;
+
+      const session = await dbStorage.getChatSession(sessionId);
+      if (!session || session.tenantId !== tenantId) {
+        return res.status(404).json({ message: "Session not found" });
+      }
+
+      const messages = await dbStorage.getChatMessages(sessionId);
+      res.json({ session, messages });
+    } catch (error: any) {
+      console.error("Error fetching chat session:", error);
+      res.status(500).json({ message: "Failed to fetch chat session", error: error.message });
+    }
+  });
+
+  // Create a new chat session
+  app.post("/api/chat/sessions", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const userId = req.session.userId!;
+      const { title } = req.body;
+
+      const session = await dbStorage.createChatSession({
+        tenantId,
+        userId,
+        title: title || null,
+        messageCount: 0,
+        isActive: true,
+      });
+
+      res.json(session);
+    } catch (error: any) {
+      console.error("Error creating chat session:", error);
+      res.status(500).json({ message: "Failed to create chat session", error: error.message });
+    }
+  });
+
+  // Add a message to a chat session
+  app.post("/api/chat/sessions/:sessionId/messages", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { sessionId } = req.params;
+      const tenantId = req.session.tenantId!;
+      const { role, content, tokensUsed, toolCalls } = req.body;
+
+      // Verify session belongs to this tenant
+      const session = await dbStorage.getChatSession(sessionId);
+      if (!session || session.tenantId !== tenantId) {
+        return res.status(404).json({ message: "Session not found" });
+      }
+
+      const message = await dbStorage.createChatMessage({
+        sessionId,
+        role,
+        content,
+        tokensUsed: tokensUsed || null,
+        toolCalls: toolCalls || null,
+      });
+
+      // Auto-generate title from first user message if session has no title
+      if (!session.title && role === "user" && session.messageCount === 0) {
+        const title = content.length > 50 ? content.substring(0, 50) + "..." : content;
+        await dbStorage.updateChatSession(sessionId, { title });
+      }
+
+      res.json(message);
+    } catch (error: any) {
+      console.error("Error adding chat message:", error);
+      res.status(500).json({ message: "Failed to add message", error: error.message });
+    }
+  });
+
+  // Archive a chat session
+  app.delete("/api/chat/sessions/:sessionId", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { sessionId } = req.params;
+      const tenantId = req.session.tenantId!;
+
+      // Verify session belongs to this tenant
+      const session = await dbStorage.getChatSession(sessionId);
+      if (!session || session.tenantId !== tenantId) {
+        return res.status(404).json({ message: "Session not found" });
+      }
+
+      await dbStorage.archiveChatSession(sessionId);
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("Error archiving chat session:", error);
+      res.status(500).json({ message: "Failed to archive session", error: error.message });
+    }
+  });
+
+  // Get chat history summary for Milo's memory context
+  app.get("/api/chat/history-summary", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const userId = req.session.userId!;
+      const weeksBack = parseInt(req.query.weeksBack as string) || 6;
+
+      const summary = await dbStorage.getChatHistorySummary(tenantId, userId, weeksBack);
+      res.json(summary);
+    } catch (error: any) {
+      console.error("Error fetching chat history summary:", error);
+      res.status(500).json({ message: "Failed to fetch history summary", error: error.message });
     }
   });
 
