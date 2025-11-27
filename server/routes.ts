@@ -2707,7 +2707,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const user = await dbStorage.getUser(req.session.userId!);
       const tenant = user?.tenantId ? await dbStorage.getTenant(user.tenantId) : null;
 
-      // Construct system prompt with enhanced context
+      // Construct system prompt with enhanced context and pattern recognition methodology
       const systemPrompt = `You are Milo, an AI assistant for a trucking operations management platform called Milo. You help ${tenant?.name || "the company"} manage their fleet operations.
 
 You have access to real-time database functions to answer questions about:
@@ -2716,12 +2716,53 @@ You have access to real-time database functions to answer questions about:
 - Blocks - assigned and unassigned capacity
 - Workload distribution - days worked, load balancing across drivers
 
+## PATTERN RECOGNITION METHODOLOGY
+
+You use TREE-BRANCH THINKING to analyze from multiple angles simultaneously:
+
+**For Driver Scheduling Analysis:**
+                    [SCHEDULING DECISION]
+                            |
+        ┌───────────────────┼───────────────────┐
+        │                   │                   │
+    [DRIVER]            [BLOCK]             [BALANCE]
+        │                   │                   │
+   Past pattern       Time/Route         Load distribution
+   Preferences        Requirements       Coverage gaps
+   Availability       Match score        Fairness
+
+**Key Principles:**
+1. NEVER GUESS - Ask clarifying questions when stuck
+2. Gather evidence from ALL branches before deciding
+3. Document patterns and deviations
+4. Provide systematic, evidence-based recommendations
+
+**Scheduling Analysis Process:**
+- Phase 1: CLEAN DATA - Verify input quality
+- Phase 2: IDENTIFY BOUNDARIES - Find week starts (Sunday)
+- Phase 3: FIND PATTERNS - Analyze last 4 days of driver work
+- Phase 4: MATCH BLOCKS - Align patterns to available shifts
+- Phase 5: ASSIGN - Make 3-5 day assignments
+- Phase 6: VERIFY COVERAGE - Check for gaps
+- Phase 7: LOAD BALANCE - Redistribute fairly
+
+**Hard Rules (DOT Compliance):**
+- 6-day maximum consecutive work days
+- Work week: Sunday through Saturday
+- 10 hours between shifts (pre-validated)
+
+**Soft Rules (Preferences):**
+- Shift consistency: ±30 minutes from previous week
+- Pattern matching: Try to match last 4 days worked
+- 3-5 day assignment blocks typical
+
 CRITICAL INSTRUCTIONS:
 - When answering questions about drivers, schedules, or assignments, you MUST use the provided database functions.
 - ONLY reference driver IDs, names, and details that are explicitly returned by your function calls.
 - NEVER fabricate, invent, or guess driver information - only use exact data from tool responses.
 - If you don't have information from a function call, acknowledge that instead of making assumptions.
 - When listing drivers, use ONLY the drivers returned in the most recent function call results.
+- Apply tree-branch thinking: consider driver perspective, block requirements, and load balance simultaneously.
 
 Current Context:
 - Company: ${tenant?.name || "Unknown"}
@@ -3995,6 +4036,100 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
     } catch (error: any) {
       console.error("Python coverage analysis error:", error);
       res.status(500).json({ message: "Failed to analyze coverage", error: error.message });
+    }
+  });
+
+  // POST /api/analysis/pattern-questions - Trigger pattern recognition analysis with structured questions
+  app.post("/api/analysis/pattern-questions", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { analysisType, context } = req.body;
+
+      if (!analysisType || !['scheduling', 'code', 'unified'].includes(analysisType)) {
+        return res.status(400).json({
+          message: "Invalid analysisType. Must be 'scheduling', 'code', or 'unified'"
+        });
+      }
+
+      // Get user info for context
+      const user = await dbStorage.getUser(req.session.userId!);
+      const tenant = user?.tenantId ? await dbStorage.getTenant(user.tenantId) : null;
+
+      // Load the appropriate pattern recognition prompt
+      const fs = await import("fs/promises");
+      const path = await import("path");
+
+      let promptTemplate = '';
+      let promptPath = '';
+
+      if (analysisType === 'scheduling') {
+        promptPath = path.join(process.cwd(), 'driver-scheduling-pattern-recognition-prompt.md');
+        promptTemplate = await fs.readFile(promptPath, 'utf-8');
+      } else if (analysisType === 'code') {
+        promptPath = path.join(process.cwd(), 'pattern-analysis-doctor-prompt.md');
+        promptTemplate = await fs.readFile(promptPath, 'utf-8');
+      } else {
+        promptPath = path.join(process.cwd(), 'complete-pattern-analysis-master-prompt.md');
+        promptTemplate = await fs.readFile(promptPath, 'utf-8');
+      }
+
+      // Construct analysis-specific system prompt with pattern recognition
+      const analysisSystemPrompt = `${promptTemplate}
+
+CURRENT ANALYSIS CONTEXT:
+- Company: ${tenant?.name || "Unknown"}
+- User: ${user?.username || "Unknown"}
+- Analysis Type: ${analysisType}
+${context ? `- Additional Context: ${JSON.stringify(context)}` : ''}
+
+Your task: Apply the pattern recognition methodology above to analyze the current situation. Start by asking the key diagnostic questions from the framework, then systematically gather evidence and provide recommendations.`;
+
+      // Import OpenAI client and AI functions
+      const { default: OpenAI } = await import("openai");
+      const { AI_TOOLS, executeTool } = await import("./ai-functions");
+
+      const openai = new OpenAI({
+        baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+        apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY
+      });
+
+      // Generate initial pattern analysis questions
+      const initialMessages = [
+        { role: "system", content: analysisSystemPrompt },
+        {
+          role: "user",
+          content: analysisType === 'scheduling'
+            ? "I need help analyzing driver scheduling patterns. What systematic questions should we start with to understand the current state?"
+            : analysisType === 'code'
+            ? "I need help debugging a code issue. What diagnostic questions should I start with?"
+            : "I need pattern analysis help. What are the key questions I should answer first?"
+        }
+      ];
+
+      // Get AI response with pattern questions
+      const response = await openai.chat.completions.create({
+        model: "gpt-5",
+        messages: initialMessages,
+        max_completion_tokens: 2048,
+        tools: AI_TOOLS,
+        tool_choice: "auto",
+        stream: false,
+      });
+
+      const analysisQuestions = response.choices[0].message.content;
+
+      res.json({
+        success: true,
+        analysisType,
+        promptTemplate: promptPath.split('/').pop(), // Just the filename
+        questions: analysisQuestions,
+        systemPromptPreview: analysisSystemPrompt.substring(0, 500) + '...',
+      });
+    } catch (error: any) {
+      console.error("Pattern analysis error:", error);
+      res.status(500).json({
+        message: "Failed to generate pattern analysis questions",
+        error: error.message
+      });
     }
   });
 

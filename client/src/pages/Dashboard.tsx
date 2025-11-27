@@ -3,6 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Truck, Calendar, Users, Sparkles, Upload, FileSpreadsheet, Moon, Sun, Zap, Cpu } from "lucide-react";
 import { ComplianceHeatmap } from "@/components/ComplianceHeatmap";
+import { PatternAnalysis } from "@/components/PatternAnalysis";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -150,6 +151,9 @@ export default function Dashboard() {
         <div className="mb-6">
           <ComplianceHeatmap />
         </div>
+
+        {/* Pattern Analysis */}
+        <PatternAnalysis />
 
         <div className="grid gap-6 md:grid-cols-2">
           <Card>
