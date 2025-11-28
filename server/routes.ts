@@ -4858,6 +4858,241 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
     return orchestratorPromise;
   };
 
+  // POST /api/gemini/reconstruct - Reconstruct blocks from trip-level CSV using Gemini
+  app.post("/api/gemini/reconstruct", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { csvData } = req.body;
+
+      if (!csvData) {
+        return res.status(400).json({ message: "Missing required field: csvData" });
+      }
+
+      const { reconstructBlocksWithGemini } = await import("./gemini-reconstruct");
+      const result = await reconstructBlocksWithGemini(csvData);
+
+      if (result.success) {
+        res.json({
+          success: true,
+          blocks: result.blocks,
+          blockCount: result.blocks?.length || 0,
+        });
+      } else {
+        res.status(500).json({
+          success: false,
+          message: result.error,
+          rawResponse: result.rawResponse,
+        });
+      }
+    } catch (error: any) {
+      console.error("Gemini reconstruct error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Block reconstruction failed",
+        error: error.message,
+      });
+    }
+  });
+
+  // POST /api/schedules/import-reconstructed - Import reconstructed blocks to calendar
+  app.post("/api/schedules/import-reconstructed", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const userId = req.session.userId!;
+      const { blocks: reconstructedBlocks } = req.body;
+
+      if (!reconstructedBlocks || !Array.isArray(reconstructedBlocks) || reconstructedBlocks.length === 0) {
+        return res.status(400).json({ message: "Missing required field: blocks (non-empty array)" });
+      }
+
+      console.log(`[IMPORT] Starting import of ${reconstructedBlocks.length} reconstructed blocks for tenant ${tenantId}`);
+
+      // Fetch all contracts for this tenant to match against
+      const tenantContracts = await db
+        .select()
+        .from(contracts)
+        .where(eq(contracts.tenantId, tenantId));
+
+      // Fetch all drivers for this tenant to match against
+      const tenantDrivers = await db
+        .select()
+        .from(drivers)
+        .where(eq(drivers.tenantId, tenantId));
+
+      // Build lookup maps
+      const contractMap = new Map<string, typeof tenantContracts[0]>();
+      for (const contract of tenantContracts) {
+        // Create lookup keys like "Solo2_Tractor_6" -> contract
+        const key = `${contract.type.charAt(0).toUpperCase() + contract.type.slice(1)}_${contract.tractorId}`;
+        contractMap.set(key, contract);
+        // Also support lowercase key
+        contractMap.set(key.toLowerCase(), contract);
+      }
+
+      // Build driver lookup by name (normalized)
+      const driverMap = new Map<string, typeof tenantDrivers[0]>();
+      for (const driver of tenantDrivers) {
+        const fullName = `${driver.firstName} ${driver.lastName}`.toLowerCase().trim();
+        driverMap.set(fullName, driver);
+        // Also add initial + last name format: "M. FREEMAN" -> "m. freeman"
+        if (driver.firstName && driver.lastName) {
+          const initialFormat = `${driver.firstName.charAt(0).toLowerCase()}. ${driver.lastName.toLowerCase()}`;
+          driverMap.set(initialFormat, driver);
+        }
+      }
+
+      const results = {
+        created: 0,
+        skipped: 0,
+        errors: [] as string[],
+        assignments: 0,
+      };
+
+      const importBatchId = `recon_${Date.now()}`;
+
+      for (const block of reconstructedBlocks) {
+        try {
+          // Parse contract from block.contract (e.g., "Solo2_Tractor_6")
+          const contractKey = block.contract;
+          const contract = contractMap.get(contractKey) || contractMap.get(contractKey?.toLowerCase());
+
+          if (!contract) {
+            results.errors.push(`Contract not found: ${contractKey} for block ${block.blockId}`);
+            results.skipped++;
+            continue;
+          }
+
+          // Parse duration (e.g., "38h" -> 38)
+          const durationMatch = block.duration?.match(/(\d+)/);
+          const duration = durationMatch ? parseInt(durationMatch[1]) : contract.duration;
+
+          // Parse solo type from contract key
+          const soloMatch = contractKey?.match(/(solo[12])/i);
+          const soloType = soloMatch ? soloMatch[1].toLowerCase() : contract.type;
+
+          // Parse tractor from contract key (e.g., "Solo2_Tractor_6" -> "Tractor_6")
+          const tractorMatch = contractKey?.match(/tractor_(\d+)/i);
+          const tractorId = tractorMatch ? `Tractor_${tractorMatch[1]}` : contract.tractorId;
+
+          // Parse start date and time
+          const startDate = new Date(block.startDate + 'T00:00:00');
+          const [hours, minutes] = (block.canonicalStartTime || contract.startTime).split(':').map(Number);
+          const startTimestamp = new Date(startDate);
+          startTimestamp.setHours(hours, minutes, 0, 0);
+
+          // Calculate end timestamp
+          const endTimestamp = new Date(startTimestamp);
+          endTimestamp.setHours(endTimestamp.getHours() + duration);
+
+          // Check if this block already exists
+          const existingBlock = await db
+            .select()
+            .from(blocks)
+            .where(and(
+              eq(blocks.tenantId, tenantId),
+              eq(blocks.blockId, block.blockId),
+              eq(blocks.serviceDate, startDate)
+            ))
+            .limit(1);
+
+          let blockRecord;
+          if (existingBlock.length > 0) {
+            // Update existing block
+            const updated = await db
+              .update(blocks)
+              .set({
+                contractId: contract.id,
+                startTimestamp,
+                endTimestamp,
+                tractorId,
+                soloType,
+                duration,
+                status: 'assigned',
+                updatedAt: new Date(),
+              })
+              .where(eq(blocks.id, existingBlock[0].id))
+              .returning();
+            blockRecord = updated[0];
+            console.log(`[IMPORT] Updated existing block: ${block.blockId}`);
+          } else {
+            // Create new block
+            const inserted = await db
+              .insert(blocks)
+              .values({
+                tenantId,
+                blockId: block.blockId,
+                serviceDate: startDate,
+                contractId: contract.id,
+                startTimestamp,
+                endTimestamp,
+                tractorId,
+                soloType,
+                duration,
+                status: 'assigned',
+              })
+              .returning();
+            blockRecord = inserted[0];
+            results.created++;
+            console.log(`[IMPORT] Created block: ${block.blockId}`);
+          }
+
+          // Try to create driver assignment if we have a primary driver
+          if (block.primaryDriver && blockRecord) {
+            const driverName = block.primaryDriver.toLowerCase().trim();
+            const driver = driverMap.get(driverName);
+
+            if (driver) {
+              // Check if assignment already exists
+              const existingAssignment = await db
+                .select()
+                .from(blockAssignments)
+                .where(and(
+                  eq(blockAssignments.tenantId, tenantId),
+                  eq(blockAssignments.blockId, blockRecord.id),
+                  eq(blockAssignments.isActive, true)
+                ))
+                .limit(1);
+
+              if (existingAssignment.length === 0) {
+                await db.insert(blockAssignments).values({
+                  tenantId,
+                  blockId: blockRecord.id,
+                  driverId: driver.id,
+                  assignedBy: userId,
+                  importBatchId,
+                  amazonBlockId: block.blockId,
+                  notes: `Imported from trip-level CSV reconstruction`,
+                });
+                results.assignments++;
+                console.log(`[IMPORT] Assigned driver ${driver.firstName} ${driver.lastName} to block ${block.blockId}`);
+              }
+            } else {
+              console.log(`[IMPORT] Driver not found: "${block.primaryDriver}" for block ${block.blockId}`);
+            }
+          }
+        } catch (blockError: any) {
+          results.errors.push(`Error processing block ${block.blockId}: ${blockError.message}`);
+          results.skipped++;
+        }
+      }
+
+      console.log(`[IMPORT] Complete: ${results.created} created, ${results.assignments} assignments, ${results.skipped} skipped, ${results.errors.length} errors`);
+
+      res.json({
+        success: true,
+        message: `Imported ${results.created} blocks with ${results.assignments} driver assignments`,
+        ...results,
+        importBatchId,
+      });
+    } catch (error: any) {
+      console.error("Import reconstructed blocks error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to import reconstructed blocks",
+        error: error.message,
+      });
+    }
+  });
+
   // POST /api/neural/process - Process a query through the neural intelligence system
   app.post("/api/neural/process", requireAuth, async (req: Request, res: Response) => {
     try {
