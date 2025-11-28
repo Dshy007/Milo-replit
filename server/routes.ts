@@ -17,7 +17,7 @@ import {
   insertSpecialRequestSchema, updateSpecialRequestSchema,
   insertDriverAvailabilityPreferenceSchema, updateDriverAvailabilityPreferenceSchema,
   blocks, blockAssignments, assignmentHistory, driverContractStats, drivers, protectedDriverRules,
-  shiftOccurrences, shiftTemplates, contracts, trucks
+  shiftOccurrences, shiftTemplates, contracts, trucks, driverAvailabilityPreferences
 } from "@shared/schema";
 import { eq, and, inArray, sql, gte, lte, not } from "drizzle-orm";
 import session from "express-session";
@@ -327,13 +327,105 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ==================== DRIVERS ====================
-  
+
   app.get("/api/drivers", requireAuth, async (req, res) => {
     try {
       const drivers = await dbStorage.getDriversByTenant(req.session.tenantId!);
       res.json(drivers);
     } catch (error: any) {
       res.status(500).json({ message: "Failed to fetch drivers", error: error.message });
+    }
+  });
+
+  // GET /api/drivers/scheduling-roster - Get driver profiles with preferences for schedule builder
+  // Joins drivers + driverAvailabilityPreferences to return aggregated scheduling profiles
+  // NOTE: This must be defined BEFORE /api/drivers/:id to avoid route conflicts
+  app.get("/api/drivers/scheduling-roster", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+
+      // Get all active drivers for this tenant
+      const allDrivers = await db.select()
+        .from(drivers)
+        .where(and(
+          eq(drivers.tenantId, tenantId),
+          eq(drivers.status, "active")
+        ));
+
+      // Get all availability preferences for this tenant
+      const preferences = await db.select()
+        .from(driverAvailabilityPreferences)
+        .where(eq(driverAvailabilityPreferences.tenantId, tenantId));
+
+      // Group preferences by driver
+      const prefsByDriver = new Map<string, typeof preferences>();
+      for (const pref of preferences) {
+        const existing = prefsByDriver.get(pref.driverId) || [];
+        existing.push(pref);
+        prefsByDriver.set(pref.driverId, existing);
+      }
+
+      // Build driver profiles with aggregated preferences
+      const driverProfiles = allDrivers.map(driver => {
+        const driverPrefs = prefsByDriver.get(driver.id) || [];
+
+        // Determine solo type from preferences
+        const blockTypes = new Set(driverPrefs.map(p => p.blockType));
+        let soloType: "solo1" | "solo2" | "both" = "solo1";
+        if (blockTypes.has("solo1") && blockTypes.has("solo2")) {
+          soloType = "both";
+        } else if (blockTypes.has("solo2")) {
+          soloType = "solo2";
+        }
+
+        // Get preferred days (where isAvailable = true)
+        const preferredDays = [...new Set(
+          driverPrefs
+            .filter(p => p.isAvailable)
+            .map(p => p.dayOfWeek)
+        )];
+
+        // Get most common start time as canonical time
+        const timeCounts = new Map<string, number>();
+        for (const pref of driverPrefs.filter(p => p.isAvailable)) {
+          timeCounts.set(pref.startTime, (timeCounts.get(pref.startTime) || 0) + 1);
+        }
+        let canonicalTime = "21:30"; // Default
+        let maxCount = 0;
+        for (const [time, count] of timeCounts) {
+          if (count > maxCount) {
+            maxCount = count;
+            canonicalTime = time;
+          }
+        }
+
+        // Set max weekly runs based on solo type
+        const maxWeeklyRuns = soloType === "solo2" ? 3 : soloType === "solo1" ? 6 : 4;
+
+        return {
+          id: driver.id,
+          name: `${driver.firstName} ${driver.lastName}`,
+          firstName: driver.firstName,
+          lastName: driver.lastName,
+          soloType,
+          preferredDays,
+          canonicalTime,
+          maxWeeklyRuns,
+          reliabilityRating: 3, // Default - can be calculated from assignment history later
+          status: driver.status as "active" | "standby" | "inactive",
+          domicile: driver.domicile,
+          loadEligible: driver.loadEligible,
+        };
+      });
+
+      res.json({
+        drivers: driverProfiles,
+        totalCount: driverProfiles.length,
+        activeCount: driverProfiles.filter(d => d.status === "active").length,
+      });
+    } catch (error: any) {
+      console.error("Error fetching scheduling roster:", error);
+      res.status(500).json({ message: "Failed to fetch scheduling roster", error: error.message });
     }
   });
 
