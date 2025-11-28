@@ -4846,6 +4846,228 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
     }
   });
 
+  // ==================== NEURAL INTELLIGENCE SYSTEM ====================
+
+  // Lazy-load the neural system to avoid circular dependencies
+  let orchestratorPromise: Promise<any> | null = null;
+  const getNeuralOrchestrator = async () => {
+    if (!orchestratorPromise) {
+      const { getOrchestrator } = await import("./ai");
+      orchestratorPromise = getOrchestrator();
+    }
+    return orchestratorPromise;
+  };
+
+  // POST /api/neural/process - Process a query through the neural intelligence system
+  app.post("/api/neural/process", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const userId = req.session.userId!;
+      const { input, sessionId, conversationHistory, forceAgent } = req.body;
+
+      if (!input) {
+        return res.status(400).json({ message: "Missing required field: input" });
+      }
+
+      // Check for required API keys
+      if (!process.env.ANTHROPIC_API_KEY) {
+        return res.status(503).json({
+          message: "Neural system not configured. Missing ANTHROPIC_API_KEY."
+        });
+      }
+
+      const orchestrator = await getNeuralOrchestrator();
+
+      const response = await orchestrator.process({
+        input,
+        tenantId,
+        sessionId,
+        userId,
+        conversationHistory,
+        forceAgent
+      });
+
+      res.json({
+        success: true,
+        ...response
+      });
+    } catch (error: any) {
+      console.error("Neural process error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Neural processing failed",
+        error: error.message
+      });
+    }
+  });
+
+  // GET /api/neural/status - Get neural system status and agent health
+  app.get("/api/neural/status", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const orchestrator = await getNeuralOrchestrator();
+      const agentStatus = orchestrator.getAgentStatus();
+
+      res.json({
+        status: "online",
+        agents: agentStatus,
+        config: {
+          convergenceThreshold: 85,
+          maxBranchDepth: 5,
+          maxBranchesPerParent: 4,
+          memoryRetentionWeeks: 6
+        }
+      });
+    } catch (error: any) {
+      console.error("Neural status error:", error);
+      res.status(500).json({
+        status: "error",
+        message: "Failed to get neural status",
+        error: error.message
+      });
+    }
+  });
+
+  // GET /api/neural/patterns - Get learned patterns for the tenant
+  app.get("/api/neural/patterns", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { type, status, minConfidence } = req.query;
+
+      const { getPatternTracker } = await import("./ai");
+      const patternTracker = getPatternTracker();
+
+      // Get patterns with optional filters
+      const patterns = await patternTracker.getPatterns(tenantId, {
+        type: type as string,
+        status: status as string,
+        minConfidence: minConfidence ? parseInt(minConfidence as string) : undefined
+      });
+
+      res.json({ patterns });
+    } catch (error: any) {
+      console.error("Neural patterns error:", error);
+      res.status(500).json({ message: "Failed to get patterns", error: error.message });
+    }
+  });
+
+  // GET /api/neural/profiles/:entityType/:entityId - Get entity profile
+  app.get("/api/neural/profiles/:entityType/:entityId", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { entityType, entityId } = req.params;
+
+      const { getProfileBuilder } = await import("./ai");
+      const profileBuilder = getProfileBuilder();
+
+      let profile;
+      switch (entityType) {
+        case "driver":
+          profile = await profileBuilder.getDriverProfile(tenantId, entityId);
+          break;
+        case "block":
+          profile = await profileBuilder.getBlockProfile(tenantId, entityId);
+          break;
+        case "user":
+          profile = await profileBuilder.getUserProfile(tenantId, entityId);
+          break;
+        default:
+          return res.status(400).json({ message: "Invalid entity type. Must be: driver, block, or user" });
+      }
+
+      if (!profile) {
+        return res.status(404).json({ message: `${entityType} profile not found` });
+      }
+
+      res.json({ profile });
+    } catch (error: any) {
+      console.error("Neural profile error:", error);
+      res.status(500).json({ message: "Failed to get profile", error: error.message });
+    }
+  });
+
+  // GET /api/neural/thought-tree/:rootId - Get a thought tree by root ID
+  app.get("/api/neural/thought-tree/:rootId", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { rootId } = req.params;
+
+      const { getBranchManager } = await import("./ai");
+      const branchManager = getBranchManager();
+
+      const tree = await branchManager.getTree(rootId);
+
+      if (!tree) {
+        return res.status(404).json({ message: "Thought tree not found" });
+      }
+
+      // Convert Map to array for JSON serialization
+      const branches = Array.from(tree.branches.values());
+
+      res.json({
+        rootId: tree.rootId,
+        tenantId: tree.tenantId,
+        sessionId: tree.sessionId,
+        maxDepth: tree.maxDepth,
+        totalBranches: tree.totalBranches,
+        convergencePath: tree.convergencePath,
+        branches
+      });
+    } catch (error: any) {
+      console.error("Neural thought tree error:", error);
+      res.status(500).json({ message: "Failed to get thought tree", error: error.message });
+    }
+  });
+
+  // POST /api/neural/memory/cleanup - Trigger memory cleanup (admin only)
+  app.post("/api/neural/memory/cleanup", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { dryRun } = req.body;
+
+      const { runCleanupOnce } = await import("./ai");
+      const result = await runCleanupOnce({ dryRun: dryRun === true });
+
+      res.json({
+        success: true,
+        result
+      });
+    } catch (error: any) {
+      console.error("Neural cleanup error:", error);
+      res.status(500).json({ message: "Failed to run cleanup", error: error.message });
+    }
+  });
+
+  // POST /api/neural/analyze-confidence - Analyze confidence for a decision context
+  app.post("/api/neural/analyze-confidence", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const {
+        dotStatus,
+        protectedRules,
+        hasDriverData,
+        hasBlockData,
+        hasHistoricalData,
+        patternMatches,
+        agentOpinions
+      } = req.body;
+
+      const { getConfidenceCalculator } = await import("./ai");
+      const calculator = getConfidenceCalculator();
+
+      const score = calculator.calculate({
+        dotStatus,
+        protectedRules,
+        hasDriverData: hasDriverData ?? true,
+        hasBlockData: hasBlockData ?? true,
+        hasHistoricalData: hasHistoricalData ?? false,
+        patternMatches: patternMatches ?? 0,
+        agentOpinions: agentOpinions ?? []
+      });
+
+      res.json({ score });
+    } catch (error: any) {
+      console.error("Confidence analysis error:", error);
+      res.status(500).json({ message: "Failed to analyze confidence", error: error.message });
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }

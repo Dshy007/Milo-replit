@@ -105,3 +105,31 @@ export {
   type CleanupResult,
   type CleanupConfig
 } from "./memory";
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                              BRANCHING SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export {
+  BranchManager,
+  getBranchManager,
+  ConfidenceCalculator,
+  getConfidenceCalculator,
+  ConvergenceEngine,
+  getConvergenceEngine,
+  type Branch,
+  type BranchTree,
+  type BranchStatus,
+  type BranchType,
+  type BranchingDecision,
+  type BranchEvaluation,
+  type ConfidenceFactor,
+  type ConfidenceScore,
+  type ConfidenceContext,
+  type AgentOpinion,
+  type ConvergenceResult,
+  type ConvergenceCheck,
+  type ConvergenceThresholds,
+  type DecisionCriticality,
+  type DecisionContext
+} from "./branching";

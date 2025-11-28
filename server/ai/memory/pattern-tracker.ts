@@ -475,6 +475,60 @@ export class PatternTracker {
       topPatterns
     };
   }
+
+  /**
+   * Get patterns with optional filters
+   */
+  async getPatterns(
+    tenantId: string,
+    filters?: {
+      type?: string;
+      status?: string;
+      minConfidence?: number;
+    }
+  ): Promise<PatternMemory[]> {
+    const now = new Date();
+
+    // Build query conditions
+    const conditions = [
+      eq(neuralPatterns.tenantId, tenantId),
+      gte(neuralPatterns.expiresAt, now)
+    ];
+
+    if (filters?.type) {
+      conditions.push(eq(neuralPatterns.patternType, filters.type));
+    }
+
+    if (filters?.status) {
+      conditions.push(eq(neuralPatterns.status, filters.status));
+    }
+
+    if (filters?.minConfidence !== undefined) {
+      conditions.push(gte(neuralPatterns.confidence, filters.minConfidence));
+    }
+
+    const patterns = await db
+      .select()
+      .from(neuralPatterns)
+      .where(and(...conditions))
+      .orderBy(desc(neuralPatterns.confidence))
+      .limit(100);
+
+    return patterns.map(p => ({
+      id: p.id,
+      tenantId: p.tenantId,
+      patternType: p.patternType,
+      subjectId: p.subjectId,
+      subjectType: p.subjectType,
+      pattern: p.pattern,
+      confidence: p.confidence,
+      observations: p.observations,
+      status: p.status,
+      firstObserved: p.firstObserved,
+      lastObserved: p.lastObserved,
+      expiresAt: p.expiresAt
+    }));
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

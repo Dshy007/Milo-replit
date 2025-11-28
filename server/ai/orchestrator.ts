@@ -29,6 +29,16 @@ import { ManusExecutor, getExecutor } from "./agents/manus-executor";
 // Memory System
 import { getMemoryManager, getPatternTracker, getProfileBuilder } from "./memory";
 
+// Branching System
+import {
+  getBranchManager,
+  getConfidenceCalculator,
+  getConvergenceEngine,
+  type Branch,
+  type DecisionContext,
+  type ConvergenceResult
+} from "./branching";
+
 // ═══════════════════════════════════════════════════════════════════════════════
 //                              ORCHESTRATOR TYPES
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -50,6 +60,7 @@ export interface OrchestratorResponse {
   branches?: ThoughtBranch[];
   patterns?: Pattern[];
   converged: boolean;
+  convergenceResult?: ConvergenceResult;
   metadata?: Record<string, unknown>;
 }
 
@@ -71,6 +82,11 @@ export class NeuralOrchestrator {
   private executor: ManusExecutor | null = null;
   private initialized: boolean = false;
 
+  // Branching system components
+  private branchManager = getBranchManager();
+  private confidenceCalc = getConfidenceCalculator();
+  private convergenceEngine = getConvergenceEngine();
+
   // Fallback chains for each agent type
   private fallbackChains: Record<AgentId, AgentId[]> = {
     architect: ["analyst", "scout"],
@@ -80,48 +96,88 @@ export class NeuralOrchestrator {
   };
 
   /**
-   * Initialize all agents
+   * Initialize all agents (graceful degradation if API keys missing)
    */
   async initialize(): Promise<void> {
     if (this.initialized) return;
 
     console.log("🧠 Initializing Neural Intelligence System...\n");
 
+    const agentStatus: Record<string, string> = {};
+
+    // Initialize architect (requires ANTHROPIC_API_KEY)
     try {
-      // Initialize architect (synchronous getter, async initialize)
-      const architect = getArchitect();
-      await architect.initialize();
-      this.architect = architect;
-
-      // Initialize other agents in parallel (they have async getters)
-      const [scout, analyst, executor] = await Promise.all([
-        getScout(),
-        getAnalyst(),
-        getExecutor()
-      ]);
-
-      this.scout = scout;
-      this.analyst = analyst;
-      this.executor = executor;
-
-      this.initialized = true;
-
-      console.log("╔══════════════════════════════════════════════════════════════════╗");
-      console.log("║           NEURAL INTELLIGENCE SYSTEM ONLINE                       ║");
-      console.log("╠══════════════════════════════════════════════════════════════════╣");
-      console.log("║  🧠 Architect (Claude)     ✓ Ready                               ║");
-      console.log("║  👁️  Scout (Gemini)         ✓ Ready                               ║");
-      console.log("║  📊 Analyst (ChatGPT)      ✓ Ready                               ║");
-      console.log("║  ⚡ Executor (Manus)       ✓ Ready                               ║");
-      console.log("╚══════════════════════════════════════════════════════════════════╝\n");
-    } catch (error) {
-      console.error("Failed to initialize Neural Intelligence System:", error);
-      throw error;
+      if (process.env.ANTHROPIC_API_KEY) {
+        const architect = getArchitect();
+        await architect.initialize();
+        this.architect = architect;
+        agentStatus.architect = "✓ Ready";
+      } else {
+        agentStatus.architect = "⚠ No API key";
+      }
+    } catch (error: any) {
+      agentStatus.architect = `✗ ${error.message.slice(0, 30)}`;
     }
+
+    // Initialize scout (requires GOOGLE_AI_API_KEY)
+    try {
+      if (process.env.GOOGLE_AI_API_KEY) {
+        const scout = await getScout();
+        this.scout = scout;
+        agentStatus.scout = "✓ Ready";
+      } else {
+        agentStatus.scout = "⚠ No API key";
+      }
+    } catch (error: any) {
+      agentStatus.scout = `✗ ${error.message.slice(0, 30)}`;
+    }
+
+    // Initialize analyst (requires OPENAI_API_KEY)
+    try {
+      if (process.env.OPENAI_API_KEY) {
+        const analyst = await getAnalyst();
+        this.analyst = analyst;
+        agentStatus.analyst = "✓ Ready";
+      } else {
+        agentStatus.analyst = "⚠ No API key";
+      }
+    } catch (error: any) {
+      agentStatus.analyst = `✗ ${error.message.slice(0, 30)}`;
+    }
+
+    // Initialize executor (requires MANUS_API_KEY - optional)
+    try {
+      if (process.env.MANUS_API_KEY) {
+        const executor = await getExecutor();
+        this.executor = executor;
+        agentStatus.executor = "✓ Ready";
+      } else {
+        agentStatus.executor = "⚠ No API key (optional)";
+      }
+    } catch (error: any) {
+      agentStatus.executor = `✗ ${error.message.slice(0, 30)}`;
+    }
+
+    // Check if at least one agent is available
+    const hasAgent = this.architect || this.scout || this.analyst;
+    if (!hasAgent) {
+      throw new Error("No AI agents available. Set at least one API key: ANTHROPIC_API_KEY, GOOGLE_AI_API_KEY, or OPENAI_API_KEY");
+    }
+
+    this.initialized = true;
+
+    console.log("╔══════════════════════════════════════════════════════════════════╗");
+    console.log("║           NEURAL INTELLIGENCE SYSTEM ONLINE                       ║");
+    console.log("╠══════════════════════════════════════════════════════════════════╣");
+    console.log(`║  🧠 Architect (Claude)     ${agentStatus.architect.padEnd(38)}║`);
+    console.log(`║  👁️  Scout (Gemini)         ${agentStatus.scout.padEnd(38)}║`);
+    console.log(`║  📊 Analyst (ChatGPT)      ${agentStatus.analyst.padEnd(38)}║`);
+    console.log(`║  ⚡ Executor (Manus)       ${agentStatus.executor.padEnd(38)}║`);
+    console.log("╚══════════════════════════════════════════════════════════════════╝\n");
   }
 
   /**
-   * Process a request through the neural system
+   * Process a request through the neural system with organic branching
    */
   async process(request: OrchestratorRequest): Promise<OrchestratorResponse> {
     if (!this.initialized) {
@@ -132,6 +188,7 @@ export class NeuralOrchestrator {
     const thoughtPath: string[] = [];
     let allBranches: ThoughtBranch[] = [];
     let allPatterns: Pattern[] = [];
+    let convergenceResult: ConvergenceResult | undefined;
 
     try {
       // Build context with memory
@@ -145,6 +202,19 @@ export class NeuralOrchestrator {
       const targetAgent = request.forceAgent || intent.suggestedAgent;
       thoughtPath.push(`Routing to: ${targetAgent}`);
 
+      // Create root branch for this thought tree
+      const rootBranch = await this.branchManager.createRoot(
+        request.tenantId,
+        targetAgent,
+        request.input,
+        {
+          sessionId: request.sessionId,
+          type: "question",
+          confidence: intent.confidence
+        }
+      );
+      thoughtPath.push(`Created thought tree: ${rootBranch.id.slice(0, 8)}`);
+
       // Build agent request
       const agentRequest: AgentRequest = {
         input: request.input,
@@ -156,6 +226,20 @@ export class NeuralOrchestrator {
       let response = await this.routeToAgent(targetAgent, agentRequest);
       thoughtPath.push(`${targetAgent}: ${response.confidence}% confidence`);
 
+      // Create branch for agent's response
+      const responseBranch = await this.branchManager.createBranch(
+        request.tenantId,
+        rootBranch.id,
+        targetAgent,
+        response.output.substring(0, 500), // Truncate for storage
+        {
+          sessionId: request.sessionId,
+          type: "hypothesis",
+          confidence: response.confidence,
+          evidence: { agentId: targetAgent }
+        }
+      );
+
       // Collect branches and patterns
       if (response.branches) {
         allBranches.push(...response.branches);
@@ -164,35 +248,113 @@ export class NeuralOrchestrator {
         allPatterns.push(...response.patterns);
       }
 
-      // If not converged and another agent is suggested, continue the chain
+      // Determine decision context for convergence
+      const decisionContext = this.buildDecisionContext(request.input, context);
+
+      // Check if we should branch or continue exploring
       let iterations = 0;
       const maxIterations = 3;
+      let currentBranchId = responseBranch.id;
 
-      while (!response.shouldConverge && response.suggestedNextAgent && iterations < maxIterations) {
+      while (!response.shouldConverge && iterations < maxIterations) {
+        // Evaluate convergence
+        convergenceResult = await this.convergenceEngine.evaluateTree(
+          rootBranch.id,
+          decisionContext
+        );
+
+        thoughtPath.push(`Convergence check: ${convergenceResult.recommendation} (${convergenceResult.confidence}%)`);
+
+        // If converged, we're done
+        if (convergenceResult.canConverge) {
+          await this.branchManager.updateBranch(currentBranchId, {
+            status: "converged",
+            confidence: convergenceResult.confidence
+          });
+          break;
+        }
+
+        // Decide whether to branch or continue
+        const branchingDecision = this.branchManager.decideBranching(
+          response.confidence,
+          iterations + 1,
+          allBranches.length
+        );
+
+        if (!branchingDecision.shouldBranch && !response.suggestedNextAgent) {
+          thoughtPath.push(`No more branching: ${branchingDecision.reason}`);
+          break;
+        }
+
         iterations++;
-        const nextAgent = response.suggestedNextAgent;
-        thoughtPath.push(`Continuing to: ${nextAgent}`);
 
-        // Build new request with previous response as context
-        const chainedRequest: AgentRequest = {
-          input: `Previous analysis from ${targetAgent}:\n${response.output}\n\nOriginal query: ${request.input}`,
-          context: {
-            ...context,
-            currentThoughts: allBranches
-          },
-          parentThoughtId: response.thoughtId,
-          requiresBranching: response.confidence < 85
-        };
+        // If agent suggests next agent, follow the chain
+        if (response.suggestedNextAgent) {
+          const nextAgent = response.suggestedNextAgent;
+          thoughtPath.push(`Continuing to: ${nextAgent}`);
 
-        response = await this.routeToAgent(nextAgent, chainedRequest);
-        thoughtPath.push(`${nextAgent}: ${response.confidence}% confidence`);
+          // Build new request with previous response as context
+          const chainedRequest: AgentRequest = {
+            input: `Previous analysis from ${targetAgent}:\n${response.output}\n\nOriginal query: ${request.input}`,
+            context: {
+              ...context,
+              currentThoughts: allBranches
+            },
+            parentThoughtId: response.thoughtId,
+            requiresBranching: response.confidence < 85
+          };
 
-        if (response.branches) {
-          allBranches.push(...response.branches);
+          response = await this.routeToAgent(nextAgent, chainedRequest);
+          thoughtPath.push(`${nextAgent}: ${response.confidence}% confidence`);
+
+          // Create branch for this agent's response
+          const agentBranch = await this.branchManager.createBranch(
+            request.tenantId,
+            currentBranchId,
+            nextAgent,
+            response.output.substring(0, 500),
+            {
+              sessionId: request.sessionId,
+              type: response.shouldConverge ? "conclusion" : "observation",
+              confidence: response.confidence,
+              evidence: { agentId: nextAgent, iteration: iterations }
+            }
+          );
+          currentBranchId = agentBranch.id;
+
+          if (response.branches) {
+            allBranches.push(...response.branches);
+          }
+          if (response.patterns) {
+            allPatterns.push(...response.patterns);
+          }
+        } else if (branchingDecision.shouldBranch) {
+          // Create exploration branches
+          thoughtPath.push(`Branching: ${branchingDecision.suggestedBranches.length} new paths`);
+
+          for (const suggestion of branchingDecision.suggestedBranches) {
+            await this.branchManager.createBranch(
+              request.tenantId,
+              currentBranchId,
+              targetAgent,
+              suggestion.focus,
+              {
+                sessionId: request.sessionId,
+                type: suggestion.type,
+                confidence: suggestion.estimatedConfidence
+              }
+            );
+          }
+          break;
         }
-        if (response.patterns) {
-          allPatterns.push(...response.patterns);
-        }
+      }
+
+      // Final convergence check
+      if (!convergenceResult) {
+        convergenceResult = await this.convergenceEngine.evaluateTree(
+          rootBranch.id,
+          decisionContext
+        );
       }
 
       // Store any discovered patterns
@@ -207,10 +369,12 @@ export class NeuralOrchestrator {
         thoughtPath,
         branches: allBranches.length > 0 ? allBranches : undefined,
         patterns: allPatterns.length > 0 ? allPatterns : undefined,
-        converged: response.shouldConverge,
+        converged: convergenceResult?.canConverge || response.shouldConverge,
+        convergenceResult,
         metadata: {
           responseTimeMs: Date.now() - startTime,
           iterations,
+          rootBranchId: rootBranch.id,
           ...response.metadata
         }
       };
@@ -230,6 +394,51 @@ export class NeuralOrchestrator {
 
       throw error;
     }
+  }
+
+  /**
+   * Build decision context for convergence evaluation
+   */
+  private buildDecisionContext(input: string, context: AgentContext): DecisionContext {
+    const lowerInput = input.toLowerCase();
+
+    // Detect criticality based on keywords
+    let criticality: "low" | "medium" | "high" | "critical" = "medium";
+
+    if (lowerInput.includes("urgent") || lowerInput.includes("emergency") || lowerInput.includes("now")) {
+      criticality = "high";
+    } else if (lowerInput.includes("critical") || lowerInput.includes("immediate")) {
+      criticality = "critical";
+    } else if (lowerInput.includes("when possible") || lowerInput.includes("eventually")) {
+      criticality = "low";
+    }
+
+    // Check for DOT implications
+    const hasDOTImplications =
+      lowerInput.includes("dot") ||
+      lowerInput.includes("hours") ||
+      lowerInput.includes("drive") ||
+      lowerInput.includes("solo");
+
+    // Check for protected driver mentions
+    const hasProtectedDriver =
+      lowerInput.includes("protected") ||
+      lowerInput.includes("preference") ||
+      lowerInput.includes("only works") ||
+      lowerInput.includes("can't work");
+
+    // Count affected entities (rough estimate)
+    const driverMentions = (input.match(/driver/gi) || []).length;
+    const blockMentions = (input.match(/block/gi) || []).length;
+    const affectedEntities = Math.max(1, driverMentions + blockMentions);
+
+    return {
+      criticality,
+      hasDOTImplications,
+      hasProtectedDriver,
+      affectedEntities,
+      isReversible: true // Most dispatch decisions can be undone
+    };
   }
 
   /**
@@ -358,24 +567,53 @@ export class NeuralOrchestrator {
   private async routeToAgent(agentId: AgentId, request: AgentRequest): Promise<AgentResponse> {
     switch (agentId) {
       case "architect":
-        if (!this.architect) throw new Error("Architect not initialized");
+        if (!this.architect) {
+          // Try fallback
+          return this.routeToAvailableAgent(request, ["analyst", "scout"]);
+        }
         return this.architect.process(request);
 
       case "scout":
-        if (!this.scout) throw new Error("Scout not initialized");
+        if (!this.scout) {
+          return this.routeToAvailableAgent(request, ["architect", "analyst"]);
+        }
         return this.scout.process(request);
 
       case "analyst":
-        if (!this.analyst) throw new Error("Analyst not initialized");
+        if (!this.analyst) {
+          return this.routeToAvailableAgent(request, ["architect", "scout"]);
+        }
         return this.analyst.process(request);
 
       case "executor":
-        if (!this.executor) throw new Error("Executor not initialized");
+        if (!this.executor) {
+          return this.routeToAvailableAgent(request, ["architect"]);
+        }
         return this.executor.process(request);
 
       default:
         throw new Error(`Unknown agent: ${agentId}`);
     }
+  }
+
+  /**
+   * Route to first available agent in fallback list
+   */
+  private async routeToAvailableAgent(
+    request: AgentRequest,
+    fallbacks: AgentId[]
+  ): Promise<AgentResponse> {
+    for (const agentId of fallbacks) {
+      const agent = agentId === "architect" ? this.architect :
+                    agentId === "scout" ? this.scout :
+                    agentId === "analyst" ? this.analyst :
+                    this.executor;
+
+      if (agent) {
+        return agent.process(request);
+      }
+    }
+    throw new Error("No agents available for request");
   }
 
   /**
