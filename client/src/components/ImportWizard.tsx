@@ -1,11 +1,14 @@
 import { useState, useCallback } from "react";
-import { format, startOfWeek, endOfWeek, addWeeks, subWeeks } from "date-fns";
-import { Upload, FileSpreadsheet, Calendar, History, Sparkles, X, ChevronRight, AlertTriangle } from "lucide-react";
+import { format, startOfWeek, endOfWeek, addWeeks, subWeeks, parse } from "date-fns";
+import { Upload, FileSpreadsheet, Calendar, History, Sparkles, X, ChevronRight, AlertTriangle, ClipboardPaste, FileText, Check, Brain, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 interface ImportFile {
   file: File;
@@ -13,17 +16,200 @@ interface ImportFile {
   detectedWeek?: { start: Date; end: Date };
 }
 
+interface ParsedBlock {
+  blockId: string;
+  startTime: Date;
+  duration: number; // in hours
+  rate: number;
+  driverName: string | null;
+  blockType: "solo1" | "solo2" | "team";
+}
+
+// Reconstructed block from trip-level data
+interface ReconstructedBlock {
+  blockId: string;
+  contract: string;
+  canonicalStartTime: string;
+  startDate: string;
+  endDate: string;
+  duration: string;
+  cost: number;
+  primaryDriver: string;
+  relayDrivers: string[];
+  loadCount: number;
+  route: string;
+}
+
+// Detected data format type
+type DataFormat = "block_level" | "trip_level" | "unknown";
+
 interface ImportWizardProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onImport: (files: ImportFile[], importType: "new_week" | "actuals" | "both") => void;
+  onPasteImport?: (blocks: ParsedBlock[], importType: "new_week" | "actuals") => void;
   currentWeekStart: Date;
 }
 
-export function ImportWizard({ open, onOpenChange, onImport, currentWeekStart }: ImportWizardProps) {
-  const [step, setStep] = useState<"upload" | "identify" | "confirm">("upload");
+// Parse pasted Amazon block data
+function parseBlockData(text: string): ParsedBlock[] {
+  const blocks: ParsedBlock[] = [];
+  const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+
+  let currentBlock: Partial<ParsedBlock> = {};
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Block ID pattern: B-XXXXXXXXX
+    const blockIdMatch = line.match(/^(B-[A-Z0-9]+)$/);
+    if (blockIdMatch) {
+      // Save previous block if complete
+      if (currentBlock.blockId && currentBlock.startTime) {
+        blocks.push(currentBlock as ParsedBlock);
+      }
+      currentBlock = { blockId: blockIdMatch[1], driverName: null };
+      continue;
+    }
+
+    // Date/time pattern: "Fri, Nov 28, 15:30 CST" or similar
+    const dateTimeMatch = line.match(/^([A-Za-z]+),\s+([A-Za-z]+)\s+(\d+),\s+(\d{1,2}:\d{2})\s+([A-Z]{2,4})$/);
+    if (dateTimeMatch && currentBlock.blockId) {
+      const [, , month, day, time] = dateTimeMatch;
+      const year = new Date().getFullYear();
+      // Parse the date - handle year rollover
+      const dateStr = `${month} ${day}, ${year} ${time}`;
+      try {
+        const parsedDate = parse(dateStr, "MMM d, yyyy H:mm", new Date());
+        // If the date is in the past by more than 6 months, assume next year
+        if (parsedDate < subWeeks(new Date(), 26)) {
+          currentBlock.startTime = parse(dateStr.replace(String(year), String(year + 1)), "MMM d, yyyy H:mm", new Date());
+        } else {
+          currentBlock.startTime = parsedDate;
+        }
+      } catch {
+        // Try alternate format
+      }
+      continue;
+    }
+
+    // Duration pattern: "38h" or "14h"
+    const durationMatch = line.match(/^(\d+)h$/);
+    if (durationMatch && currentBlock.blockId) {
+      currentBlock.duration = parseInt(durationMatch[1]);
+      // Determine block type based on duration
+      if (currentBlock.duration >= 30) {
+        currentBlock.blockType = "solo2";
+      } else if (currentBlock.duration >= 10) {
+        currentBlock.blockType = "solo1";
+      } else {
+        currentBlock.blockType = "team";
+      }
+      continue;
+    }
+
+    // Rate pattern: "$980.64" or similar
+    const rateMatch = line.match(/^\$?([\d,]+\.?\d*)$/);
+    if (rateMatch && currentBlock.blockId) {
+      currentBlock.rate = parseFloat(rateMatch[1].replace(',', ''));
+      continue;
+    }
+
+    // Driver name pattern: "M. FREEMAN" or "J. SMITH" (initial + last name in caps)
+    const driverMatch = line.match(/^([A-Z])\.\s+([A-Z]+)$/);
+    if (driverMatch && currentBlock.blockId) {
+      currentBlock.driverName = `${driverMatch[1]}. ${driverMatch[2]}`;
+      continue;
+    }
+
+    // Also check for full driver names or "Unassigned"
+    if (line.toLowerCase() === "unassigned" && currentBlock.blockId) {
+      currentBlock.driverName = null;
+      continue;
+    }
+  }
+
+  // Don't forget the last block
+  if (currentBlock.blockId && currentBlock.startTime) {
+    blocks.push(currentBlock as ParsedBlock);
+  }
+
+  return blocks;
+}
+
+// Detect if pasted data is trip-level CSV format
+function detectTripLevelCSV(text: string): { isTriplevel: boolean; rowCount: number; blockIds: string[] } {
+  const lines = text.split('\n').filter(l => l.trim().length > 0);
+  if (lines.length < 2) return { isTriplevel: false, rowCount: 0, blockIds: [] };
+
+  // Check for trip-level indicators
+  const hasBlockIdPattern = /B-[A-Z0-9]{8,}/i.test(text);
+  const hasOperatorIdPattern = /FTIM_MKC_Solo[12]/i.test(text);
+  const hasLoadIdPattern = /\d{9,}[A-Z0-9]+/i.test(text);  // Load IDs like 116MPB4D0
+  const hasTabSeparation = /\t.*\t.*\t/.test(text);
+  const hasFacilityPattern = /MKC\d+|CHI\d+|TFC\d+/i.test(text);
+
+  // If we have operator IDs and multiple tabs, it's likely trip-level
+  const isTriplevel = hasOperatorIdPattern && (hasTabSeparation || hasLoadIdPattern) && hasFacilityPattern;
+
+  // Extract unique block IDs
+  const blockIdMatches = text.match(/B-[A-Z0-9]{8,}/gi) || [];
+  const blockIds = [...new Set(blockIdMatches)];
+
+  // Count data rows (excluding header)
+  const rowCount = lines.length - 1;
+
+  return { isTriplevel, rowCount, blockIds };
+}
+
+// Canonical start times lookup
+const CANONICAL_START_TIMES: Record<string, string> = {
+  "Solo1_Tractor_1": "16:30",
+  "Solo1_Tractor_2": "20:30",
+  "Solo1_Tractor_3": "20:30",
+  "Solo1_Tractor_4": "17:30",
+  "Solo1_Tractor_5": "21:30",
+  "Solo1_Tractor_6": "01:30",
+  "Solo1_Tractor_7": "18:30",
+  "Solo1_Tractor_8": "00:30",
+  "Solo1_Tractor_9": "16:30",
+  "Solo1_Tractor_10": "20:30",
+  "Solo2_Tractor_1": "18:30",
+  "Solo2_Tractor_2": "23:30",
+  "Solo2_Tractor_3": "21:30",
+  "Solo2_Tractor_4": "08:30",
+  "Solo2_Tractor_5": "15:30",
+  "Solo2_Tractor_6": "11:30",
+  "Solo2_Tractor_7": "16:30",
+};
+
+// Parse operator ID to extract solo type and tractor
+function parseOperatorId(operatorId: string): { soloType: string; tractor: string; contractKey: string } | null {
+  // Format: FTIM_MKC_Solo2_Tractor_6_d1
+  const match = operatorId.match(/FTIM_MKC_(Solo[12])_(Tractor_\d+)/i);
+  if (!match) return null;
+
+  const soloType = match[1];
+  const tractor = match[2];
+  const contractKey = `${soloType}_${tractor}`;
+
+  return { soloType, tractor, contractKey };
+}
+
+export function ImportWizard({ open, onOpenChange, onImport, onPasteImport, currentWeekStart }: ImportWizardProps) {
+  const [step, setStep] = useState<"upload" | "identify" | "confirm" | "reconstruct">("upload");
+  const [inputMode, setInputMode] = useState<"file" | "paste">("file");
   const [files, setFiles] = useState<ImportFile[]>([]);
+  const [pastedText, setPastedText] = useState("");
+  const [parsedBlocks, setParsedBlocks] = useState<ParsedBlock[]>([]);
   const [importType, setImportType] = useState<"new_week" | "actuals" | "unknown">("unknown");
+
+  // Trip-level CSV state
+  const [dataFormat, setDataFormat] = useState<DataFormat>("unknown");
+  const [tripLevelInfo, setTripLevelInfo] = useState<{ rowCount: number; blockIds: string[] }>({ rowCount: 0, blockIds: [] });
+  const [isReconstructing, setIsReconstructing] = useState(false);
+  const [reconstructedBlocks, setReconstructedBlocks] = useState<ReconstructedBlock[]>([]);
+  const [miloResponse, setMiloResponse] = useState<string>("");
 
   // Calculate week ranges for display
   const thisWeekStart = startOfWeek(currentWeekStart, { weekStartsOn: 0 });
@@ -63,30 +249,126 @@ export function ImportWizard({ open, onOpenChange, onImport, currentWeekStart }:
     setFiles(prev => prev.filter((_, i) => i !== index));
   };
 
+  const handlePasteChange = (text: string) => {
+    setPastedText(text);
+
+    // First check if it's trip-level CSV
+    const tripDetection = detectTripLevelCSV(text);
+    if (tripDetection.isTriplevel) {
+      setDataFormat("trip_level");
+      setTripLevelInfo({ rowCount: tripDetection.rowCount, blockIds: tripDetection.blockIds });
+      setParsedBlocks([]);
+      return;
+    }
+
+    // Otherwise try block-level parsing
+    const blocks = parseBlockData(text);
+    if (blocks.length > 0) {
+      setDataFormat("block_level");
+      setParsedBlocks(blocks);
+      setTripLevelInfo({ rowCount: 0, blockIds: [] });
+    } else {
+      setDataFormat("unknown");
+      setParsedBlocks([]);
+      setTripLevelInfo({ rowCount: 0, blockIds: [] });
+    }
+  };
+
   const handleContinueFromUpload = () => {
-    if (files.length === 0) return;
-    setStep("identify");
+    if (inputMode === "file") {
+      if (files.length === 0) return;
+      setStep("identify");
+    } else {
+      // For paste mode, check which format was detected
+      if (dataFormat === "trip_level") {
+        // Go to reconstruction step
+        setStep("reconstruct");
+        handleReconstructBlocks();
+      } else if (dataFormat === "block_level" && parsedBlocks.length > 0) {
+        setStep("identify");
+      }
+    }
+  };
+
+  // Send to Milo for block reconstruction
+  const handleReconstructBlocks = async () => {
+    setIsReconstructing(true);
+    setMiloResponse("");
+
+    try {
+      // Send to neural API for reconstruction
+      const response = await fetch("/api/chat/neural", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          message: `Reconstruct these blocks from trip-level CSV data:\n\n${pastedText}`,
+          forceAgent: "architect"
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to get response from Milo");
+      }
+
+      const data = await response.json();
+      setMiloResponse(data.response || data.output || "No response");
+
+      // Try to parse reconstructed blocks from response
+      // For now, just show the raw response
+    } catch (error) {
+      console.error("Reconstruction error:", error);
+      setMiloResponse(`Error: ${error instanceof Error ? error.message : "Unknown error"}`);
+    } finally {
+      setIsReconstructing(false);
+    }
   };
 
   const handleConfirmType = () => {
     if (importType === "unknown") return;
 
-    // Update all files with the selected type
-    const updatedFiles = files.map(f => ({ ...f, type: importType }));
-    setFiles(updatedFiles);
+    if (inputMode === "file") {
+      // Update all files with the selected type
+      const updatedFiles = files.map(f => ({ ...f, type: importType }));
+      setFiles(updatedFiles);
+    }
     setStep("confirm");
   };
 
   const handleImport = () => {
-    onImport(files, importType as "new_week" | "actuals" | "both");
+    if (inputMode === "file") {
+      onImport(files, importType as "new_week" | "actuals" | "both");
+    } else {
+      // Use paste import handler
+      onPasteImport?.(parsedBlocks, importType as "new_week" | "actuals");
+    }
     handleClose();
   };
 
   const handleClose = () => {
     setStep("upload");
+    setInputMode("file");
     setFiles([]);
+    setPastedText("");
+    setParsedBlocks([]);
     setImportType("unknown");
+    setDataFormat("unknown");
+    setTripLevelInfo({ rowCount: 0, blockIds: [] });
+    setIsReconstructing(false);
+    setReconstructedBlocks([]);
+    setMiloResponse("");
     onOpenChange(false);
+  };
+
+  const getBlockTypeBadge = (type: string) => {
+    switch (type) {
+      case "solo2":
+        return <span className="px-2 py-0.5 rounded text-xs font-medium bg-purple-500/20 text-purple-400">Solo2</span>;
+      case "solo1":
+        return <span className="px-2 py-0.5 rounded text-xs font-medium bg-blue-500/20 text-blue-400">Solo1</span>;
+      default:
+        return <span className="px-2 py-0.5 rounded text-xs font-medium bg-green-500/20 text-green-400">Team</span>;
+    }
   };
 
   return (
@@ -95,13 +377,13 @@ export function ImportWizard({ open, onOpenChange, onImport, currentWeekStart }:
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-primary" />
-            {step === "upload" && "Import Schedule Files"}
+            {step === "upload" && "Import Schedule Data"}
             {step === "identify" && "What are you importing?"}
             {step === "confirm" && "Confirm Import"}
           </DialogTitle>
         </DialogHeader>
 
-        {/* Step 1: Upload Files */}
+        {/* Step 1: Upload Files or Paste Data */}
         {step === "upload" && (
           <div className="space-y-4">
             {/* Milo's greeting */}
@@ -113,59 +395,150 @@ export function ImportWizard({ open, onOpenChange, onImport, currentWeekStart }:
                 <div className="text-sm">
                   <p className="font-medium text-foreground mb-1">Hi! I'm Milo.</p>
                   <p className="text-muted-foreground">
-                    Drop your Amazon schedule file(s) below. You can upload multiple files at once -
-                    I'll help you identify what each one is.
+                    {inputMode === "file"
+                      ? "Drop your Amazon schedule file(s) below, or paste block data directly."
+                      : "Paste your Amazon block data below. I'll parse the block IDs, times, and driver assignments."}
                   </p>
                 </div>
               </div>
             </div>
 
-            {/* Drop zone */}
-            <div
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={handleFileDrop}
-              className="border-2 border-dashed border-muted-foreground/30 rounded-lg p-8 text-center hover:border-primary/50 transition-colors cursor-pointer"
-              onClick={() => document.getElementById('file-input')?.click()}
-            >
-              <Upload className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
-              <p className="text-sm text-muted-foreground mb-1">
-                Drag & drop files here, or click to browse
-              </p>
-              <p className="text-xs text-muted-foreground">
-                Supports .xlsx, .xls, .csv
-              </p>
-              <input
-                id="file-input"
-                type="file"
-                accept=".xlsx,.xls,.csv"
-                multiple
-                onChange={handleFileSelect}
-                className="hidden"
-              />
-            </div>
+            {/* Tabs for File Upload vs Paste */}
+            <Tabs value={inputMode} onValueChange={(v) => setInputMode(v as "file" | "paste")}>
+              <TabsList className="grid w-full grid-cols-2">
+                <TabsTrigger value="file" className="flex items-center gap-2">
+                  <Upload className="w-4 h-4" />
+                  Upload File
+                </TabsTrigger>
+                <TabsTrigger value="paste" className="flex items-center gap-2">
+                  <ClipboardPaste className="w-4 h-4" />
+                  Paste Data
+                </TabsTrigger>
+              </TabsList>
 
-            {/* File list */}
-            {files.length > 0 && (
-              <div className="space-y-2">
-                <Label className="text-sm font-medium">Selected Files:</Label>
-                {files.map((f, index) => (
-                  <div key={index} className="flex items-center justify-between bg-muted/50 rounded-lg p-3">
-                    <div className="flex items-center gap-2">
-                      <FileSpreadsheet className="w-4 h-4 text-green-600" />
-                      <span className="text-sm truncate max-w-[250px]">{f.file.name}</span>
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => removeFile(index)}
-                      className="h-6 w-6 p-0"
-                    >
-                      <X className="w-4 h-4" />
-                    </Button>
+              <TabsContent value="file" className="space-y-4 mt-4">
+                {/* Drop zone */}
+                <div
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={handleFileDrop}
+                  className="border-2 border-dashed border-primary rounded-lg p-8 text-center bg-primary hover:bg-primary/90 transition-all cursor-pointer"
+                  onClick={() => document.getElementById('file-input')?.click()}
+                >
+                  <div className="w-14 h-14 rounded-full bg-white/20 flex items-center justify-center mx-auto mb-4">
+                    <Upload className="w-7 h-7 text-white" />
                   </div>
-                ))}
-              </div>
-            )}
+                  <p className="text-base font-semibold text-white mb-2">
+                    Drag & drop files here, or click to browse
+                  </p>
+                  <p className="text-sm text-white/80">
+                    Supports .xlsx, .xls, .csv
+                  </p>
+                  <input
+                    id="file-input"
+                    type="file"
+                    accept=".xlsx,.xls,.csv"
+                    multiple
+                    onChange={handleFileSelect}
+                    className="hidden"
+                  />
+                </div>
+
+                {/* File list */}
+                {files.length > 0 && (
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">Selected Files:</Label>
+                    {files.map((f, index) => (
+                      <div key={index} className="flex items-center justify-between bg-muted/50 rounded-lg p-3">
+                        <div className="flex items-center gap-2">
+                          <FileSpreadsheet className="w-4 h-4 text-green-600" />
+                          <span className="text-sm truncate max-w-[250px]">{f.file.name}</span>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => removeFile(index)}
+                          className="h-6 w-6 p-0"
+                        >
+                          <X className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </TabsContent>
+
+              <TabsContent value="paste" className="space-y-4 mt-4">
+                {/* Paste text area */}
+                <Textarea
+                  placeholder="Paste Amazon block data or trip-level CSV here..."
+                  value={pastedText}
+                  onChange={(e) => handlePasteChange(e.target.value)}
+                  className="min-h-[200px] font-mono text-sm bg-muted/30"
+                />
+
+                {/* Trip-level CSV detected */}
+                {dataFormat === "trip_level" && tripLevelInfo.blockIds.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-3">
+                      <Label className="text-sm font-medium flex items-center gap-2 text-purple-400">
+                        <Brain className="w-4 h-4" />
+                        Trip-Level CSV Detected
+                      </Label>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Found {tripLevelInfo.rowCount} load rows across {tripLevelInfo.blockIds.length} unique block{tripLevelInfo.blockIds.length !== 1 ? 's' : ''}.
+                        Milo will reconstruct these into calendar-ready blocks.
+                      </p>
+                    </div>
+                    <div className="max-h-[100px] overflow-y-auto space-y-1 pr-2">
+                      {tripLevelInfo.blockIds.slice(0, 10).map((blockId, index) => (
+                        <div key={index} className="flex items-center gap-2 text-sm bg-muted/30 rounded px-2 py-1">
+                          <FileText className="w-3 h-3 text-purple-400" />
+                          <span className="font-mono text-xs">{blockId}</span>
+                        </div>
+                      ))}
+                      {tripLevelInfo.blockIds.length > 10 && (
+                        <p className="text-xs text-muted-foreground">
+                          +{tripLevelInfo.blockIds.length - 10} more blocks...
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Block-level parsed preview */}
+                {dataFormat === "block_level" && parsedBlocks.length > 0 && (
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium flex items-center gap-2">
+                      <Check className="w-4 h-4 text-green-500" />
+                      Parsed {parsedBlocks.length} block{parsedBlocks.length !== 1 ? 's' : ''}:
+                    </Label>
+                    <div className="max-h-[150px] overflow-y-auto space-y-2 pr-2">
+                      {parsedBlocks.map((block, index) => (
+                        <div key={index} className="flex items-center justify-between bg-muted/50 rounded-lg p-3 text-sm">
+                          <div className="flex items-center gap-3">
+                            <FileText className="w-4 h-4 text-primary" />
+                            <div>
+                              <span className="font-mono font-medium">{block.blockId}</span>
+                              {block.startTime && (
+                                <span className="text-muted-foreground ml-2">
+                                  {format(block.startTime, "EEE MMM d, h:mm a")}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {getBlockTypeBadge(block.blockType)}
+                            {block.driverName && (
+                              <span className="text-xs text-muted-foreground">{block.driverName}</span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </TabsContent>
+            </Tabs>
 
             {/* Actions */}
             <div className="flex justify-end gap-2 pt-2">
@@ -174,10 +547,23 @@ export function ImportWizard({ open, onOpenChange, onImport, currentWeekStart }:
               </Button>
               <Button
                 onClick={handleContinueFromUpload}
-                disabled={files.length === 0}
+                disabled={
+                  inputMode === "file"
+                    ? files.length === 0
+                    : (dataFormat === "block_level" ? parsedBlocks.length === 0 : dataFormat !== "trip_level")
+                }
               >
-                Continue
-                <ChevronRight className="w-4 h-4 ml-1" />
+                {dataFormat === "trip_level" ? (
+                  <>
+                    <Brain className="w-4 h-4 mr-1" />
+                    Reconstruct Blocks
+                  </>
+                ) : (
+                  <>
+                    Continue
+                    <ChevronRight className="w-4 h-4 ml-1" />
+                  </>
+                )}
               </Button>
             </div>
           </div>
@@ -194,8 +580,10 @@ export function ImportWizard({ open, onOpenChange, onImport, currentWeekStart }:
                 </div>
                 <div className="text-sm">
                   <p className="text-muted-foreground">
-                    I see you're uploading <strong>{files.length} file{files.length > 1 ? 's' : ''}</strong>.
-                    Which type of import is this?
+                    {inputMode === "file"
+                      ? <>I see you're uploading <strong>{files.length} file{files.length > 1 ? 's' : ''}</strong>. Which type of import is this?</>
+                      : <>I found <strong>{parsedBlocks.length} block{parsedBlocks.length !== 1 ? 's' : ''}</strong> in your pasted data. Which type of import is this?</>
+                    }
                   </p>
                 </div>
               </div>
@@ -286,7 +674,7 @@ export function ImportWizard({ open, onOpenChange, onImport, currentWeekStart }:
                   <p className="font-medium text-foreground mb-1">Ready to import!</p>
                   <p className="text-muted-foreground">
                     {importType === "new_week"
-                      ? "I'll process these files and auto-assign drivers based on historical patterns. After import, click 'Analyze Now' to review assignments."
+                      ? "I'll process this data and auto-assign drivers based on historical patterns. After import, click 'Analyze Now' to review assignments."
                       : "I'll compare this against your existing records and show you any differences. You can review changes before confirming."}
                   </p>
                 </div>
@@ -296,8 +684,12 @@ export function ImportWizard({ open, onOpenChange, onImport, currentWeekStart }:
             {/* Summary */}
             <div className="bg-muted/50 rounded-lg p-4 space-y-3">
               <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">Files to import:</span>
-                <span className="text-sm font-medium">{files.length}</span>
+                <span className="text-sm text-muted-foreground">
+                  {inputMode === "file" ? "Files to import:" : "Blocks to import:"}
+                </span>
+                <span className="text-sm font-medium">
+                  {inputMode === "file" ? files.length : parsedBlocks.length}
+                </span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-sm text-muted-foreground">Import type:</span>
@@ -313,16 +705,49 @@ export function ImportWizard({ open, onOpenChange, onImport, currentWeekStart }:
                     : `${format(lastWeekStart, "MMM d")} - ${format(lastWeekEnd, "MMM d")}`}
                 </span>
               </div>
+              {inputMode === "paste" && (
+                <>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-muted-foreground">Solo2 blocks:</span>
+                    <span className="text-sm font-medium">{parsedBlocks.filter(b => b.blockType === "solo2").length}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-muted-foreground">Solo1 blocks:</span>
+                    <span className="text-sm font-medium">{parsedBlocks.filter(b => b.blockType === "solo1").length}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-muted-foreground">With driver assigned:</span>
+                    <span className="text-sm font-medium">{parsedBlocks.filter(b => b.driverName).length}</span>
+                  </div>
+                </>
+              )}
             </div>
 
-            {/* File list */}
-            <div className="space-y-2">
-              {files.map((f, index) => (
-                <div key={index} className="flex items-center gap-2 text-sm">
-                  <FileSpreadsheet className="w-4 h-4 text-green-600" />
-                  <span className="truncate">{f.file.name}</span>
-                </div>
-              ))}
+            {/* File/Block list */}
+            <div className="space-y-2 max-h-[150px] overflow-y-auto">
+              {inputMode === "file" ? (
+                files.map((f, index) => (
+                  <div key={index} className="flex items-center gap-2 text-sm">
+                    <FileSpreadsheet className="w-4 h-4 text-green-600" />
+                    <span className="truncate">{f.file.name}</span>
+                  </div>
+                ))
+              ) : (
+                parsedBlocks.map((block, index) => (
+                  <div key={index} className="flex items-center justify-between text-sm bg-muted/30 rounded p-2">
+                    <div className="flex items-center gap-2">
+                      <FileText className="w-4 h-4 text-primary" />
+                      <span className="font-mono">{block.blockId}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {getBlockTypeBadge(block.blockType)}
+                      <span className="text-muted-foreground">
+                        {block.driverName || "Unassigned"}
+                      </span>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
 
             {/* Actions */}
@@ -332,8 +757,82 @@ export function ImportWizard({ open, onOpenChange, onImport, currentWeekStart }:
               </Button>
               <Button onClick={handleImport}>
                 <Upload className="w-4 h-4 mr-2" />
-                Import {files.length > 1 ? "Files" : "File"}
+                Import {inputMode === "file"
+                  ? (files.length > 1 ? "Files" : "File")
+                  : `${parsedBlocks.length} Block${parsedBlocks.length !== 1 ? 's' : ''}`}
               </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Step: Block Reconstruction (Trip-Level CSV) */}
+        {step === "reconstruct" && (
+          <div className="space-y-4">
+            {/* Milo thinking/response */}
+            <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-4">
+              <div className="flex items-start gap-3">
+                <div className="w-8 h-8 rounded-full bg-purple-500/20 flex items-center justify-center flex-shrink-0">
+                  {isReconstructing ? (
+                    <Loader2 className="w-4 h-4 text-purple-400 animate-spin" />
+                  ) : (
+                    <Brain className="w-4 h-4 text-purple-400" />
+                  )}
+                </div>
+                <div className="text-sm flex-1">
+                  <p className="font-medium text-purple-300 mb-1">
+                    {isReconstructing ? "Milo is analyzing..." : "Block Reconstruction Complete"}
+                  </p>
+                  {isReconstructing ? (
+                    <p className="text-muted-foreground">
+                      Parsing {tripLevelInfo.rowCount} loads across {tripLevelInfo.blockIds.length} blocks.
+                      Looking up canonical start times and driver assignments...
+                    </p>
+                  ) : (
+                    <p className="text-muted-foreground">
+                      Reconstructed {tripLevelInfo.blockIds.length} blocks with canonical start times and driver assignments.
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Milo's Response */}
+            {miloResponse && !isReconstructing && (
+              <ScrollArea className="h-[300px] rounded-lg border bg-muted/30 p-4">
+                <pre className="text-sm whitespace-pre-wrap font-mono text-foreground">
+                  {miloResponse}
+                </pre>
+              </ScrollArea>
+            )}
+
+            {/* Loading state */}
+            {isReconstructing && (
+              <div className="flex items-center justify-center py-8">
+                <div className="flex flex-col items-center gap-3">
+                  <Loader2 className="w-8 h-8 text-purple-400 animate-spin" />
+                  <p className="text-sm text-muted-foreground">
+                    Calling Claude Architect...
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Actions */}
+            <div className="flex justify-between pt-2">
+              <Button variant="ghost" onClick={() => setStep("upload")}>
+                Back
+              </Button>
+              <div className="flex gap-2">
+                {!isReconstructing && miloResponse && (
+                  <Button variant="outline" onClick={handleReconstructBlocks}>
+                    <Brain className="w-4 h-4 mr-2" />
+                    Re-analyze
+                  </Button>
+                )}
+                <Button onClick={handleClose} disabled={isReconstructing}>
+                  Done
+                </Button>
+              </div>
             </div>
           </div>
         )}
@@ -341,3 +840,6 @@ export function ImportWizard({ open, onOpenChange, onImport, currentWeekStart }:
     </Dialog>
   );
 }
+
+// Export the ParsedBlock type for use in other components
+export type { ParsedBlock };
