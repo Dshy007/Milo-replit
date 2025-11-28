@@ -142,22 +142,24 @@ function detectTripLevelCSV(text: string): { isTriplevel: boolean; rowCount: num
   const lines = text.split('\n').filter(l => l.trim().length > 0);
   if (lines.length < 2) return { isTriplevel: false, rowCount: 0, blockIds: [] };
 
-  // Check for trip-level indicators
-  const hasBlockIdPattern = /B-[A-Z0-9]{8,}/i.test(text);
-  const hasOperatorIdPattern = /FTIM_MKC_Solo[12]/i.test(text);
-  const hasLoadIdPattern = /\d{9,}[A-Z0-9]+/i.test(text);  // Load IDs like 116MPB4D0
-  const hasTabSeparation = /\t.*\t.*\t/.test(text);
-  const hasFacilityPattern = /MKC\d+|CHI\d+|TFC\d+/i.test(text);
-
-  // If we have operator IDs and multiple tabs, it's likely trip-level
-  const isTriplevel = hasOperatorIdPattern && (hasTabSeparation || hasLoadIdPattern) && hasFacilityPattern;
-
-  // Extract unique block IDs
-  const blockIdMatches = text.match(/B-[A-Z0-9]{8,}/gi) || [];
+  // Extract unique block IDs first (B- prefix only, not T- trips)
+  // Block IDs are B- followed by 8 or more alphanumeric characters (e.g., B-Q5B44Z199)
+  const blockIdMatches = (text.match(/B-[A-Z0-9]{8,}/gi) || []).map(id => id.toUpperCase());
   const blockIds = [...new Set(blockIdMatches)];
+
+  // Check for trip-level indicators
+  const hasBlockIds = blockIds.length > 0;
+  const hasOperatorIdPattern = /FTIM_MKC_Solo[12]/i.test(text);
+
+  // Simple detection: if we have Block IDs AND Operator IDs, it's trip-level
+  const isTriplevel = hasBlockIds && hasOperatorIdPattern;
 
   // Count data rows (excluding header)
   const rowCount = lines.length - 1;
+
+  // Debug: log detection results
+  console.log('[CSV Detection] hasBlockIds:', hasBlockIds, 'hasOperatorIdPattern:', hasOperatorIdPattern, 'isTriplevel:', isTriplevel);
+  console.log('[CSV Detection] Unique block IDs found:', blockIds.length, blockIds.slice(0, 5), blockIds.length > 5 ? '...' : '');
 
   return { isTriplevel, rowCount, blockIds };
 }
@@ -224,6 +226,8 @@ export function ImportWizard({ open, onOpenChange, onImport, onPasteImport, curr
     success: boolean;
     message: string;
     created?: number;
+    updated?: number;
+    totalProcessed?: number;
     assignments?: number;
     skipped?: number;
     errors?: string[];
@@ -1152,9 +1156,9 @@ Answer concisely.`;
 
         {/* Step: Block Reconstruction (Trip-Level CSV) */}
         {step === "reconstruct" && (
-          <div className="space-y-4">
+          <div className="space-y-3">
             {/* Milo thinking/response */}
-            <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-4">
+            <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-3">
               <div className="flex items-start gap-3">
                 <div className="w-8 h-8 rounded-full bg-purple-500/20 flex items-center justify-center flex-shrink-0">
                   {isReconstructing ? (
@@ -1165,75 +1169,75 @@ Answer concisely.`;
                 </div>
                 <div className="text-sm flex-1">
                   <p className="font-medium text-purple-300 mb-1">
-                    {isReconstructing ? "Milo is analyzing..." : "Block Reconstruction Complete"}
+                    {isReconstructing ? "Milo is analyzing..." : `Reconstructed ${reconstructedBlocks.length} Blocks`}
                   </p>
                   {isReconstructing ? (
                     <p className="text-muted-foreground">
-                      Parsing {tripLevelInfo.rowCount} loads across {tripLevelInfo.blockIds.length} blocks.
-                      Looking up canonical start times and driver assignments...
+                      Parsing {tripLevelInfo.rowCount} loads across {tripLevelInfo.blockIds.length} blocks...
                     </p>
                   ) : (
                     <p className="text-muted-foreground">
-                      Reconstructed {tripLevelInfo.blockIds.length} blocks with canonical start times and driver assignments.
+                      Ready to import with canonical start times and driver assignments.
                     </p>
                   )}
                 </div>
               </div>
             </div>
 
-            {/* Add More Data - collapsible paste area */}
-            {!isReconstructing && reconstructedBlocks.length > 0 && (
-              <div className="border border-dashed border-muted-foreground/30 rounded-lg p-3">
-                <p className="text-xs text-muted-foreground mb-2">
-                  Paste additional CSV data here to combine with existing data:
-                </p>
-                <Textarea
-                  placeholder="Paste more CSV data here..."
-                  className="min-h-[60px] font-mono text-xs bg-muted/20 mb-2"
-                  onPaste={(e) => {
-                    e.preventDefault();
-                    const clipboardData = e.clipboardData.getData('text');
-                    console.log('[DEBUG] Reconstruct step paste - clipboard length:', clipboardData.length);
-                    console.log('[DEBUG] Current pastedText length:', pastedText.length);
-                    const newText = pastedText + '\n' + clipboardData;
-                    console.log('[DEBUG] Combined text length:', newText.length);
-                    handlePasteChange(newText);
-                    // Clear the textarea after paste (data is in pastedText state)
-                    (e.target as HTMLTextAreaElement).value = '';
-                  }}
-                />
-                <div className="flex items-center justify-between">
-                  <p className="text-xs text-muted-foreground">
-                    Total data: {tripLevelInfo.rowCount} rows, {tripLevelInfo.blockIds.length} blocks
-                  </p>
-                  <Button size="sm" variant="outline" onClick={handleReconstructBlocks}>
-                    <Brain className="w-3 h-3 mr-1" />
-                    Re-analyze All
-                  </Button>
+            {/* MILO CHAT - Prominent position right after header */}
+            {!isReconstructing && reconstructedBlocks.length > 0 && !importResult?.success && (
+              <div className="bg-gradient-to-r from-purple-500/10 to-blue-500/10 border border-purple-500/30 rounded-lg p-3">
+                <div className="flex items-center gap-2 mb-2">
+                  <MessageCircle className="w-4 h-4 text-purple-400" />
+                  <span className="text-sm font-medium text-purple-300">Ask Milo</span>
+                  <span className="text-xs text-muted-foreground">- Filter blocks before import</span>
                 </div>
+                <form onSubmit={handleChatSubmit} className="flex gap-2">
+                  <input
+                    type="text"
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    placeholder="Try: 'show Tuesday blocks' or 'filter to Solo2' or 'after Nov 25'"
+                    className="flex-1 px-3 py-2 text-sm rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-purple-500/50"
+                    disabled={isChatting || isImporting}
+                  />
+                  <Button type="submit" size="sm" disabled={isChatting || isImporting || !chatInput.trim()}>
+                    <Send className="w-4 h-4" />
+                  </Button>
+                </form>
+                {/* Chat responses */}
+                {chatMessages.length > 0 && (
+                  <div className="mt-2 space-y-1 max-h-16 overflow-y-auto">
+                    {chatMessages.slice(-2).map((msg, i) => (
+                      <p key={i} className={`text-xs ${msg.role === 'user' ? 'text-muted-foreground' : 'text-purple-300'}`}>
+                        {msg.role === 'assistant' ? '→ ' : '? '}{msg.content}
+                      </p>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
-            {/* Milo's Response - Dynamic Block Display */}
+            {/* Filter indicator - show when filter is active */}
+            {activeFilter && (
+              <div className="flex items-center justify-between bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">
+                <span className="text-sm text-amber-400">
+                  Filtered: {activeFilter} ({filteredBlocks.length} of {reconstructedBlocks.length} blocks)
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => { setFilteredBlocks(reconstructedBlocks); setActiveFilter(""); }}
+                  className="h-6 text-xs text-amber-400 hover:text-amber-300"
+                >
+                  Show All
+                </Button>
+              </div>
+            )}
+
+            {/* Block List Display */}
             {filteredBlocks.length > 0 && !isReconstructing && (
-              <div className="space-y-2">
-                {/* Filter indicator */}
-                {activeFilter && (
-                  <div className="flex items-center justify-between bg-purple-500/10 border border-purple-500/30 rounded-lg px-3 py-2">
-                    <span className="text-sm text-purple-400">
-                      Filter: {activeFilter} ({filteredBlocks.length} of {reconstructedBlocks.length} blocks)
-                    </span>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => { setFilteredBlocks(reconstructedBlocks); setActiveFilter(""); }}
-                      className="h-6 text-xs"
-                    >
-                      Clear filter
-                    </Button>
-                  </div>
-                )}
-                <ScrollArea className="h-[220px] rounded-lg border bg-muted/30 p-4">
+              <ScrollArea className="h-[180px] rounded-lg border bg-muted/30 p-3">
                   <div className="space-y-3">
                     {filteredBlocks.slice(0, 20).map((block, index) => (
                       <div key={index} className="border-b border-border/50 pb-3 last:border-0">
@@ -1260,8 +1264,7 @@ Answer concisely.`;
                       </p>
                     )}
                   </div>
-                </ScrollArea>
-              </div>
+              </ScrollArea>
             )}
 
             {/* Loading state */}
@@ -1279,95 +1282,51 @@ Answer concisely.`;
               </div>
             )}
 
-            {/* Chat Messages */}
-            {chatMessages.length > 0 && (
-              <div className="space-y-2 max-h-[120px] overflow-y-auto">
-                {chatMessages.map((msg, i) => (
-                  <div key={i} className={`flex gap-2 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                    {msg.role === 'assistant' && (
-                      <div className="w-6 h-6 rounded-full bg-purple-500/20 flex items-center justify-center flex-shrink-0">
-                        <Sparkles className="w-3 h-3 text-purple-400" />
+            {/* Import Result - Enterprise Style */}
+            {importResult && (
+              <div className="rounded-lg border bg-background p-6 shadow-sm">
+                <h3 className="text-lg font-semibold mb-3">
+                  {importResult.success ? "Import Complete" : "Import Failed"}
+                </h3>
+
+                {importResult.success ? (
+                  <div className="space-y-3">
+                    <p className="text-sm text-muted-foreground">
+                      Successfully imported <span className="font-bold text-foreground">{importResult.created || 0} blocks</span>
+                      {importResult.assignments && importResult.assignments > 0 && (
+                        <> with <span className="font-bold text-foreground">{importResult.assignments} driver assignments</span></>
+                      )} to your calendar.
+                    </p>
+
+                    {importResult.skipped && importResult.skipped > 0 && (
+                      <p className="text-sm text-amber-600">
+                        {importResult.skipped} blocks skipped (missing data or duplicates)
+                      </p>
+                    )}
+
+                    {importResult.errors && importResult.errors.length > 0 && (
+                      <div className="text-xs text-red-500 max-h-20 overflow-y-auto">
+                        {importResult.errors.slice(0, 5).map((err, i) => (
+                          <p key={i}>{err}</p>
+                        ))}
+                        {importResult.errors.length > 5 && (
+                          <p>...and {importResult.errors.length - 5} more errors</p>
+                        )}
                       </div>
                     )}
-                    <div className={`rounded-lg px-3 py-2 text-sm max-w-[80%] ${
-                      msg.role === 'user'
-                        ? 'bg-primary text-primary-foreground'
-                        : 'bg-muted text-foreground'
-                    }`}>
-                      {msg.content}
-                    </div>
                   </div>
-                ))}
-                {isChatting && (
-                  <div className="flex gap-2 justify-start">
-                    <div className="w-6 h-6 rounded-full bg-purple-500/20 flex items-center justify-center flex-shrink-0">
-                      <Loader2 className="w-3 h-3 text-purple-400 animate-spin" />
-                    </div>
-                    <div className="rounded-lg px-3 py-2 text-sm bg-muted text-muted-foreground">
-                      Thinking...
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Chat Input - Concierge */}
-            {!isReconstructing && reconstructedBlocks.length > 0 && !importResult?.success && (
-              <form onSubmit={handleChatSubmit} className="flex gap-2">
-                <div className="flex-1 relative">
-                  <MessageCircle className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                  <input
-                    type="text"
-                    value={chatInput}
-                    onChange={(e) => setChatInput(e.target.value)}
-                    placeholder="Try: 'show Tuesday blocks' or 'filter to Solo2' or 'after Nov 25'"
-                    className="w-full pl-10 pr-4 py-2 text-sm rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-purple-500/50"
-                    disabled={isChatting || isImporting}
-                  />
-                </div>
-                <Button type="submit" size="sm" disabled={isChatting || isImporting || !chatInput.trim()}>
-                  <Send className="w-4 h-4" />
-                </Button>
-              </form>
-            )}
-
-            {/* Import Result */}
-            {importResult && (
-              <div className={`rounded-lg p-3 ${importResult.success ? 'bg-green-500/10 border border-green-500/30' : 'bg-red-500/10 border border-red-500/30'}`}>
-                <div className="flex items-center gap-2 mb-1">
-                  {importResult.success ? (
-                    <Check className="w-4 h-4 text-green-500" />
-                  ) : (
-                    <AlertTriangle className="w-4 h-4 text-red-500" />
-                  )}
-                  <span className={`text-sm font-medium ${importResult.success ? 'text-green-500' : 'text-red-500'}`}>
-                    {importResult.success ? 'Import Successful!' : 'Import Failed'}
-                  </span>
-                </div>
-                <p className="text-xs text-muted-foreground">{importResult.message}</p>
-                {importResult.success && (
-                  <div className="grid grid-cols-3 gap-2 mt-2 text-xs">
-                    <div className="bg-background/50 rounded p-2 text-center">
-                      <span className="block font-bold text-green-500">{importResult.created}</span>
-                      <span className="text-muted-foreground">Created</span>
-                    </div>
-                    <div className="bg-background/50 rounded p-2 text-center">
-                      <span className="block font-bold text-blue-500">{importResult.assignments}</span>
-                      <span className="text-muted-foreground">Assigned</span>
-                    </div>
-                    <div className="bg-background/50 rounded p-2 text-center">
-                      <span className="block font-bold text-amber-500">{importResult.skipped}</span>
-                      <span className="text-muted-foreground">Skipped</span>
-                    </div>
-                  </div>
-                )}
-                {importResult.errors && importResult.errors.length > 0 && (
-                  <div className="mt-2 text-xs text-red-400 max-h-20 overflow-y-auto">
-                    {importResult.errors.slice(0, 5).map((err, i) => (
-                      <p key={i}>{err}</p>
-                    ))}
-                    {importResult.errors.length > 5 && (
-                      <p>...and {importResult.errors.length - 5} more errors</p>
+                ) : (
+                  <div className="space-y-2">
+                    <p className="text-sm text-red-500">{importResult.message}</p>
+                    {importResult.errors && importResult.errors.length > 0 && (
+                      <div className="text-xs text-red-400 max-h-20 overflow-y-auto">
+                        {importResult.errors.slice(0, 5).map((err, i) => (
+                          <p key={i}>{err}</p>
+                        ))}
+                        {importResult.errors.length > 5 && (
+                          <p>...and {importResult.errors.length - 5} more errors</p>
+                        )}
+                      </div>
                     )}
                   </div>
                 )}
@@ -1406,10 +1365,15 @@ Answer concisely.`;
                   </>
                 )}
                 {importResult?.success && (
-                  <Button onClick={handleClose}>
-                    <Check className="w-4 h-4 mr-2" />
-                    Done
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button variant="outline" onClick={handleClose}>
+                      Done
+                    </Button>
+                    <Button onClick={handleClose}>
+                      <Calendar className="w-4 h-4 mr-2" />
+                      View Calendar
+                    </Button>
+                  </div>
                 )}
                 {!reconstructedBlocks.length && !isReconstructing && (
                   <Button onClick={handleClose}>

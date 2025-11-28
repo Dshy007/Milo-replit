@@ -5,6 +5,9 @@
  * Run with: npx tsx server/ai/__tests__/neural-e2e.test.ts
  */
 
+import dotenv from "dotenv";
+dotenv.config();
+
 import { db } from "../../db";
 import { tenants, drivers, blocks } from "../../../shared/schema";
 import { eq } from "drizzle-orm";

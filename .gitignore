@@ -3,4 +3,18 @@ dist
 .DS_Store
 server/public
 vite.config.ts.*
-*.tar.gz.env
+*.tar.gz
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Debug/temp files
+*_errors.txt
+final_errors.txt
+nul
+PLAN.md
+
+# Claude local settings
+.claude/settings.local.json

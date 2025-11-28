@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Home, Users, Calendar, Route, Truck, FileText, Upload, Sparkles, Settings, LogOut, MessageSquare, Brain, FileSpreadsheet, CalendarCheck, GitBranch, Send, Loader2, ChevronDown, ChevronUp, User } from "lucide-react";
+import { Home, Users, Calendar, Route, Truck, FileText, Upload, Sparkles, Settings, LogOut, MessageSquare, Brain, FileSpreadsheet, CalendarCheck, GitBranch, Send, Loader2, ChevronDown, ChevronUp, User, Trash2, RotateCcw } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -289,6 +289,18 @@ export function AppSidebar() {
     "Workload summary",
   ];
 
+  // Clear conversation
+  const handleClearChat = () => {
+    setMessages([]);
+    setStreamingMessage("");
+    setCurrentSessionId(null);
+  };
+
+  // Delete a single message
+  const handleDeleteMessage = (index: number) => {
+    setMessages((prev) => prev.filter((_, i) => i !== index));
+  };
+
   return (
     <Sidebar>
       <SidebarHeader className="p-4 border-b border-border">
@@ -322,17 +334,26 @@ export function AppSidebar() {
 
         {/* Milo Quick Chat Section */}
         <SidebarGroup className="mt-auto border-t border-border">
-          <button
-            onClick={() => setIsChatOpen(!isChatOpen)}
-            className="flex items-center justify-between w-full px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <div className="flex items-center gap-2">
+          <div className="flex items-center justify-between px-3 py-2">
+            <button
+              onClick={() => setIsChatOpen(!isChatOpen)}
+              className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+            >
               <Sparkles className="w-4 h-4 text-primary" />
               <span>Ask Milo</span>
               {isStreaming && <Loader2 className="w-3 h-3 animate-spin text-primary" />}
-            </div>
-            {isChatOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
-          </button>
+              {isChatOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+            </button>
+            {isChatOpen && messages.length > 0 && (
+              <button
+                onClick={handleClearChat}
+                className="p-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-destructive"
+                title="Clear conversation"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
 
           {isChatOpen && (
             <div className="px-2 pb-2">
@@ -367,16 +388,23 @@ export function AppSidebar() {
                   ) : (
                     <>
                       {messages.map((msg, idx) => (
-                        <div key={idx} className={`flex gap-1.5 ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                        <div key={idx} className={`group flex gap-1.5 ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
                           {msg.role === "assistant" && (
                             <div className="flex-shrink-0 w-5 h-5 rounded-full bg-primary/10 flex items-center justify-center">
                               <Sparkles className="w-2.5 h-2.5 text-primary" />
                             </div>
                           )}
-                          <div className={`max-w-[85%] rounded p-1.5 text-xs ${
+                          <div className={`relative max-w-[85%] rounded p-1.5 text-xs ${
                             msg.role === "user" ? "bg-primary/10" : "bg-muted"
                           }`}>
-                            <p className="whitespace-pre-wrap break-words">{msg.content}</p>
+                            <p className="whitespace-pre-wrap break-words pr-4">{msg.content}</p>
+                            <button
+                              onClick={() => handleDeleteMessage(idx)}
+                              className="absolute top-0.5 right-0.5 p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-destructive/20 transition-opacity"
+                              title="Delete message"
+                            >
+                              <Trash2 className="w-2.5 h-2.5 text-muted-foreground hover:text-destructive" />
+                            </button>
                           </div>
                           {msg.role === "user" && (
                             <div className="flex-shrink-0 w-5 h-5 rounded-full bg-muted flex items-center justify-center">

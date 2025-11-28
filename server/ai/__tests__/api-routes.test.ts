@@ -5,6 +5,9 @@
  * Run with: npx tsx server/ai/__tests__/api-routes.test.ts
  */
 
+import dotenv from "dotenv";
+dotenv.config();
+
 import { db } from "../../db";
 import { tenants } from "../../../shared/schema";
 

@@ -4858,7 +4858,7 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
     return orchestratorPromise;
   };
 
-  // POST /api/gemini/reconstruct - Reconstruct blocks from trip-level CSV using Gemini
+  // POST /api/gemini/reconstruct - Reconstruct blocks from trip-level CSV (local processing, no AI truncation)
   app.post("/api/gemini/reconstruct", requireAuth, async (req: Request, res: Response) => {
     try {
       const { csvData } = req.body;
@@ -4867,8 +4867,9 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
         return res.status(400).json({ message: "Missing required field: csvData" });
       }
 
-      const { reconstructBlocksWithGemini } = await import("./gemini-reconstruct");
-      const result = await reconstructBlocksWithGemini(csvData);
+      // Use local reconstruction - deterministic, no AI truncation
+      const { reconstructBlocksLocally } = await import("./local-reconstruct");
+      const result = reconstructBlocksLocally(csvData);
 
       if (result.success) {
         res.json({
@@ -4880,11 +4881,10 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
         res.status(500).json({
           success: false,
           message: result.error,
-          rawResponse: result.rawResponse,
         });
       }
     } catch (error: any) {
-      console.error("Gemini reconstruct error:", error);
+      console.error("Block reconstruct error:", error);
       res.status(500).json({
         success: false,
         message: "Block reconstruction failed",
@@ -4942,6 +4942,7 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
 
       const results = {
         created: 0,
+        updated: 0,
         skipped: 0,
         errors: [] as string[],
         assignments: 0,
@@ -4951,6 +4952,13 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
 
       for (const block of reconstructedBlocks) {
         try {
+          // Validate startDate exists before processing
+          if (!block.startDate) {
+            results.errors.push(`Block ${block.blockId}: No start date found in CSV data`);
+            results.skipped++;
+            continue;
+          }
+
           // Parse contract from block.contract (e.g., "Solo2_Tractor_6")
           const contractKey = block.contract;
           const contract = contractMap.get(contractKey) || contractMap.get(contractKey?.toLowerCase());
@@ -5012,6 +5020,7 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
               .where(eq(blocks.id, existingBlock[0].id))
               .returning();
             blockRecord = updated[0];
+            results.updated++;
             console.log(`[IMPORT] Updated existing block: ${block.blockId}`);
           } else {
             // Create new block
@@ -5075,12 +5084,14 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
         }
       }
 
-      console.log(`[IMPORT] Complete: ${results.created} created, ${results.assignments} assignments, ${results.skipped} skipped, ${results.errors.length} errors`);
+      console.log(`[IMPORT] Complete: ${results.created} created, ${results.updated} updated, ${results.assignments} assignments, ${results.skipped} skipped, ${results.errors.length} errors`);
 
+      const totalProcessed = results.created + results.updated;
       res.json({
         success: true,
-        message: `Imported ${results.created} blocks with ${results.assignments} driver assignments`,
+        message: `Processed ${totalProcessed} blocks: ${results.created} created, ${results.updated} updated, ${results.assignments} driver assignments`,
         ...results,
+        totalProcessed,
         importBatchId,
       });
     } catch (error: any) {
