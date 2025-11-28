@@ -26,6 +26,9 @@ import { GeminiScout, getScout } from "./agents/gemini-scout";
 import { ChatGPTAnalyst, getAnalyst } from "./agents/chatgpt-analyst";
 import { ManusExecutor, getExecutor } from "./agents/manus-executor";
 
+// Memory System
+import { getMemoryManager, getPatternTracker, getProfileBuilder } from "./memory";
+
 // ═══════════════════════════════════════════════════════════════════════════════
 //                              ORCHESTRATOR TYPES
 // ═══════════════════════════════════════════════════════════════════════════════

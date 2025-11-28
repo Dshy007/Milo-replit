@@ -72,3 +72,36 @@ export {
   type RollbackPlan,
   type RollbackStep
 } from "./agents/manus-executor";
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                              MEMORY SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export {
+  MemoryManager,
+  getMemoryManager,
+  PatternTracker,
+  getPatternTracker,
+  ProfileBuilder,
+  getProfileBuilder,
+  MemoryCleanupJob,
+  startScheduledCleanup,
+  stopScheduledCleanup,
+  runCleanupOnce,
+  type MemoryQuery,
+  type MemoryContext,
+  type ThoughtMemory,
+  type PatternMemory,
+  type ProfileMemory,
+  type DecisionMemory,
+  type PatternType,
+  type PatternCandidate,
+  type PatternAnalysis,
+  type DriverPattern,
+  type SchedulePattern,
+  type DriverProfile,
+  type BlockProfile,
+  type UserProfile,
+  type CleanupResult,
+  type CleanupConfig
+} from "./memory";
