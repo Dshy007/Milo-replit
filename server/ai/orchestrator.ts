@@ -448,6 +448,21 @@ export class NeuralOrchestrator {
     const lowerInput = input.toLowerCase();
     const keywords: string[] = [];
 
+    // Block reconstruction indicators (Architect - high priority)
+    const blockReconstructKeywords = [
+      "reconstruct", "reverse engineer", "trip-level", "trip level",
+      "load csv", "import loads", "block id", "operator id",
+      "load id", "vrid", "loads"
+    ];
+
+    // CSV data detection patterns
+    const csvPatterns = [
+      /b-[a-z0-9]{8,}/i,  // Block ID pattern
+      /ftim_mkc_solo[12]/i,  // Operator ID pattern
+      /\t.*\t.*\t/,  // Tab-separated data
+      /mkc\d+\s*(->|→)\s*mkc\d+/i  // Route pattern like MKC40 -> MKC6
+    ];
+
     // Real-time data indicators (Scout)
     const scoutKeywords = [
       "weather", "forecast", "temperature", "rain", "snow", "fog",
@@ -477,6 +492,27 @@ export class NeuralOrchestrator {
     let analystScore = 0;
     let executorScore = 0;
     let architectScore = 0;
+    let isBlockReconstruction = false;
+
+    // Check for block reconstruction first (highest priority)
+    for (const kw of blockReconstructKeywords) {
+      if (lowerInput.includes(kw)) {
+        architectScore += 30;
+        keywords.push(kw);
+        isBlockReconstruction = true;
+      }
+    }
+
+    // Check for CSV data patterns
+    for (const pattern of csvPatterns) {
+      if (pattern.test(input)) {
+        architectScore += 25;
+        isBlockReconstruction = true;
+        if (!keywords.includes("csv_data_detected")) {
+          keywords.push("csv_data_detected");
+        }
+      }
+    }
 
     for (const kw of scoutKeywords) {
       if (lowerInput.includes(kw)) {
@@ -548,6 +584,12 @@ export class NeuralOrchestrator {
     }
 
     // More specific architect intents
+    // Block reconstruction takes priority
+    if (keywords.includes("reconstruct") || keywords.includes("reverse engineer") ||
+        keywords.includes("trip-level") || keywords.includes("csv_data_detected") ||
+        keywords.includes("load id") || keywords.includes("vrid")) {
+      return "block_reconstruction";
+    }
     if (keywords.includes("assign") || keywords.includes("who should")) {
       return "driver_assignment";
     }

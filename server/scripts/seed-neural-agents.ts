@@ -64,7 +64,74 @@ When exploring a question:
 - Remember patterns for 6 weeks
 - Strengthen patterns with each observation
 - Never repeat mistakes - check past decisions first
-- Update driver profiles with learned preferences`,
+- Update driver profiles with learned preferences
+
+## BLOCK RECONSTRUCTION (Trip-Level CSV Import)
+
+When a user pastes or uploads trip-level CSV data (loads/VRIDs), reconstruct the original blocks.
+
+### DETECTION
+Trigger block reconstruction when you see:
+- Columns: Block ID, Load ID, Operator ID, Driver Name
+- Keywords: "reconstruct", "reverse engineer", "trip-level", "import loads"
+- Data with multiple rows per Block ID (each row = one load)
+
+### STEP 1: Parse Operator ID
+Extract from format: FTIM_MKC_[SoloType]_[Tractor]_d[X]
+Example: FTIM_MKC_Solo2_Tractor_6_d1 → Solo2, Tractor_6
+
+### STEP 2: Canonical Start Time Lookup
+
+| Contract | Start Time |
+|----------|------------|
+| Solo1 Tractor_1 | 16:30 |
+| Solo1 Tractor_2 | 20:30 |
+| Solo1 Tractor_3 | 20:30 |
+| Solo1 Tractor_4 | 17:30 |
+| Solo1 Tractor_5 | 21:30 |
+| Solo1 Tractor_6 | 01:30 |
+| Solo1 Tractor_7 | 18:30 |
+| Solo1 Tractor_8 | 00:30 |
+| Solo1 Tractor_9 | 16:30 |
+| Solo1 Tractor_10 | 20:30 |
+| Solo2 Tractor_1 | 18:30 |
+| Solo2 Tractor_2 | 23:30 |
+| Solo2 Tractor_3 | 21:30 |
+| Solo2 Tractor_4 | 08:30 |
+| Solo2 Tractor_5 | 15:30 |
+| Solo2 Tractor_6 | 11:30 |
+| Solo2 Tractor_7 | 16:30 |
+
+### STEP 3: Reconstruct Block
+- Group all rows by Block ID
+- Start Date = Earliest load date + canonical start time (NOT actual data time)
+- End = Start + duration (Solo1=14h, Solo2=38h)
+- Primary Driver = driver with most loads in block
+- Relay Driver(s) = other drivers (stem legs)
+- Total Cost = sum of all load costs
+
+### STEP 4: Output Format
+For each reconstructed block, output:
+
+Block: [BLOCK_ID]
+Contract: [Solo1/Solo2] Tractor_[X]
+Start: [Day], [Month] [Date], [Canonical Time] CST
+End: [Day], [Month] [Date], [End Time] CST
+Duration: [14h/38h]
+Cost: $[XXX.XX]
+Primary Driver: [FULL NAME]
+Relay Driver(s): [FULL NAME] (if any)
+Loads: [count]
+Route: [First Origin] → [Last Destination]
+
+### Calendar Card Format
+Also provide compact calendar view:
+
+[Start Day] [Month] [Date]
+[Time] [SOLO TYPE] T[X]
+[Primary Driver Name]
+[Relay Driver] (relay)
+$[Cost] • [Duration] • [N] loads`,
     status: "active",
     config: {
       temperature: 0.7,
