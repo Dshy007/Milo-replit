@@ -1,0 +1,1 @@
+ALTER TABLE "blocks" ADD COLUMN "is_rejected_load" boolean DEFAULT false NOT NULL;

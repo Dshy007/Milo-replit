@@ -332,6 +332,12 @@ export function reconstructBlocksLocally(csvData: string): {
       const primaryDriver = sortedDrivers[0]?.[0] || '';
       const relayDrivers = sortedDrivers.slice(1).map(d => d[0]);
 
+      // Debug: Log blocks that have no driver detected
+      if (!primaryDriver) {
+        console.log(`[Local DEBUG] Block ${blockId} has NO driver. Trip count: ${trips.length}`);
+        console.log(`[Local DEBUG]   Trip drivers in CSV: ${trips.map(t => t.driver || '(empty)').join(', ')}`);
+      }
+
       // Build route from first and last distinct locations
       const origins = [...new Set(trips.map(t => t.origin).filter(Boolean))];
       const destinations = [...new Set(trips.map(t => t.destination).filter(Boolean))];

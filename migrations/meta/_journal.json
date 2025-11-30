@@ -15,6 +15,13 @@
       "when": 1764277891701,
       "tag": "0001_bored_squadron_sinister",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1764471020846,
+      "tag": "0002_minor_deathstrike",
+      "breakpoints": true
     }
   ]
 }

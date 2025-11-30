@@ -1413,6 +1413,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           assignmentId: assignment?.id || null,
           bumpMinutes,
           isCarryover: occ.isCarryover,
+          isRejectedLoad: false, // Shift occurrences are never rejected loads
           source: 'shift_occurrence' as const,
         };
       });
@@ -1446,6 +1447,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           assignmentId: assignment?.id || null,
           bumpMinutes: 0,
           isCarryover: false,
+          isRejectedLoad: blk.isRejectedLoad || false,
           source: 'imported_block' as const,
         };
       });
@@ -1460,6 +1462,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         tractorId: b.tractorId,
         startTime: b.startTime
       })));
+
+      // DEBUG: Log blocks without drivers (rejected loads)
+      const blocksWithoutDrivers = simplifiedBlocks.filter(b => !b.driverName);
+      if (blocksWithoutDrivers.length > 0) {
+        console.log(`[CALENDAR DEBUG] Blocks WITHOUT drivers (rejected loads): ${blocksWithoutDrivers.length}`);
+        blocksWithoutDrivers.forEach(b => {
+          console.log(`[CALENDAR DEBUG REJECTED] Block ${b.blockId}: tractorId="${b.tractorId}", serviceDate="${b.serviceDate}", startTime="${b.startTime}"`);
+        });
+      }
 
       // Return simplified calendar data
       res.json({
@@ -2329,59 +2340,112 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // PATCH /api/shift-occurrences/:id/assignment - Update driver assignment for a shift occurrence
+  // PATCH /api/shift-occurrences/:id/assignment - Update driver assignment for a shift occurrence OR imported block
   app.patch("/api/shift-occurrences/:id/assignment", requireAuth, async (req, res) => {
     try {
       const tenantId = req.session.tenantId!;
       const occurrenceId = req.params.id;
       const { driverId } = req.body; // driverId can be null to unassign
 
-      // Verify the shift occurrence exists and belongs to this tenant
+      // First, check if this is a shift occurrence
       const occurrence = await dbStorage.getShiftOccurrence(occurrenceId, tenantId);
-      if (!occurrence) {
-        return res.status(404).json({ message: "Shift occurrence not found" });
+
+      // If not a shift occurrence, check if it's an imported block
+      const importedBlock = !occurrence ? await dbStorage.getBlock(occurrenceId) : null;
+
+      if (!occurrence && !importedBlock) {
+        return res.status(404).json({ message: "Occurrence not found" });
       }
 
-      // Get existing assignment for this shift occurrence
-      const existingAssignment = await dbStorage.getBlockAssignmentByShiftOccurrence(occurrenceId);
+      // Verify tenant ownership for imported block
+      if (importedBlock && importedBlock.tenantId !== tenantId) {
+        return res.status(404).json({ message: "Occurrence not found" });
+      }
 
-      // If driverId is null or empty, remove the assignment
-      if (!driverId) {
-        if (existingAssignment) {
-          await dbStorage.deleteBlockAssignment(existingAssignment.id);
-          // Update occurrence status to unassigned
-          await dbStorage.updateShiftOccurrence(occurrenceId, { status: "unassigned" });
+      // Handle shift occurrence assignment
+      if (occurrence) {
+        // Get existing assignment for this shift occurrence
+        const existingAssignment = await dbStorage.getBlockAssignmentByShiftOccurrence(occurrenceId);
+
+        // If driverId is null or empty, remove the assignment
+        if (!driverId) {
+          if (existingAssignment) {
+            await dbStorage.deleteBlockAssignment(existingAssignment.id);
+            // Update occurrence status to unassigned
+            await dbStorage.updateShiftOccurrence(occurrenceId, { status: "unassigned" });
+          }
+          return res.json({ message: "Driver unassigned successfully" });
         }
-        return res.json({ message: "Driver unassigned successfully" });
+
+        // Verify the driver exists and belongs to this tenant
+        const driver = await dbStorage.getDriver(driverId);
+        if (!driver || driver.tenantId !== tenantId) {
+          return res.status(400).json({ message: "Invalid driver ID" });
+        }
+
+        // Update or create the assignment
+        if (existingAssignment) {
+          // Update existing assignment
+          await dbStorage.updateBlockAssignment(existingAssignment.id, {
+            driverId,
+            assignedAt: new Date(),
+          });
+        } else {
+          // Create new assignment
+          await dbStorage.createBlockAssignment({
+            tenantId,
+            shiftOccurrenceId: occurrenceId,
+            driverId,
+            assignedAt: new Date(),
+            isActive: true,
+          });
+        }
+
+        // Update occurrence status to assigned
+        await dbStorage.updateShiftOccurrence(occurrenceId, { status: "assigned" });
+
+        return res.json({ message: "Driver assigned successfully" });
       }
 
-      // Verify the driver exists and belongs to this tenant
-      const driver = await dbStorage.getDriver(driverId);
-      if (!driver || driver.tenantId !== tenantId) {
-        return res.status(400).json({ message: "Invalid driver ID" });
-      }
+      // Handle imported block assignment
+      if (importedBlock) {
+        // Get existing assignment for this imported block
+        const existingAssignment = await dbStorage.getBlockAssignmentByBlock(occurrenceId);
 
-      // Update or create the assignment
-      if (existingAssignment) {
-        // Update existing assignment
-        await dbStorage.updateBlockAssignment(existingAssignment.id, {
-          driverId,
-          assignedAt: new Date(),
-        });
-      } else {
-        // Create new assignment
-        await dbStorage.createBlockAssignment({
-          id: randomUUID(),
-          tenantId,
-          shiftOccurrenceId: occurrenceId,
-          driverId,
-          assignedAt: new Date(),
-          isActive: true,
-        });
-      }
+        // If driverId is null or empty, remove the assignment
+        if (!driverId) {
+          if (existingAssignment) {
+            await dbStorage.deleteBlockAssignment(existingAssignment.id);
+          }
+          return res.json({ message: "Driver unassigned successfully" });
+        }
 
-      // Update occurrence status to assigned
-      await dbStorage.updateShiftOccurrence(occurrenceId, { status: "assigned" });
+        // Verify the driver exists and belongs to this tenant
+        const driver = await dbStorage.getDriver(driverId);
+        if (!driver || driver.tenantId !== tenantId) {
+          return res.status(400).json({ message: "Invalid driver ID" });
+        }
+
+        // Update or create the assignment
+        if (existingAssignment) {
+          // Update existing assignment
+          await dbStorage.updateBlockAssignment(existingAssignment.id, {
+            driverId,
+            assignedAt: new Date(),
+          });
+        } else {
+          // Create new assignment for imported block
+          await dbStorage.createBlockAssignment({
+            tenantId,
+            blockId: occurrenceId,
+            driverId,
+            assignedAt: new Date(),
+            isActive: true,
+          });
+        }
+
+        return res.json({ message: "Driver assigned successfully" });
+      }
 
       res.json({ message: "Driver assigned successfully" });
     } catch (error: any) {
@@ -5231,6 +5295,13 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
         assignments: 0,
       };
 
+      // DEBUG: Track blocks without driver assignments and why
+      const blocksWithoutAssignments: Array<{
+        blockId: string;
+        reason: string;
+        primaryDriver: string | null;
+      }> = [];
+
       const importBatchId = `recon_${Date.now()}`;
 
       for (const block of reconstructedBlocks) {
@@ -5302,6 +5373,8 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
           endTimestamp.setHours(endTimestamp.getHours() + duration);
 
           // Create new block (existing blocks with same blockId were already deleted above)
+          // isRejectedLoad = true when there's no primaryDriver in CSV (Amazon rejected the assignment)
+          const isRejectedLoad = !block.primaryDriver;
           const inserted = await db
             .insert(blocks)
             .values({
@@ -5315,11 +5388,21 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
               soloType,
               duration,
               status: 'assigned',
+              isRejectedLoad,
             })
             .returning();
           const blockRecord = inserted[0];
           results.created++;
-          console.log(`[IMPORT] Created block: ${block.blockId} for ${block.startDate}`);
+          console.log(`[IMPORT] Created block: ${block.blockId} for ${block.startDate} with tractorId="${tractorId}", contractKey="${contractKey}"`);
+
+          // Extra debug for blocks without driver (rejected loads)
+          if (!block.primaryDriver) {
+            console.log(`[IMPORT DEBUG REJECTED] Block ${block.blockId}: NO DRIVER IN CSV (rejected load)`);
+            console.log(`[IMPORT DEBUG REJECTED]   tractorId stored: "${tractorId}"`);
+            console.log(`[IMPORT DEBUG REJECTED]   serviceDate: ${block.startDate}`);
+            console.log(`[IMPORT DEBUG REJECTED]   contractKey from CSV: "${contractKey}"`);
+            console.log(`[IMPORT DEBUG REJECTED]   contract matched: ${contract ? contract.tractorId : 'NONE'}`);
+          }
 
           // Try to create driver assignment if we have a primary driver
           if (block.primaryDriver && blockRecord) {
@@ -5404,7 +5487,19 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
               }
             } else {
               console.log(`[IMPORT] Driver not found: "${block.primaryDriver}" for block ${block.blockId}`);
+              blocksWithoutAssignments.push({
+                blockId: block.blockId,
+                reason: `Driver not found in database: "${block.primaryDriver}"`,
+                primaryDriver: block.primaryDriver,
+              });
             }
+          } else {
+            // No primaryDriver in the reconstructed block
+            blocksWithoutAssignments.push({
+              blockId: block.blockId,
+              reason: 'No primaryDriver in CSV data',
+              primaryDriver: null,
+            });
           }
         } catch (blockError: any) {
           results.errors.push(`Error processing block ${block.blockId}: ${blockError.message}`);
@@ -5415,7 +5510,31 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
       // Set replaced count in results
       results.replaced = replacedCount;
 
-      console.log(`[IMPORT] Complete: ${results.created} created (${replacedCount} replaced existing), ${results.assignments} assignments, ${results.skipped} skipped, ${results.errors.length} errors`);
+      // Count rejected loads (blocks without driver in CSV data - Amazon rejected)
+      const rejectedLoads = blocksWithoutAssignments.filter(
+        item => item.reason === 'No primaryDriver in CSV data'
+      );
+      const rejectedLoadCount = rejectedLoads.length;
+
+      // Count unmatched drivers (blocks with driver in CSV but driver not found in database)
+      const unmatchedDrivers = blocksWithoutAssignments.filter(
+        item => item.reason.startsWith('Driver not found in database')
+      );
+      const unmatchedDriverCount = unmatchedDrivers.length;
+
+      console.log(`[IMPORT] Complete: ${results.created} created (${replacedCount} replaced existing), ${results.assignments} assignments, ${rejectedLoadCount} rejected loads, ${unmatchedDriverCount} unmatched drivers, ${results.skipped} skipped, ${results.errors.length} errors`);
+
+      // DEBUG: Log all blocks without assignments
+      if (blocksWithoutAssignments.length > 0) {
+        console.log(`\n[IMPORT DEBUG] ========== BLOCKS WITHOUT DRIVER ASSIGNMENTS ==========`);
+        console.log(`[IMPORT DEBUG] Total: ${blocksWithoutAssignments.length} blocks without assignments`);
+        console.log(`[IMPORT DEBUG] Rejected loads (no driver in CSV): ${rejectedLoadCount}`);
+        console.log(`[IMPORT DEBUG] Unmatched drivers (driver in CSV but not in database): ${unmatchedDriverCount}`);
+        for (const item of blocksWithoutAssignments) {
+          console.log(`[IMPORT DEBUG]   Block ${item.blockId}: ${item.reason}`);
+        }
+        console.log(`[IMPORT DEBUG] ============================================================\n`);
+      }
 
       const totalProcessed = results.created;
       res.json({
@@ -5424,6 +5543,8 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
         ...results,
         totalProcessed,
         importBatchId,
+        rejectedLoads: rejectedLoadCount, // Number of blocks that had no driver in CSV (Amazon rejected the load)
+        unmatchedDrivers: unmatchedDriverCount, // Number of blocks where driver in CSV couldn't be matched to database
       });
     } catch (error: any) {
       console.error("Import reconstructed blocks error:", error);

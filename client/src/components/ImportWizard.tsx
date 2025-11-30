@@ -234,6 +234,8 @@ export function ImportWizard({ open, onOpenChange, onImport, onPasteImport, onIm
     totalProcessed?: number;
     assignments?: number;
     skipped?: number;
+    rejectedLoads?: number;
+    unmatchedDrivers?: number;
     errors?: string[];
   } | null>(null);
 
@@ -652,14 +654,18 @@ Answer concisely.`;
           totalProcessed: data.totalProcessed,
           assignments: data.assignments,
           skipped: data.skipped,
+          rejectedLoads: data.rejectedLoads,
+          unmatchedDrivers: data.unmatchedDrivers,
           errors: data.errors,
         });
         // Add success message to chat
         const totalBlocks = data.created || 0;
         const replaceInfo = data.replaced > 0 ? ` (${data.replaced} replaced existing)` : '';
+        const rejectedInfo = data.rejectedLoads > 0 ? ` ${data.rejectedLoads} rejected loads.` : '';
+        const unmatchedInfo = data.unmatchedDrivers > 0 ? ` ${data.unmatchedDrivers} unassigned (driver not in system).` : '';
         setChatMessages(prev => [...prev, {
           role: "assistant",
-          content: `Successfully imported ${totalBlocks} blocks${replaceInfo} with ${data.assignments} driver assignments to your calendar!${data.skipped > 0 ? ` (${data.skipped} skipped)` : ''}`
+          content: `Successfully imported ${totalBlocks} blocks${replaceInfo} with ${data.assignments} driver assignments to your calendar!${data.skipped > 0 ? ` (${data.skipped} skipped)` : ''}${rejectedInfo}${unmatchedInfo}`
         }]);
         // Notify parent to refresh calendar data and navigate to the dominant imported week
         const dominantWeek = getDominantWeekStart(filteredBlocks);
@@ -1369,6 +1375,16 @@ Answer concisely.`;
                         <li><span className="font-semibold text-gray-900">{importResult.created}</span> blocks imported with <span className="font-semibold text-gray-900">{importResult.assignments || 0}</span> driver assignments</li>
                         {(importResult.replaced || 0) > 0 && (
                           <li className="text-gray-500">({importResult.replaced} replaced existing blocks)</li>
+                        )}
+                        {(importResult.rejectedLoads || 0) > 0 && (
+                          <li className="text-red-600">
+                            <span className="font-semibold">{importResult.rejectedLoads}</span> rejected loads (no driver in Amazon data) - added to calendar
+                          </li>
+                        )}
+                        {(importResult.unmatchedDrivers || 0) > 0 && (
+                          <li className="text-amber-600">
+                            <span className="font-semibold">{importResult.unmatchedDrivers}</span> unassigned (driver not found in system) - added to calendar
+                          </li>
                         )}
                       </ul>
                     )}

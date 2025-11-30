@@ -494,6 +494,7 @@ export const blocks = pgTable("blocks", {
   duration: integer("duration").notNull(), // hours: 14 for Solo1, 38 for Solo2
   status: text("status").notNull().default("unassigned"), // unassigned, assigned, completed, cancelled
   isCarryover: boolean("is_carryover").notNull().default(false), // True for Fri/Sat from previous week
+  isRejectedLoad: boolean("is_rejected_load").notNull().default(false), // True if Amazon rejected the driver assignment (no driver in CSV)
   onBenchStatus: text("on_bench_status").notNull().default("on_bench"), // on_bench, off_bench
   offBenchReason: text("off_bench_reason"), // non_contract_time, wrong_tractor_for_contract
   // Pattern-aware fields for Amazon's dynamic shift assignments

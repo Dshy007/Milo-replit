@@ -52,6 +52,8 @@ type ShiftOccurrence = {
   assignmentId: string | null;
   bumpMinutes: number;
   isCarryover: boolean;
+  isRejectedLoad?: boolean; // True if Amazon rejected the driver assignment (no driver in CSV)
+  source?: 'imported_block' | 'shift_occurrence'; // Distinguishes imported blocks from legacy shift occurrences
 };
 
 // Calendar API response type (simplified)
@@ -2094,23 +2096,34 @@ export default function Schedules() {
                                       <div
                                         className="w-full p-2 rounded-b-md border border-t-0 border-dashed text-xs text-center transition-all cursor-pointer"
                                         style={{
-                                          backgroundColor: themeMode === 'day' ? undefined : 'rgba(239, 68, 68, 0.15)',
-                                          borderColor: themeMode === 'day' ? undefined : 'rgba(239, 68, 68, 0.3)',
-                                          color: themeMode === 'day' ? undefined : '#ff6b6b'
+                                          // RED for rejected loads (Amazon rejected), YELLOW/AMBER for unassigned (driver not found in system)
+                                          backgroundColor: themeMode === 'day'
+                                            ? (occ.isRejectedLoad ? 'rgba(239, 68, 68, 0.1)' : 'rgba(245, 158, 11, 0.1)')
+                                            : (occ.isRejectedLoad ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)'),
+                                          borderColor: themeMode === 'day'
+                                            ? (occ.isRejectedLoad ? 'rgba(239, 68, 68, 0.3)' : 'rgba(245, 158, 11, 0.3)')
+                                            : (occ.isRejectedLoad ? 'rgba(239, 68, 68, 0.3)' : 'rgba(245, 158, 11, 0.3)'),
+                                          color: themeMode === 'day'
+                                            ? (occ.isRejectedLoad ? '#dc2626' : '#d97706')
+                                            : (occ.isRejectedLoad ? '#ff6b6b' : '#fbbf24')
                                         }}
                                         onContextMenu={(e) => handleRightClickUnassigned(e, occ)}
-                                        title="Right-click to assign driver"
+                                        title={occ.isRejectedLoad ? "Rejected load - Amazon rejected driver assignment" : "Right-click to assign driver"}
                                       >
                                         <Badge
                                           variant="secondary"
                                           className="text-xs px-2 py-0.5"
                                           style={{
-                                            backgroundColor: themeMode === 'day' ? undefined : 'rgba(239, 68, 68, 0.2)',
-                                            color: themeMode === 'day' ? undefined : '#ff6b6b'
+                                            backgroundColor: themeMode === 'day'
+                                              ? (occ.isRejectedLoad ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)')
+                                              : (occ.isRejectedLoad ? 'rgba(239, 68, 68, 0.2)' : 'rgba(245, 158, 11, 0.2)'),
+                                            color: themeMode === 'day'
+                                              ? (occ.isRejectedLoad ? '#dc2626' : '#d97706')
+                                              : (occ.isRejectedLoad ? '#ff6b6b' : '#fbbf24')
                                           }}
-                                          data-testid={`badge-unassigned-${occ.occurrenceId}`}
+                                          data-testid={`badge-${occ.isRejectedLoad ? 'rejected' : 'unassigned'}-${occ.occurrenceId}`}
                                         >
-                                          Unassigned
+                                          {occ.isRejectedLoad ? 'Rejected' : 'Unassigned'}
                                         </Badge>
                                       </div>
                                     )}
