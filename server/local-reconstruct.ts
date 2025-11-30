@@ -362,6 +362,26 @@ export function reconstructBlocksLocally(csvData: string): {
 
     console.log(`[Local] Reconstructed ${blocks.length} blocks`);
 
+    // Debug: Log how many blocks have drivers
+    const blocksWithDrivers = blocks.filter(b => b.primaryDriver);
+    const blocksWithoutDrivers = blocks.filter(b => !b.primaryDriver);
+    console.log(`[Local] Blocks with drivers: ${blocksWithDrivers.length}, Blocks without drivers: ${blocksWithoutDrivers.length}`);
+
+    // Log first few blocks with drivers
+    console.log(`[Local] Sample blocks WITH drivers:`, blocksWithDrivers.slice(0, 5).map(b => ({
+      blockId: b.blockId,
+      primaryDriver: b.primaryDriver
+    })));
+
+    // Log first few blocks without drivers
+    if (blocksWithoutDrivers.length > 0) {
+      console.log(`[Local] Sample blocks WITHOUT drivers:`, blocksWithoutDrivers.slice(0, 5).map(b => ({
+        blockId: b.blockId,
+        contract: b.contract,
+        startDate: b.startDate
+      })));
+    }
+
     return {
       success: true,
       blocks,

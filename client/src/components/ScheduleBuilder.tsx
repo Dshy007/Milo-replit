@@ -178,11 +178,11 @@ interface SwapModalProps {
   onClose: () => void;
   block: AssignedBlock | null;
   availableDrivers: AvailableDriver[];
-  onConfirmSwap: (newDriverId: number) => void;
+  onConfirmSwap: (newDriverId: string) => void;
 }
 
 function SwapModal({ isOpen, onClose, block, availableDrivers, onConfirmSwap }: SwapModalProps) {
-  const [selectedDriverId, setSelectedDriverId] = useState<number | null>(null);
+  const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
 
   if (!block) return null;
 
@@ -296,10 +296,10 @@ export function ScheduleBuilder({
   // Initialize on roster load
   useEffect(() => {
     if (rosterData?.drivers && blocks.length > 0) {
-      // Convert API response to DriverProfile type
+      // Convert API response to DriverProfile type (IDs are UUIDs/strings)
       const driverProfiles: DriverProfile[] = rosterData.drivers.map((d: any) => ({
         ...d,
-        id: typeof d.id === "string" ? parseInt(d.id, 10) || 0 : d.id,
+        id: d.id, // Keep as string UUID
       }));
       setDrivers(driverProfiles);
 
@@ -383,7 +383,7 @@ export function ScheduleBuilder({
     setSwapBlockId(blockId);
   };
 
-  const handleConfirmSwap = (newDriverId: number) => {
+  const handleConfirmSwap = (newDriverId: string) => {
     if (!swapBlockId) return;
 
     const currentBlock = assignments.find((b) => b.blockId === swapBlockId);

@@ -51,6 +51,7 @@ interface ImportWizardProps {
   onOpenChange: (open: boolean) => void;
   onImport: (files: ImportFile[], importType: "new_week" | "actuals" | "both") => void;
   onPasteImport?: (blocks: ParsedBlock[], importType: "new_week" | "actuals") => void;
+  onImportComplete?: (dominantWeekStart?: Date) => void; // Called after successful import to refresh calendar and navigate to imported week
   currentWeekStart: Date;
 }
 
@@ -201,7 +202,7 @@ function parseOperatorId(operatorId: string): { soloType: string; tractor: strin
   return { soloType, tractor, contractKey };
 }
 
-export function ImportWizard({ open, onOpenChange, onImport, onPasteImport, currentWeekStart }: ImportWizardProps) {
+export function ImportWizard({ open, onOpenChange, onImport, onPasteImport, onImportComplete, currentWeekStart }: ImportWizardProps) {
   const [step, setStep] = useState<"upload" | "identify" | "confirm" | "reconstruct">("upload");
   const [inputMode, setInputMode] = useState<"file" | "paste">("file");
   const [files, setFiles] = useState<ImportFile[]>([]);
@@ -229,7 +230,7 @@ export function ImportWizard({ open, onOpenChange, onImport, onPasteImport, curr
     success: boolean;
     message: string;
     created?: number;
-    updated?: number;
+    replaced?: number;
     totalProcessed?: number;
     assignments?: number;
     skipped?: number;
@@ -616,9 +617,8 @@ Answer concisely.`;
       cost: block.cost,
     }));
 
-    // Find the week start from the first block
-    const firstBlockDate = new Date(filteredBlocks[0].startDate);
-    const weekStart = startOfWeek(firstBlockDate, { weekStartsOn: 0 });
+    // Find the dominant week (week with most blocks)
+    const weekStart = getDominantWeekStart(filteredBlocks);
 
     // Generate report data
     const data = generateReportData(scheduleBlocks, weekStart);
@@ -648,15 +648,22 @@ Answer concisely.`;
           success: true,
           message: data.message,
           created: data.created,
+          replaced: data.replaced,
+          totalProcessed: data.totalProcessed,
           assignments: data.assignments,
           skipped: data.skipped,
           errors: data.errors,
         });
         // Add success message to chat
+        const totalBlocks = data.created || 0;
+        const replaceInfo = data.replaced > 0 ? ` (${data.replaced} replaced existing)` : '';
         setChatMessages(prev => [...prev, {
           role: "assistant",
-          content: `Successfully imported ${data.created} blocks with ${data.assignments} driver assignments to your calendar!${data.skipped > 0 ? ` (${data.skipped} skipped)` : ''}`
+          content: `Successfully imported ${totalBlocks} blocks${replaceInfo} with ${data.assignments} driver assignments to your calendar!${data.skipped > 0 ? ` (${data.skipped} skipped)` : ''}`
         }]);
+        // Notify parent to refresh calendar data and navigate to the dominant imported week
+        const dominantWeek = getDominantWeekStart(filteredBlocks);
+        onImportComplete?.(dominantWeek);
       } else {
         setImportResult({
           success: false,
@@ -731,23 +738,24 @@ Answer concisely.`;
   const getBlockTypeBadge = (type: string) => {
     switch (type) {
       case "solo2":
-        return <span className="px-2 py-0.5 rounded text-xs font-medium bg-purple-500/20 text-purple-400">Solo2</span>;
+        return <span className="px-2 py-0.5 rounded text-xs font-medium bg-gray-200 text-gray-700">Solo2</span>;
       case "solo1":
         return <span className="px-2 py-0.5 rounded text-xs font-medium bg-blue-500/20 text-blue-400">Solo1</span>;
       default:
-        return <span className="px-2 py-0.5 rounded text-xs font-medium bg-green-500/20 text-green-400">Team</span>;
+        return <span className="px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-600">Team</span>;
     }
   };
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-primary" />
+      <DialogContent className="max-w-3xl bg-white shadow-xl p-6 border-0">
+        <DialogHeader className="pb-2">
+          <DialogTitle className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+            <Sparkles className="w-5 h-5 text-blue-500" />
             {step === "upload" && "Import Schedule Data"}
             {step === "identify" && "What are you importing?"}
             {step === "confirm" && "Confirm Import"}
+            {step === "reconstruct" && "Block Reconstruction"}
           </DialogTitle>
         </DialogHeader>
 
@@ -755,30 +763,34 @@ Answer concisely.`;
         {step === "upload" && (
           <div className="space-y-4">
             {/* Milo's greeting */}
-            <div className="bg-primary/10 border border-primary/20 rounded-lg p-4">
-              <div className="flex items-start gap-3">
-                <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
-                  <Sparkles className="w-4 h-4 text-primary" />
-                </div>
-                <div className="text-sm">
-                  <p className="font-medium text-foreground mb-1">Hi! I'm Milo.</p>
-                  <p className="text-muted-foreground">
-                    {inputMode === "file"
-                      ? "Drop your Amazon schedule file(s) below, or paste block data directly."
-                      : "Paste your Amazon block data below. I'll parse the block IDs, times, and driver assignments."}
-                  </p>
-                </div>
+            <div className="flex items-start gap-3">
+              <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                <Sparkles className="w-4 h-4 text-blue-600" />
+              </div>
+              <div className="text-sm">
+                <p className="font-medium text-gray-900 mb-1">Hi! I'm Milo.</p>
+                <p className="text-gray-600 leading-relaxed">
+                  {inputMode === "file"
+                    ? "Drop your Amazon schedule file(s) below, or paste block data directly."
+                    : "Paste your Amazon block data below. I'll parse the block IDs, times, and driver assignments."}
+                </p>
               </div>
             </div>
 
             {/* Tabs for File Upload vs Paste */}
             <Tabs value={inputMode} onValueChange={(v) => setInputMode(v as "file" | "paste")}>
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="file" className="flex items-center gap-2">
+              <TabsList className="grid w-full grid-cols-2 h-10 bg-gray-100 rounded-lg p-1">
+                <TabsTrigger
+                  value="file"
+                  className="flex items-center gap-2 rounded-md text-gray-700 data-[state=active]:bg-blue-500 data-[state=active]:text-white data-[state=active]:shadow-sm"
+                >
                   <Upload className="w-4 h-4" />
                   Upload File
                 </TabsTrigger>
-                <TabsTrigger value="paste" className="flex items-center gap-2">
+                <TabsTrigger
+                  value="paste"
+                  className="flex items-center gap-2 rounded-md text-gray-700 data-[state=active]:bg-blue-500 data-[state=active]:text-white data-[state=active]:shadow-sm"
+                >
                   <ClipboardPaste className="w-4 h-4" />
                   Paste Data
                 </TabsTrigger>
@@ -787,20 +799,22 @@ Answer concisely.`;
               <TabsContent value="file" className="space-y-4 mt-4">
                 {/* Drop zone - using label for better click handling */}
                 <label
+                  htmlFor="file-upload-input"
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={handleFileDrop}
-                  className="border-2 border-dashed border-primary rounded-lg p-8 text-center bg-primary hover:bg-primary/90 transition-all cursor-pointer block"
+                  className="border-2 border-gray-300 p-8 text-center bg-gray-50 hover:bg-blue-50 hover:border-blue-400 transition-all cursor-pointer block"
                 >
-                  <div className="w-14 h-14 rounded-full bg-white/20 flex items-center justify-center mx-auto mb-4">
-                    <Upload className="w-7 h-7 text-white" />
+                  <div className="w-14 h-14 rounded-full bg-blue-100 flex items-center justify-center mx-auto mb-4">
+                    <Upload className="w-7 h-7 text-blue-600" />
                   </div>
-                  <p className="text-base font-semibold text-white mb-2">
+                  <p className="text-base font-semibold text-gray-900 mb-2">
                     Drag & drop files here, or click to browse
                   </p>
-                  <p className="text-sm text-white/80">
+                  <p className="text-sm text-gray-500">
                     Supports .xlsx, .xls, .csv
                   </p>
                   <input
+                    id="file-upload-input"
                     ref={fileInputRef}
                     type="file"
                     accept=".xlsx,.xls,.csv"
@@ -813,18 +827,18 @@ Answer concisely.`;
                 {/* File list */}
                 {files.length > 0 && (
                   <div className="space-y-2">
-                    <Label className="text-sm font-medium">Selected Files:</Label>
+                    <Label className="text-sm font-medium text-gray-700">Selected Files:</Label>
                     {files.map((f, index) => (
-                      <div key={index} className="flex items-center justify-between bg-muted/50 rounded-lg p-3">
+                      <div key={index} className="flex items-center justify-between bg-gray-50 border border-gray-200 p-3">
                         <div className="flex items-center gap-2">
-                          <FileSpreadsheet className="w-4 h-4 text-green-600" />
-                          <span className="text-sm truncate max-w-[250px]">{f.file.name}</span>
+                          <FileSpreadsheet className="w-4 h-4 text-blue-600" />
+                          <span className="text-sm text-gray-900 truncate max-w-[250px]">{f.file.name}</span>
                         </div>
                         <Button
                           variant="ghost"
                           size="sm"
                           onClick={() => removeFile(index)}
-                          className="h-6 w-6 p-0"
+                          className="h-6 w-6 p-0 text-gray-500 hover:text-gray-700"
                         >
                           <X className="w-4 h-4" />
                         </Button>
@@ -836,25 +850,25 @@ Answer concisely.`;
                 {/* Trip-level CSV detected from file upload */}
                 {dataFormat === "trip_level" && tripLevelInfo.blockIds.length > 0 && (
                   <div className="space-y-2">
-                    <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-3">
-                      <Label className="text-sm font-medium flex items-center gap-2 text-purple-400">
-                        <Brain className="w-4 h-4" />
+                    <div className="bg-gradient-to-r from-gray-50 to-white border border-gray-200 p-3">
+                      <Label className="text-sm font-medium flex items-center gap-2 text-gray-700">
+                        <Brain className="w-4 h-4 text-blue-600" />
                         Trip-Level CSV Detected
                       </Label>
-                      <p className="text-xs text-muted-foreground mt-1">
+                      <p className="text-xs text-gray-600 mt-1">
                         Found {tripLevelInfo.rowCount} load rows across {tripLevelInfo.blockIds.length} unique block{tripLevelInfo.blockIds.length !== 1 ? 's' : ''}.
                         Milo will reconstruct these into calendar-ready blocks.
                       </p>
                     </div>
                     <div className="max-h-[100px] overflow-y-auto space-y-1 pr-2">
                       {tripLevelInfo.blockIds.slice(0, 10).map((blockId, index) => (
-                        <div key={index} className="flex items-center gap-2 text-sm bg-muted/30 rounded px-2 py-1">
-                          <FileText className="w-3 h-3 text-purple-400" />
-                          <span className="font-mono text-xs">{blockId}</span>
+                        <div key={index} className="flex items-center gap-2 text-sm bg-gray-50 border border-gray-100 px-2 py-1">
+                          <FileText className="w-3 h-3 text-blue-600" />
+                          <span className="font-mono text-xs text-gray-700">{blockId}</span>
                         </div>
                       ))}
                       {tripLevelInfo.blockIds.length > 10 && (
-                        <p className="text-xs text-muted-foreground">
+                        <p className="text-xs text-gray-500">
                           +{tripLevelInfo.blockIds.length - 10} more blocks...
                         </p>
                       )}
@@ -887,7 +901,7 @@ Answer concisely.`;
                     console.log('[DEBUG] Upload paste - combined length:', newText.length);
                     handlePasteChange(newText);
                   }}
-                  className="min-h-[200px] font-mono text-sm bg-muted/30"
+                  className="min-h-[200px] font-mono text-sm bg-gray-50 border border-gray-200 rounded-lg text-gray-900 placeholder:text-gray-400"
                 />
                 {pastedText && (
                   <div className="flex justify-end">
@@ -895,7 +909,7 @@ Answer concisely.`;
                       variant="ghost"
                       size="sm"
                       onClick={() => { accumulatedCsvRef.current = ''; setPastedText(''); setDataFormat('unknown'); setTripLevelInfo({ rowCount: 0, blockIds: [] }); }}
-                      className="text-xs text-muted-foreground"
+                      className="text-xs text-gray-500 hover:text-gray-700"
                     >
                       <X className="w-3 h-3 mr-1" />
                       Clear all
@@ -906,25 +920,25 @@ Answer concisely.`;
                 {/* Trip-level CSV detected */}
                 {dataFormat === "trip_level" && tripLevelInfo.blockIds.length > 0 && (
                   <div className="space-y-2">
-                    <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-3">
-                      <Label className="text-sm font-medium flex items-center gap-2 text-purple-400">
-                        <Brain className="w-4 h-4" />
+                    <div className="bg-gradient-to-r from-gray-50 to-white border border-gray-200 p-3">
+                      <Label className="text-sm font-medium flex items-center gap-2 text-gray-700">
+                        <Brain className="w-4 h-4 text-blue-600" />
                         Trip-Level CSV Detected
                       </Label>
-                      <p className="text-xs text-muted-foreground mt-1">
+                      <p className="text-xs text-gray-600 mt-1">
                         Found {tripLevelInfo.rowCount} load rows across {tripLevelInfo.blockIds.length} unique block{tripLevelInfo.blockIds.length !== 1 ? 's' : ''}.
                         Milo will reconstruct these into calendar-ready blocks.
                       </p>
                     </div>
                     <div className="max-h-[100px] overflow-y-auto space-y-1 pr-2">
                       {tripLevelInfo.blockIds.slice(0, 10).map((blockId, index) => (
-                        <div key={index} className="flex items-center gap-2 text-sm bg-muted/30 rounded px-2 py-1">
-                          <FileText className="w-3 h-3 text-purple-400" />
-                          <span className="font-mono text-xs">{blockId}</span>
+                        <div key={index} className="flex items-center gap-2 text-sm bg-gray-50 border border-gray-100 px-2 py-1">
+                          <FileText className="w-3 h-3 text-blue-600" />
+                          <span className="font-mono text-xs text-gray-700">{blockId}</span>
                         </div>
                       ))}
                       {tripLevelInfo.blockIds.length > 10 && (
-                        <p className="text-xs text-muted-foreground">
+                        <p className="text-xs text-gray-500">
                           +{tripLevelInfo.blockIds.length - 10} more blocks...
                         </p>
                       )}
@@ -935,19 +949,19 @@ Answer concisely.`;
                 {/* Block-level parsed preview */}
                 {dataFormat === "block_level" && parsedBlocks.length > 0 && (
                   <div className="space-y-2">
-                    <Label className="text-sm font-medium flex items-center gap-2">
-                      <Check className="w-4 h-4 text-green-500" />
+                    <Label className="text-sm font-medium flex items-center gap-2 text-gray-700">
+                      <Check className="w-4 h-4 text-blue-600" />
                       Parsed {parsedBlocks.length} block{parsedBlocks.length !== 1 ? 's' : ''}:
                     </Label>
                     <div className="max-h-[150px] overflow-y-auto space-y-2 pr-2">
                       {parsedBlocks.map((block, index) => (
-                        <div key={index} className="flex items-center justify-between bg-muted/50 rounded-lg p-3 text-sm">
+                        <div key={index} className="flex items-center justify-between bg-gray-50 border border-gray-200 p-3 text-sm">
                           <div className="flex items-center gap-3">
-                            <FileText className="w-4 h-4 text-primary" />
+                            <FileText className="w-4 h-4 text-blue-600" />
                             <div>
-                              <span className="font-mono font-medium">{block.blockId}</span>
+                              <span className="font-mono font-medium text-gray-900">{block.blockId}</span>
                               {block.startTime && (
-                                <span className="text-muted-foreground ml-2">
+                                <span className="text-gray-500 ml-2">
                                   {format(block.startTime, "EEE MMM d, h:mm a")}
                                 </span>
                               )}
@@ -956,7 +970,7 @@ Answer concisely.`;
                           <div className="flex items-center gap-2">
                             {getBlockTypeBadge(block.blockType)}
                             {block.driverName && (
-                              <span className="text-xs text-muted-foreground">{block.driverName}</span>
+                              <span className="text-xs text-gray-500">{block.driverName}</span>
                             )}
                           </div>
                         </div>
@@ -968,30 +982,34 @@ Answer concisely.`;
             </Tabs>
 
             {/* Actions */}
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="outline" onClick={handleClose}>
+            <div className="flex justify-end gap-3 pt-4 mt-2 border-t border-gray-100">
+              <button
+                onClick={handleClose}
+                className="px-4 py-2 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-100 transition-colors"
+              >
                 Cancel
-              </Button>
-              <Button
+              </button>
+              <button
                 onClick={handleContinueFromUpload}
                 disabled={
                   inputMode === "file"
                     ? files.length === 0
                     : (dataFormat === "block_level" ? parsedBlocks.length === 0 : dataFormat !== "trip_level")
                 }
+                className="px-4 py-2 text-sm rounded-md bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
               >
                 {dataFormat === "trip_level" ? (
                   <>
-                    <Brain className="w-4 h-4 mr-1" />
+                    <Brain className="w-4 h-4" />
                     Reconstruct Blocks
                   </>
                 ) : (
                   <>
                     Continue
-                    <ChevronRight className="w-4 h-4 ml-1" />
+                    <ChevronRight className="w-4 h-4" />
                   </>
                 )}
-              </Button>
+              </button>
             </div>
           </div>
         )}
@@ -1000,16 +1018,16 @@ Answer concisely.`;
         {step === "identify" && (
           <div className="space-y-4">
             {/* Milo asks */}
-            <div className="bg-primary/10 border border-primary/20 rounded-lg p-4">
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
               <div className="flex items-start gap-3">
-                <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
-                  <Sparkles className="w-4 h-4 text-primary" />
+                <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                  <Sparkles className="w-4 h-4 text-blue-600" />
                 </div>
                 <div className="text-sm">
-                  <p className="text-muted-foreground">
+                  <p className="text-gray-700">
                     {inputMode === "file"
-                      ? <>I see you're uploading <strong>{files.length} file{files.length > 1 ? 's' : ''}</strong>. Which type of import is this?</>
-                      : <>I found <strong>{parsedBlocks.length} block{parsedBlocks.length !== 1 ? 's' : ''}</strong> in your pasted data. Which type of import is this?</>
+                      ? <>I see you're uploading <strong className="text-gray-900">{files.length} file{files.length > 1 ? 's' : ''}</strong>. Which type of import is this?</>
+                      : <>I found <strong className="text-gray-900">{parsedBlocks.length} block{parsedBlocks.length !== 1 ? 's' : ''}</strong> in your pasted data. Which type of import is this?</>
                     }
                   </p>
                 </div>
@@ -1024,18 +1042,18 @@ Answer concisely.`;
             >
               {/* New Week Option */}
               <div className={`relative flex items-start space-x-3 rounded-lg border p-4 cursor-pointer transition-colors ${
-                importType === "new_week" ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"
+                importType === "new_week" ? "border-blue-400 bg-blue-50" : "border-gray-200 hover:border-blue-300"
               }`}>
                 <RadioGroupItem value="new_week" id="new_week" className="mt-1" />
                 <Label htmlFor="new_week" className="flex-1 cursor-pointer">
                   <div className="flex items-center gap-2 mb-1">
-                    <Calendar className="w-4 h-4 text-blue-500" />
-                    <span className="font-medium">New Work Week</span>
+                    <Calendar className="w-4 h-4 text-blue-600" />
+                    <span className="font-medium text-gray-900">New Work Week</span>
                   </div>
-                  <p className="text-sm text-muted-foreground">
+                  <p className="text-sm text-gray-600">
                     Upcoming assignments: {format(nextWeekStart, "MMM d")} - {format(nextWeekEnd, "MMM d, yyyy")}
                   </p>
-                  <p className="text-xs text-muted-foreground mt-1">
+                  <p className="text-xs text-gray-500 mt-1">
                     This will create new shifts and auto-assign drivers based on patterns.
                   </p>
                 </Label>
@@ -1043,18 +1061,18 @@ Answer concisely.`;
 
               {/* Actuals Option */}
               <div className={`relative flex items-start space-x-3 rounded-lg border p-4 cursor-pointer transition-colors ${
-                importType === "actuals" ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"
+                importType === "actuals" ? "border-blue-400 bg-blue-50" : "border-gray-200 hover:border-blue-300"
               }`}>
                 <RadioGroupItem value="actuals" id="actuals" className="mt-1" />
                 <Label htmlFor="actuals" className="flex-1 cursor-pointer">
                   <div className="flex items-center gap-2 mb-1">
-                    <History className="w-4 h-4 text-amber-500" />
-                    <span className="font-medium">Last Week's Actuals</span>
+                    <History className="w-4 h-4 text-amber-600" />
+                    <span className="font-medium text-gray-900">Last Week's Actuals</span>
                   </div>
-                  <p className="text-sm text-muted-foreground">
+                  <p className="text-sm text-gray-600">
                     Ground truth: {format(lastWeekStart, "MMM d")} - {format(lastWeekEnd, "MMM d, yyyy")}
                   </p>
-                  <p className="text-xs text-muted-foreground mt-1">
+                  <p className="text-xs text-gray-500 mt-1">
                     Updates records with what actually happened (no-shows, swaps, etc.)
                   </p>
                 </Label>
@@ -1063,9 +1081,9 @@ Answer concisely.`;
 
             {/* Warning for actuals */}
             {importType === "actuals" && (
-              <Alert className="border-amber-500/50 bg-amber-500/10">
-                <AlertTriangle className="h-4 w-4 text-amber-500" />
-                <AlertDescription className="text-sm">
+              <Alert className="border-amber-300 bg-amber-50">
+                <AlertTriangle className="h-4 w-4 text-amber-600" />
+                <AlertDescription className="text-sm text-gray-700">
                   Importing actuals will compare against existing records and may overwrite data.
                   You can undo this action after import.
                 </AlertDescription>
@@ -1073,17 +1091,21 @@ Answer concisely.`;
             )}
 
             {/* Actions */}
-            <div className="flex justify-between pt-2">
-              <Button variant="ghost" onClick={() => setStep("upload")}>
+            <div className="flex justify-between pt-4 mt-2 border-t border-gray-100">
+              <button
+                onClick={() => setStep("upload")}
+                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 transition-colors"
+              >
                 Back
-              </Button>
-              <Button
+              </button>
+              <button
                 onClick={handleConfirmType}
                 disabled={importType === "unknown"}
+                className="px-4 py-2 text-sm rounded-md bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
               >
                 Continue
-                <ChevronRight className="w-4 h-4 ml-1" />
-              </Button>
+                <ChevronRight className="w-4 h-4" />
+              </button>
             </div>
           </div>
         )}
@@ -1092,14 +1114,14 @@ Answer concisely.`;
         {step === "confirm" && (
           <div className="space-y-4">
             {/* Milo summary */}
-            <div className="bg-primary/10 border border-primary/20 rounded-lg p-4">
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
               <div className="flex items-start gap-3">
-                <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
-                  <Sparkles className="w-4 h-4 text-primary" />
+                <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                  <Sparkles className="w-4 h-4 text-blue-600" />
                 </div>
                 <div className="text-sm">
-                  <p className="font-medium text-foreground mb-1">Ready to import!</p>
-                  <p className="text-muted-foreground">
+                  <p className="font-medium text-gray-900 mb-1">Ready to import!</p>
+                  <p className="text-gray-600 leading-relaxed">
                     {importType === "new_week"
                       ? "I'll process this data and auto-assign drivers based on historical patterns. After import, click 'Analyze Now' to review assignments."
                       : "I'll compare this against your existing records and show you any differences. You can review changes before confirming."}
@@ -1109,24 +1131,24 @@ Answer concisely.`;
             </div>
 
             {/* Summary */}
-            <div className="bg-muted/50 rounded-lg p-4 space-y-3">
+            <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-3">
               <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">
+                <span className="text-sm text-gray-600">
                   {inputMode === "file" ? "Files to import:" : "Blocks to import:"}
                 </span>
-                <span className="text-sm font-medium">
+                <span className="text-sm font-medium text-gray-900">
                   {inputMode === "file" ? files.length : parsedBlocks.length}
                 </span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">Import type:</span>
-                <span className="text-sm font-medium">
+                <span className="text-sm text-gray-600">Import type:</span>
+                <span className="text-sm font-medium text-gray-900">
                   {importType === "new_week" ? "New Work Week" : "Last Week's Actuals"}
                 </span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">Week:</span>
-                <span className="text-sm font-medium">
+                <span className="text-sm text-gray-600">Week:</span>
+                <span className="text-sm font-medium text-gray-900">
                   {importType === "new_week"
                     ? `${format(nextWeekStart, "MMM d")} - ${format(nextWeekEnd, "MMM d")}`
                     : `${format(lastWeekStart, "MMM d")} - ${format(lastWeekEnd, "MMM d")}`}
@@ -1135,16 +1157,16 @@ Answer concisely.`;
               {inputMode === "paste" && (
                 <>
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">Solo2 blocks:</span>
-                    <span className="text-sm font-medium">{parsedBlocks.filter(b => b.blockType === "solo2").length}</span>
+                    <span className="text-sm text-gray-600">Solo2 blocks:</span>
+                    <span className="text-sm font-medium text-gray-900">{parsedBlocks.filter(b => b.blockType === "solo2").length}</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">Solo1 blocks:</span>
-                    <span className="text-sm font-medium">{parsedBlocks.filter(b => b.blockType === "solo1").length}</span>
+                    <span className="text-sm text-gray-600">Solo1 blocks:</span>
+                    <span className="text-sm font-medium text-gray-900">{parsedBlocks.filter(b => b.blockType === "solo1").length}</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">With driver assigned:</span>
-                    <span className="text-sm font-medium">{parsedBlocks.filter(b => b.driverName).length}</span>
+                    <span className="text-sm text-gray-600">With driver assigned:</span>
+                    <span className="text-sm font-medium text-gray-900">{parsedBlocks.filter(b => b.driverName).length}</span>
                   </div>
                 </>
               )}
@@ -1154,21 +1176,21 @@ Answer concisely.`;
             <div className="space-y-2 max-h-[150px] overflow-y-auto">
               {inputMode === "file" ? (
                 files.map((f, index) => (
-                  <div key={index} className="flex items-center gap-2 text-sm">
-                    <FileSpreadsheet className="w-4 h-4 text-green-600" />
+                  <div key={index} className="flex items-center gap-2 text-sm text-gray-700">
+                    <FileSpreadsheet className="w-4 h-4 text-blue-600" />
                     <span className="truncate">{f.file.name}</span>
                   </div>
                 ))
               ) : (
                 parsedBlocks.map((block, index) => (
-                  <div key={index} className="flex items-center justify-between text-sm bg-muted/30 rounded p-2">
+                  <div key={index} className="flex items-center justify-between text-sm bg-gray-50 border border-gray-100 rounded p-2">
                     <div className="flex items-center gap-2">
-                      <FileText className="w-4 h-4 text-primary" />
-                      <span className="font-mono">{block.blockId}</span>
+                      <FileText className="w-4 h-4 text-blue-600" />
+                      <span className="font-mono text-gray-900">{block.blockId}</span>
                     </div>
                     <div className="flex items-center gap-2">
                       {getBlockTypeBadge(block.blockType)}
-                      <span className="text-muted-foreground">
+                      <span className="text-gray-500">
                         {block.driverName || "Unassigned"}
                       </span>
                     </div>
@@ -1178,16 +1200,22 @@ Answer concisely.`;
             </div>
 
             {/* Actions */}
-            <div className="flex justify-between pt-2">
-              <Button variant="ghost" onClick={() => setStep("identify")}>
+            <div className="flex justify-between pt-4 mt-2 border-t border-gray-100">
+              <button
+                onClick={() => setStep("identify")}
+                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 transition-colors"
+              >
                 Back
-              </Button>
-              <Button onClick={handleImport}>
-                <Upload className="w-4 h-4 mr-2" />
+              </button>
+              <button
+                onClick={handleImport}
+                className="px-4 py-2 text-sm rounded-md bg-blue-500 text-white hover:bg-blue-600 transition-colors flex items-center gap-2"
+              >
+                <Upload className="w-4 h-4" />
                 Import {inputMode === "file"
                   ? (files.length > 1 ? "Files" : "File")
                   : `${parsedBlocks.length} Block${parsedBlocks.length !== 1 ? 's' : ''}`}
-              </Button>
+              </button>
             </div>
           </div>
         )}
@@ -1195,40 +1223,42 @@ Answer concisely.`;
         {/* Step: Block Reconstruction (Trip-Level CSV) */}
         {step === "reconstruct" && (
           <div className="space-y-3">
-            {/* Milo thinking/response */}
-            <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-3">
-              <div className="flex items-start gap-3">
-                <div className="w-8 h-8 rounded-full bg-purple-500/20 flex items-center justify-center flex-shrink-0">
-                  {isReconstructing ? (
-                    <Loader2 className="w-4 h-4 text-purple-400 animate-spin" />
-                  ) : (
-                    <Brain className="w-4 h-4 text-purple-400" />
-                  )}
-                </div>
-                <div className="text-sm flex-1">
-                  <p className="font-medium text-purple-300 mb-1">
-                    {isReconstructing ? "Milo is analyzing..." : `Reconstructed ${reconstructedBlocks.length} Blocks`}
-                  </p>
-                  {isReconstructing ? (
-                    <p className="text-muted-foreground">
-                      Parsing {tripLevelInfo.rowCount} loads across {tripLevelInfo.blockIds.length} blocks...
+            {/* Milo thinking/response - Hide when showing import result */}
+            {!importResult && (
+              <div className="bg-gradient-to-r from-gray-50 to-white border border-gray-200 rounded-lg p-3">
+                <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0">
+                    {isReconstructing ? (
+                      <Loader2 className="w-4 h-4 text-blue-600 animate-spin" />
+                    ) : (
+                      <Brain className="w-4 h-4 text-blue-600" />
+                    )}
+                  </div>
+                  <div className="text-sm flex-1">
+                    <p className="font-medium text-gray-800 mb-1">
+                      {isReconstructing ? "Milo is analyzing..." : `Reconstructed ${reconstructedBlocks.length} Blocks`}
                     </p>
-                  ) : (
-                    <p className="text-muted-foreground">
-                      Ready to import with canonical start times and driver assignments.
-                    </p>
-                  )}
+                    {isReconstructing ? (
+                      <p className="text-gray-600">
+                        Parsing {tripLevelInfo.rowCount} loads across {tripLevelInfo.blockIds.length} blocks...
+                      </p>
+                    ) : (
+                      <p className="text-gray-600">
+                        Ready to import with canonical start times and driver assignments.
+                      </p>
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
 
             {/* MILO CHAT - Prominent position right after header */}
             {!isReconstructing && reconstructedBlocks.length > 0 && !importResult?.success && (
-              <div className="bg-gradient-to-r from-purple-500/10 to-blue-500/10 border border-purple-500/30 rounded-lg p-3">
+              <div className="bg-gradient-to-r from-gray-50 to-white border border-gray-200 rounded-lg p-3">
                 <div className="flex items-center gap-2 mb-2">
-                  <MessageCircle className="w-4 h-4 text-purple-400" />
-                  <span className="text-sm font-medium text-purple-300">Ask Milo</span>
-                  <span className="text-xs text-muted-foreground">- Filter blocks before import</span>
+                  <MessageCircle className="w-4 h-4 text-blue-600" />
+                  <span className="text-sm font-medium text-gray-800">Ask Milo</span>
+                  <span className="text-xs text-gray-500">- Filter blocks before import</span>
                 </div>
                 <form onSubmit={handleChatSubmit} className="flex gap-2">
                   <input
@@ -1236,18 +1266,22 @@ Answer concisely.`;
                     value={chatInput}
                     onChange={(e) => setChatInput(e.target.value)}
                     placeholder="Try: 'show Tuesday blocks' or 'filter to Solo2' or 'after Nov 25'"
-                    className="flex-1 px-3 py-2 text-sm rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-purple-500/50"
+                    className="flex-1 px-3 py-2 text-sm rounded-lg border border-gray-200 bg-white text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-300"
                     disabled={isChatting || isImporting}
                   />
-                  <Button type="submit" size="sm" disabled={isChatting || isImporting || !chatInput.trim()}>
+                  <button
+                    type="submit"
+                    disabled={isChatting || isImporting || !chatInput.trim()}
+                    className="px-3 py-2 text-sm rounded-md bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
                     <Send className="w-4 h-4" />
-                  </Button>
+                  </button>
                 </form>
                 {/* Chat responses */}
                 {chatMessages.length > 0 && (
                   <div className="mt-2 space-y-1 max-h-16 overflow-y-auto">
                     {chatMessages.slice(-2).map((msg, i) => (
-                      <p key={i} className={`text-xs ${msg.role === 'user' ? 'text-muted-foreground' : 'text-purple-300'}`}>
+                      <p key={i} className={`text-xs ${msg.role === 'user' ? 'text-gray-500' : 'text-blue-700'}`}>
                         {msg.role === 'assistant' ? '→ ' : '? '}{msg.content}
                       </p>
                     ))}
@@ -1256,48 +1290,46 @@ Answer concisely.`;
               </div>
             )}
 
-            {/* Filter indicator - show when filter is active */}
-            {activeFilter && (
-              <div className="flex items-center justify-between bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">
-                <span className="text-sm text-amber-400">
+            {/* Filter indicator - show when filter is active, hide after import */}
+            {activeFilter && !importResult && (
+              <div className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                <span className="text-sm text-amber-700">
                   Filtered: {activeFilter} ({filteredBlocks.length} of {reconstructedBlocks.length} blocks)
                 </span>
-                <Button
-                  variant="ghost"
-                  size="sm"
+                <button
                   onClick={() => { setFilteredBlocks(reconstructedBlocks); setActiveFilter(""); }}
-                  className="h-6 text-xs text-amber-400 hover:text-amber-300"
+                  className="text-xs text-amber-600 hover:text-amber-800 font-medium transition-colors"
                 >
                   Show All
-                </Button>
+                </button>
               </div>
             )}
 
-            {/* Block List Display */}
-            {filteredBlocks.length > 0 && !isReconstructing && (
-              <ScrollArea className="h-[180px] rounded-lg border bg-muted/30 p-3">
+            {/* Block List Display - Hide when import result is showing */}
+            {filteredBlocks.length > 0 && !isReconstructing && !importResult && (
+              <ScrollArea className="h-[180px] rounded-lg border border-gray-200 bg-gray-50 p-3">
                   <div className="space-y-3">
                     {filteredBlocks.slice(0, 20).map((block, index) => (
-                      <div key={index} className="border-b border-border/50 pb-3 last:border-0">
+                      <div key={index} className="border-b border-gray-200 pb-3 last:border-0">
                         <div className="flex items-center justify-between mb-1">
-                          <span className="font-mono text-sm font-medium">{block.blockId}</span>
-                          <span className="text-xs text-muted-foreground">{block.contract}</span>
+                          <span className="font-mono text-sm font-medium text-gray-900">{block.blockId}</span>
+                          <span className="text-xs text-gray-500">{block.contract}</span>
                         </div>
-                        <div className="grid grid-cols-2 gap-x-4 text-xs text-muted-foreground">
+                        <div className="grid grid-cols-2 gap-x-4 text-xs text-gray-600">
                           <span>Start: {block.startDate}, {block.canonicalStartTime}</span>
                           <span>Duration: {block.duration}</span>
                           <span>Driver: {block.primaryDriver}</span>
                           <span>Cost: ${block.cost?.toFixed(2) || '0.00'}</span>
                         </div>
                         {block.relayDrivers?.length > 0 && (
-                          <div className="text-xs text-amber-500 mt-1">
+                          <div className="text-xs text-amber-600 mt-1">
                             Relay: {block.relayDrivers.join(', ')}
                           </div>
                         )}
                       </div>
                     ))}
                     {filteredBlocks.length > 20 && (
-                      <p className="text-xs text-muted-foreground text-center pt-2">
+                      <p className="text-xs text-gray-500 text-center pt-2">
                         ... and {filteredBlocks.length - 20} more blocks
                       </p>
                     )}
@@ -1309,11 +1341,11 @@ Answer concisely.`;
             {isReconstructing && (
               <div className="flex items-center justify-center py-8">
                 <div className="flex flex-col items-center gap-3">
-                  <Loader2 className="w-8 h-8 text-purple-400 animate-spin" />
-                  <p className="text-sm text-muted-foreground">
+                  <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+                  <p className="text-sm text-gray-700">
                     Milo is thinking...
                   </p>
-                  <p className="text-xs text-muted-foreground/70">
+                  <p className="text-xs text-gray-500">
                     Analyzing {tripLevelInfo.rowCount} rows across {tripLevelInfo.blockIds.length} blocks
                   </p>
                 </div>
@@ -1322,28 +1354,33 @@ Answer concisely.`;
 
             {/* Import Result - Enterprise Style */}
             {importResult && (
-              <div className="rounded-lg border bg-background p-6 shadow-sm">
-                <h3 className="text-lg font-semibold mb-3">
+              <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+                <h3 className="text-lg font-semibold text-gray-900 mb-3">
                   {importResult.success ? "Import Complete" : "Import Failed"}
                 </h3>
 
                 {importResult.success ? (
                   <div className="space-y-3">
-                    <p className="text-sm text-muted-foreground">
-                      Successfully imported <span className="font-bold text-foreground">{importResult.created || 0} blocks</span>
-                      {importResult.assignments && importResult.assignments > 0 && (
-                        <> with <span className="font-bold text-foreground">{importResult.assignments} driver assignments</span></>
-                      )} to your calendar.
+                    <p className="text-sm text-gray-600">
+                      Successfully imported <span className="font-bold text-gray-900">{importResult.created || 0} blocks</span> to your calendar.
                     </p>
+                    {(importResult.created || 0) > 0 && (
+                      <ul className="text-sm text-gray-600 list-disc list-inside space-y-1">
+                        <li><span className="font-semibold text-gray-900">{importResult.created}</span> blocks imported with <span className="font-semibold text-gray-900">{importResult.assignments || 0}</span> driver assignments</li>
+                        {(importResult.replaced || 0) > 0 && (
+                          <li className="text-gray-500">({importResult.replaced} replaced existing blocks)</li>
+                        )}
+                      </ul>
+                    )}
 
-                    {importResult.skipped && importResult.skipped > 0 && (
+                    {importResult.skipped !== undefined && importResult.skipped > 0 && (
                       <p className="text-sm text-amber-600">
                         {importResult.skipped} blocks skipped (missing data or duplicates)
                       </p>
                     )}
 
                     {importResult.errors && importResult.errors.length > 0 && (
-                      <div className="text-xs text-red-500 max-h-20 overflow-y-auto">
+                      <div className="text-xs text-red-600 max-h-20 overflow-y-auto">
                         {importResult.errors.slice(0, 5).map((err, i) => (
                           <p key={i}>{err}</p>
                         ))}
@@ -1355,9 +1392,9 @@ Answer concisely.`;
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    <p className="text-sm text-red-500">{importResult.message}</p>
+                    <p className="text-sm text-red-600">{importResult.message}</p>
                     {importResult.errors && importResult.errors.length > 0 && (
-                      <div className="text-xs text-red-400 max-h-20 overflow-y-auto">
+                      <div className="text-xs text-red-500 max-h-20 overflow-y-auto">
                         {importResult.errors.slice(0, 5).map((err, i) => (
                           <p key={i}>{err}</p>
                         ))}
@@ -1372,68 +1409,68 @@ Answer concisely.`;
             )}
 
             {/* Actions */}
-            <div className="flex justify-between pt-2">
-              <Button variant="ghost" onClick={() => setStep("upload")} disabled={isImporting}>
+            <div className="flex justify-between pt-4 mt-2 border-t border-gray-100">
+              <button
+                onClick={() => setStep("upload")}
+                disabled={isImporting}
+                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 disabled:opacity-50 transition-colors"
+              >
                 Back
-              </Button>
+              </button>
               <div className="flex gap-2">
                 {!isReconstructing && reconstructedBlocks.length > 0 && !importResult?.success && (
                   <>
-                    <Button variant="outline" onClick={handleReconstructBlocks} disabled={isImporting}>
-                      <Brain className="w-4 h-4 mr-2" />
-                      Re-analyze
-                    </Button>
-                    <Button variant="secondary" onClick={handleGenerateReport} disabled={isImporting || filteredBlocks.length === 0}>
-                      <FileBarChart className="w-4 h-4 mr-2" />
-                      Preview Report
-                    </Button>
-                    <Button
-                      variant="default"
-                      onClick={() => setShowScheduleBuilder(true)}
-                      disabled={isImporting || filteredBlocks.length === 0}
-                      className="bg-blue-600 hover:bg-blue-700"
+                    <button
+                      onClick={handleReconstructBlocks}
+                      disabled={isImporting}
+                      className="px-3 py-2 text-sm border border-gray-300 text-gray-700 hover:bg-gray-100 disabled:opacity-50 transition-colors flex items-center gap-1"
                     >
-                      <Sparkles className="w-4 h-4 mr-2" />
-                      Build Schedule
-                    </Button>
-                    <Button
+                      <Brain className="w-4 h-4" />
+                      Re-analyze
+                    </button>
+                    <button
                       onClick={handleImportToCalendar}
                       disabled={isImporting || filteredBlocks.length === 0}
-                      className="bg-green-600 hover:bg-green-700"
+                      className="px-3 py-2 text-sm bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50 transition-colors flex items-center gap-1"
                     >
                       {isImporting ? (
                         <>
-                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          <Loader2 className="w-4 h-4 animate-spin" />
                           Importing...
                         </>
                       ) : (
                         <>
-                          <Calendar className="w-4 h-4 mr-2" />
-                          Import {filteredBlocks.length} Blocks
+                          <Calendar className="w-4 h-4" />
+                          Import to Calendar
                         </>
                       )}
-                    </Button>
+                    </button>
                   </>
                 )}
                 {importResult?.success && (
                   <div className="flex gap-2">
-                    <Button variant="outline" onClick={handleClose}>
+                    <button
+                      onClick={handleClose}
+                      className="px-4 py-2 text-sm border border-gray-300 text-gray-700 hover:bg-gray-100 transition-colors"
+                    >
                       Done
-                    </Button>
-                    <Button variant="secondary" onClick={handleGenerateReport}>
-                      <FileBarChart className="w-4 h-4 mr-2" />
-                      Executive Report
-                    </Button>
-                    <Button onClick={handleClose}>
-                      <Calendar className="w-4 h-4 mr-2" />
+                    </button>
+                    <button
+                      onClick={handleClose}
+                      className="px-3 py-2 text-sm bg-blue-500 text-white hover:bg-blue-600 transition-colors flex items-center gap-1"
+                    >
+                      <Calendar className="w-4 h-4" />
                       View Calendar
-                    </Button>
+                    </button>
                   </div>
                 )}
                 {!reconstructedBlocks.length && !isReconstructing && (
-                  <Button onClick={handleClose}>
+                  <button
+                    onClick={handleClose}
+                    className="px-4 py-2 text-sm border border-gray-300 text-gray-700 hover:bg-gray-100 transition-colors"
+                  >
                     Close
-                  </Button>
+                  </button>
                 )}
               </div>
             </div>
@@ -1451,39 +1488,42 @@ Answer concisely.`;
       {/* Schedule Builder Modal */}
       <Dialog open={showScheduleBuilder} onOpenChange={setShowScheduleBuilder}>
         <DialogContent className="max-w-6xl h-[90vh] p-0 overflow-hidden">
-          <ScheduleBuilder
-            blocks={filteredBlocks.map(block => ({
-              blockId: block.blockId,
-              date: block.startDate,
-              dayOfWeek: getDayOfWeekFromDate(block.startDate),
-              startTime: block.canonicalStartTime,
-              blockType: getBlockType(block.duration),
-              duration: parseDurationToHours(block.duration),
-              estimatedPay: block.cost,
-              stops: block.loadCount,
-              trips: [],
-              source: "csv" as const,
-            }))}
-            weekStart={currentWeekStart}
-            tenantId={1}
-            onComplete={(schedule: FinalSchedule) => {
-              setShowScheduleBuilder(false);
-              // Generate report from final schedule
-              const scheduleBlocks: ScheduleBlock[] = schedule.blocks.map(block => ({
+          {filteredBlocks.length > 0 && (
+            <ScheduleBuilder
+              blocks={filteredBlocks.map(block => ({
                 blockId: block.blockId,
-                startDate: block.date,
-                startTime: block.startTime,
-                driverName: block.driverName || "Unassigned",
-                blockType: block.blockType === "team" ? "solo2" : block.blockType,
-                duration: `${block.duration}h`,
-                cost: block.estimatedPay,
-              }));
-              const data = generateReportData(scheduleBlocks, currentWeekStart);
-              setReportData(data);
-              setShowReport(true);
-            }}
-            onCancel={() => setShowScheduleBuilder(false)}
-          />
+                date: block.startDate,
+                dayOfWeek: getDayOfWeekFromDate(block.startDate),
+                startTime: block.canonicalStartTime,
+                blockType: getBlockType(block.duration),
+                duration: parseDurationToHours(block.duration),
+                estimatedPay: block.cost,
+                stops: block.loadCount,
+                trips: [],
+                source: "csv" as const,
+              }))}
+              weekStart={getDominantWeekStart(filteredBlocks)}
+              tenantId={1}
+              onComplete={(schedule: FinalSchedule) => {
+                setShowScheduleBuilder(false);
+                // Generate report from final schedule - use dominant week from actual data
+                const dataWeekStart = getDominantWeekStart(filteredBlocks);
+                const scheduleBlocks: ScheduleBlock[] = schedule.blocks.map(block => ({
+                  blockId: block.blockId,
+                  startDate: block.date,
+                  startTime: block.startTime,
+                  driverName: block.driverName || "Unassigned",
+                  blockType: block.blockType === "team" ? "solo2" : block.blockType,
+                  duration: `${block.duration}h`,
+                  cost: block.estimatedPay,
+                }));
+                const data = generateReportData(scheduleBlocks, dataWeekStart);
+                setReportData(data);
+                setShowReport(true);
+              }}
+              onCancel={() => setShowScheduleBuilder(false)}
+            />
+          )}
         </DialogContent>
       </Dialog>
     </Dialog>
@@ -1512,6 +1552,39 @@ function parseDurationToHours(duration: string): number {
   const days = dayMatch ? parseInt(dayMatch[1]) : 0;
   const hours = hourMatch ? parseInt(hourMatch[1]) : 0;
   return days * 24 + hours;
+}
+
+// Find the dominant week from a set of blocks (week with most blocks)
+function getDominantWeekStart(blocks: ReconstructedBlock[]): Date {
+  if (blocks.length === 0) {
+    return startOfWeek(new Date(), { weekStartsOn: 0 });
+  }
+
+  // Count blocks per week
+  const weekCounts = new Map<string, { count: number; weekStart: Date }>();
+
+  for (const block of blocks) {
+    const blockDate = new Date(block.startDate);
+    const weekStart = startOfWeek(blockDate, { weekStartsOn: 0 });
+    const weekKey = weekStart.toISOString();
+
+    const existing = weekCounts.get(weekKey);
+    if (existing) {
+      existing.count++;
+    } else {
+      weekCounts.set(weekKey, { count: 1, weekStart });
+    }
+  }
+
+  // Find week with most blocks
+  let dominantWeek: { count: number; weekStart: Date } | undefined = undefined;
+  for (const week of weekCounts.values()) {
+    if (!dominantWeek || week.count > dominantWeek.count) {
+      dominantWeek = week;
+    }
+  }
+
+  return dominantWeek?.weekStart || startOfWeek(new Date(), { weekStartsOn: 0 });
 }
 
 // Export the ParsedBlock type for use in other components

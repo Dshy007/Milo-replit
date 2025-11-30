@@ -636,25 +636,47 @@ export default function Schedules() {
 
   const clearAllMutation = useMutation({
     mutationFn: async ({ weekStart, weekEnd }: { weekStart: string; weekEnd: string }) => {
-      const response = await fetch('/api/shift-occurrences/clear-week', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ weekStart, weekEnd }),
-      });
-      
-      if (!response.ok) {
-        const error = await response.json();
+      // Clear both shift occurrences AND imported blocks
+      const [shiftsResponse, blocksResponse] = await Promise.all([
+        fetch('/api/shift-occurrences/clear-week', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ weekStart, weekEnd }),
+        }),
+        fetch('/api/blocks/clear-week', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ weekStart, weekEnd }),
+        }),
+      ]);
+
+      if (!shiftsResponse.ok) {
+        const error = await shiftsResponse.json();
         throw new Error(error.message || 'Failed to clear shifts');
       }
-      
-      return response.json();
+
+      if (!blocksResponse.ok) {
+        const error = await blocksResponse.json();
+        throw new Error(error.message || 'Failed to clear blocks');
+      }
+
+      const [shiftsResult, blocksResult] = await Promise.all([
+        shiftsResponse.json(),
+        blocksResponse.json(),
+      ]);
+
+      return {
+        shiftsCount: shiftsResult.count || 0,
+        blocksCount: blocksResult.count || 0
+      };
     },
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
       toast({
-        title: "Shifts Cleared",
-        description: `Successfully deleted ${result.count || 0} shifts from this week`,
+        title: "Schedule Cleared",
+        description: `Deleted ${result.shiftsCount} shifts and ${result.blocksCount} imported blocks`,
       });
       setShowClearAllDialog(false);
     },
@@ -662,7 +684,7 @@ export default function Schedules() {
       toast({
         variant: "destructive",
         title: "Clear Failed",
-        description: error.message || "Failed to clear shifts",
+        description: error.message || "Failed to clear schedule",
       });
     },
   });
@@ -1862,9 +1884,12 @@ export default function Schedules() {
                     {/* Day Cells */}
                     {weekRange.weekDays.map((day) => {
                       const dayISO = format(day, "yyyy-MM-dd");
-                      // Filter occurrences by both tractorId AND startTime to match the correct contract
+                      // Filter occurrences by tractorId. For shift occurrences, also filter by startTime.
+                      // For imported blocks, don't filter by startTime - they have actual start times from CSV.
                       const dayOccurrences = (occurrencesByContract[contract.tractorId]?.[dayISO] || [])
-                        .filter(occ => occ.startTime === contract.startTime);
+                        .filter(occ =>
+                          occ.source === 'imported_block' || occ.startTime === contract.startTime
+                        );
 
                       const cellId = `cell-${dayISO}-${contract.tractorId}-${contract.startTime}`;
 
@@ -2263,6 +2288,24 @@ export default function Schedules() {
         open={isImportWizardOpen}
         onOpenChange={setIsImportWizardOpen}
         onImport={handleWizardImport}
+        onImportComplete={async (dominantWeekStart) => {
+          // First, invalidate ALL calendar queries to mark them stale
+          await queryClient.invalidateQueries({
+            queryKey: ["/api/schedules/calendar"],
+            refetchType: 'all'
+          });
+          // Navigate to the dominant imported week (this will trigger a new query)
+          if (dominantWeekStart) {
+            setCurrentDate(dominantWeekStart);
+          }
+          // Force refetch after a small delay to ensure state update has propagated
+          setTimeout(() => {
+            queryClient.refetchQueries({
+              queryKey: ["/api/schedules/calendar"],
+              type: 'active'
+            });
+          }, 100);
+        }}
         currentWeekStart={weekRange.weekStart}
       />
 

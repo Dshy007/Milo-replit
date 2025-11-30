@@ -1275,6 +1275,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const start = new Date(startDate as string);
       const end = new Date(endDate as string);
+      // Set end date to end-of-day in UTC (23:59:59.999Z) to include blocks stored at noon
+      // IMPORTANT: Use setUTCHours, not setHours, to avoid timezone issues
+      end.setUTCHours(23, 59, 59, 999);
       
       // Validate date format
       if (isNaN(start.getTime()) || isNaN(end.getTime())) {
@@ -1292,51 +1295,85 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Date range cannot exceed 31 days" });
       }
       
-      // QUICK WORKAROUND: Fetch shift occurrences instead of blocks
-      // This shows data from shift-based imports (new system)
+      // Fetch shift occurrences (old system)
       const occurrences = await dbStorage.getShiftOccurrencesByDateRange(req.session.tenantId!, start, end);
-      
+
+      // ALSO fetch imported blocks from blocks table (new import system)
+      // Debug: fetch ALL blocks first to see what dates are actually stored
+      const allBlocksDebug = await db
+        .select({ blockId: blocks.blockId, serviceDate: blocks.serviceDate })
+        .from(blocks)
+        .where(eq(blocks.tenantId, req.session.tenantId!))
+        .limit(30);
+
+      console.log(`[CALENDAR DEBUG] All blocks in DB (first 30):`, allBlocksDebug.map(b => ({
+        blockId: b.blockId,
+        serviceDate: b.serviceDate instanceof Date ? b.serviceDate.toISOString() : String(b.serviceDate)
+      })));
+      console.log(`[CALENDAR DEBUG] Query range: start=${start.toISOString()}, end=${end.toISOString()}`);
+
+      const importedBlocks = await db
+        .select()
+        .from(blocks)
+        .where(and(
+          eq(blocks.tenantId, req.session.tenantId!),
+          gte(blocks.serviceDate, start),
+          lte(blocks.serviceDate, end)
+        ));
+
+      console.log(`[CALENDAR] Fetched ${occurrences.length} shift occurrences and ${importedBlocks.length} imported blocks for date range ${startDate} - ${endDate}`);
+
       // Fetch all assignments for tenant
       const allAssignments = await dbStorage.getBlockAssignmentsByTenant(req.session.tenantId!);
       const occurrenceIds = new Set(occurrences.map(o => o.id));
-      const relevantAssignments = allAssignments.filter(a => a.shiftOccurrenceId && occurrenceIds.has(a.shiftOccurrenceId));
-      
-      // Build assignment lookup by occurrence ID
-      const assignmentsByOccurrenceId = new Map(relevantAssignments.map(a => [a.shiftOccurrenceId!, a]));
-      
+      const blockIds = new Set(importedBlocks.map(b => b.id));
+
+      // Filter assignments for shift occurrences
+      const relevantOccurrenceAssignments = allAssignments.filter(a => a.shiftOccurrenceId && occurrenceIds.has(a.shiftOccurrenceId));
+      // Filter assignments for imported blocks (blockId field stores the blocks table id)
+      const relevantBlockAssignments = allAssignments.filter(a => a.blockId && blockIds.has(a.blockId));
+
+      // Build assignment lookup by occurrence ID and block ID
+      const assignmentsByOccurrenceId = new Map(relevantOccurrenceAssignments.map(a => [a.shiftOccurrenceId!, a]));
+      const assignmentsByBlockId = new Map(relevantBlockAssignments.map(a => [a.blockId!, a]));
+
       // Fetch templates and contracts
       const templateIds = [...new Set(occurrences.map(o => o.templateId))];
-      const driverIds = [...new Set(relevantAssignments.map(a => a.driverId))];
-      
+      const blockContractIds = [...new Set(importedBlocks.map(b => b.contractId).filter(Boolean))];
+      const driverIds = [...new Set([
+        ...relevantOccurrenceAssignments.map(a => a.driverId),
+        ...relevantBlockAssignments.map(a => a.driverId)
+      ])];
+
       const templates = await db.select().from(shiftTemplates).where(
         and(
           eq(shiftTemplates.tenantId, req.session.tenantId!),
           inArray(shiftTemplates.id, templateIds.length > 0 ? templateIds : [''])
         )
       );
-      
-      const contractIds = [...new Set(templates.map(t => t.contractId))];
+
+      const contractIds = [...new Set([...templates.map(t => t.contractId), ...blockContractIds])];
       const [fetchedContracts, fetchedDrivers] = await Promise.all([
         Promise.all(contractIds.map(id => dbStorage.getContract(id))),
         Promise.all(driverIds.map(id => dbStorage.getDriver(id))),
       ]);
-      
+
       // Build lookup maps
       const templatesMap = new Map(templates.map(t => [t.id, t]));
       const contractsMap = new Map(fetchedContracts.filter(c => c).map(c => [c!.id, c!]));
       const driversMap = new Map(fetchedDrivers.filter(d => d).map(d => [d!.id, d!]));
-      
-      // Transform to simplified occurrence structure for calendar display
+
+      // Transform shift occurrences to simplified structure for calendar display
       const simplifiedOccurrences = occurrences.map(occ => {
         const template = templatesMap.get(occ.templateId);
         const contract = template ? contractsMap.get(template.contractId) || null : null;
         const assignment = assignmentsByOccurrenceId.get(occ.id) || null;
         const driver = assignment ? driversMap.get(assignment.driverId) || null : null;
-        
+
         // Use template's canonical start time (e.g., "00:30") - falls back to formatted scheduled time if missing
-        const startTime = template?.canonicalStartTime || 
+        const startTime = template?.canonicalStartTime ||
           occ.scheduledStart.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
-        
+
         // Calculate bump minutes (difference between actual and canonical start)
         // Handles cross-midnight occurrences correctly
         let bumpMinutes = 0;
@@ -1344,10 +1381,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const [canonicalHour, canonicalMin] = template.canonicalStartTime.split(':').map(Number);
           const canonicalMinutesOfDay = canonicalHour * 60 + canonicalMin;
           const scheduledMinutesOfDay = occ.scheduledStart.getHours() * 60 + occ.scheduledStart.getMinutes();
-          
+
           // Calculate raw difference
           let diff = scheduledMinutesOfDay - canonicalMinutesOfDay;
-          
+
           // Adjust for cross-midnight: if diff is very negative, assume it's a next-day occurrence
           // Example: canonical=23:30 (1410 min), scheduled=00:06 (6 min) → diff=-1404
           // Should be +36 minutes (crossed midnight)
@@ -1356,13 +1393,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           } else if (diff > 720) { // If more than 12 hours positive
             diff -= 1440; // Subtract 24 hours
           }
-          
+
           bumpMinutes = diff;
         }
-        
+
         // Provide stable block identifier with fallback
         const blockId = occ.externalBlockId || `SO-${occ.id.slice(0, 8)}`;
-        
+
         return {
           occurrenceId: occ.id,
           serviceDate: occ.serviceDate, // YYYY-MM-DD
@@ -1376,13 +1413,58 @@ export async function registerRoutes(app: Express): Promise<Server> {
           assignmentId: assignment?.id || null,
           bumpMinutes,
           isCarryover: occ.isCarryover,
+          source: 'shift_occurrence' as const,
         };
       });
-      
+
+      // Transform imported blocks to the same simplified structure
+      const simplifiedBlocks = importedBlocks.map(blk => {
+        const contract = blk.contractId ? contractsMap.get(blk.contractId) || null : null;
+        const assignment = assignmentsByBlockId.get(blk.id) || null;
+        const driver = assignment ? driversMap.get(assignment.driverId) || null : null;
+
+        // Extract start time from startTimestamp
+        const startTime = blk.startTimestamp
+          ? `${String(blk.startTimestamp.getHours()).padStart(2, '0')}:${String(blk.startTimestamp.getMinutes()).padStart(2, '0')}`
+          : '00:00';
+
+        // Format service date as YYYY-MM-DD string
+        const serviceDate = blk.serviceDate instanceof Date
+          ? format(blk.serviceDate, 'yyyy-MM-dd')
+          : String(blk.serviceDate);
+
+        return {
+          occurrenceId: blk.id,
+          serviceDate,
+          startTime,
+          blockId: blk.blockId,
+          driverName: driver ? `${driver.firstName} ${driver.lastName}` : null,
+          driverId: driver?.id || null,
+          contractType: blk.soloType || contract?.type || null,
+          status: blk.status || 'scheduled',
+          tractorId: blk.tractorId || null,
+          assignmentId: assignment?.id || null,
+          bumpMinutes: 0,
+          isCarryover: false,
+          source: 'imported_block' as const,
+        };
+      });
+
+      // Merge both sources - imported blocks take priority (they're newer data)
+      const allOccurrences = [...simplifiedBlocks, ...simplifiedOccurrences];
+
+      // DEBUG: Log sample of blocks with their dates and tractorIds
+      console.log('[CALENDAR DEBUG] Sample blocks being returned:', simplifiedBlocks.slice(0, 10).map(b => ({
+        blockId: b.blockId,
+        serviceDate: b.serviceDate,
+        tractorId: b.tractorId,
+        startTime: b.startTime
+      })));
+
       // Return simplified calendar data
       res.json({
         range: { start: startDate, end: endDate },
-        occurrences: simplifiedOccurrences,
+        occurrences: allOccurrences,
       });
     } catch (error: any) {
       res.status(500).json({ message: "Failed to fetch calendar data", error: error.message });
@@ -2182,6 +2264,68 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error("Error clearing shifts:", error);
       res.status(500).json({ message: "Failed to clear shifts", error: error.message });
+    }
+  });
+
+  // POST /api/blocks/clear-week - Clear all imported blocks for a given week
+  app.post("/api/blocks/clear-week", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { weekStart, weekEnd } = req.body;
+
+      if (!weekStart || !weekEnd) {
+        return res.status(400).json({ message: "Missing required fields: weekStart, weekEnd" });
+      }
+
+      // Use UTC dates to match how blocks are stored (at noon UTC)
+      const startDate = new Date(weekStart as string);
+      const endDate = new Date(weekEnd as string);
+      // Set end to end-of-day in UTC to include blocks stored at noon
+      endDate.setUTCHours(23, 59, 59, 999);
+
+      console.log(`[BLOCKS CLEAR] Date range: ${startDate.toISOString()} to ${endDate.toISOString()}`);
+
+      // Get blocks in date range
+      const blocksToDelete = await db
+        .select()
+        .from(blocks)
+        .where(and(
+          eq(blocks.tenantId, tenantId),
+          gte(blocks.serviceDate, startDate),
+          lte(blocks.serviceDate, endDate)
+        ));
+
+      let deletedCount = 0;
+
+      if (blocksToDelete.length > 0) {
+        const idsToDelete = blocksToDelete.map(b => b.id);
+
+        // Delete assignments first
+        await db.delete(blockAssignments)
+          .where(and(
+            eq(blockAssignments.tenantId, tenantId),
+            inArray(blockAssignments.blockId, idsToDelete)
+          ));
+
+        // Then delete blocks
+        await db.delete(blocks)
+          .where(and(
+            eq(blocks.tenantId, tenantId),
+            inArray(blocks.id, idsToDelete)
+          ));
+
+        deletedCount = blocksToDelete.length;
+      }
+
+      console.log(`[BLOCKS] Cleared ${deletedCount} imported blocks for ${weekStart} to ${weekEnd}`);
+
+      res.json({
+        message: `Deleted ${deletedCount} imported blocks`,
+        count: deletedCount
+      });
+    } catch (error: any) {
+      console.error("Error clearing blocks:", error);
+      res.status(500).json({ message: "Failed to clear blocks", error: error.message });
     }
   });
 
@@ -4998,6 +5142,47 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
 
       console.log(`[IMPORT] Starting import of ${reconstructedBlocks.length} reconstructed blocks for tenant ${tenantId}`);
 
+      // Track how many blocks were replaced (declared early since used in STEP 1)
+      let replacedCount = 0;
+
+      // STEP 1: Delete any existing blocks with the same blockIds being imported
+      // This ensures a clean import - CSV data replaces any existing data for those blocks
+      const blockIdsToImport = reconstructedBlocks
+        .map((b: any) => b.blockId)
+        .filter((id: string) => id);
+
+      if (blockIdsToImport.length > 0) {
+        // Find existing blocks with these blockIds
+        const existingBlocks = await db
+          .select({ id: blocks.id, blockId: blocks.blockId })
+          .from(blocks)
+          .where(and(
+            eq(blocks.tenantId, tenantId),
+            inArray(blocks.blockId, blockIdsToImport)
+          ));
+
+        if (existingBlocks.length > 0) {
+          const idsToDelete = existingBlocks.map(b => b.id);
+
+          // Delete assignments first
+          await db.delete(blockAssignments)
+            .where(and(
+              eq(blockAssignments.tenantId, tenantId),
+              inArray(blockAssignments.blockId, idsToDelete)
+            ));
+
+          // Then delete blocks
+          await db.delete(blocks)
+            .where(and(
+              eq(blocks.tenantId, tenantId),
+              inArray(blocks.id, idsToDelete)
+            ));
+
+          replacedCount = existingBlocks.length;
+          console.log(`[IMPORT] Cleared ${existingBlocks.length} existing blocks before import: ${existingBlocks.map(b => b.blockId).slice(0, 5).join(', ')}${existingBlocks.length > 5 ? '...' : ''}`);
+        }
+      }
+
       // Fetch all contracts for this tenant to match against
       const tenantContracts = await db
         .select()
@@ -5023,18 +5208,24 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
       // Build driver lookup by name (normalized)
       const driverMap = new Map<string, typeof tenantDrivers[0]>();
       for (const driver of tenantDrivers) {
-        const fullName = `${driver.firstName} ${driver.lastName}`.toLowerCase().trim();
+        // Normalize whitespace: trim and collapse multiple spaces
+        const firstName = (driver.firstName || '').trim().replace(/\s+/g, ' ');
+        const lastName = (driver.lastName || '').trim().replace(/\s+/g, ' ');
+        const fullName = `${firstName} ${lastName}`.toLowerCase().trim();
         driverMap.set(fullName, driver);
         // Also add initial + last name format: "M. FREEMAN" -> "m. freeman"
-        if (driver.firstName && driver.lastName) {
-          const initialFormat = `${driver.firstName.charAt(0).toLowerCase()}. ${driver.lastName.toLowerCase()}`;
+        if (firstName && lastName) {
+          const initialFormat = `${firstName.charAt(0).toLowerCase()}. ${lastName.toLowerCase()}`;
           driverMap.set(initialFormat, driver);
+          // Also add just last name as key for fallback
+          driverMap.set(lastName.toLowerCase(), driver);
         }
+        console.log(`[IMPORT] Driver map entry: "${fullName}" -> ${firstName} ${lastName} (ID: ${driver.id})`);
       }
 
       const results = {
         created: 0,
-        updated: 0,
+        replaced: 0,  // Number of existing blocks that were deleted and re-created
         skipped: 0,
         errors: [] as string[],
         assignments: 0,
@@ -5053,10 +5244,31 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
 
           // Parse contract from block.contract (e.g., "Solo2_Tractor_6")
           const contractKey = block.contract;
-          const contract = contractMap.get(contractKey) || contractMap.get(contractKey?.toLowerCase());
+          let contract = contractMap.get(contractKey) || contractMap.get(contractKey?.toLowerCase());
 
+          // Fallback 1: if contract not found, try to find a matching contract by type
+          if (!contract && contractKey) {
+            // Extract solo type from key (e.g., "Solo2_Tractor_6" -> "solo2")
+            const typeMatch = contractKey.match(/(solo[12]|team)/i);
+            const blockType = typeMatch ? typeMatch[1].toLowerCase() : 'solo2';
+
+            // Find first contract matching the type
+            const fallbackContract = tenantContracts.find(c => c.type.toLowerCase() === blockType);
+            if (fallbackContract) {
+              contract = fallbackContract;
+              console.log(`[IMPORT] Using type-based fallback contract ${fallbackContract.tractorId} (${fallbackContract.type}) for block ${block.blockId}`);
+            }
+          }
+
+          // Fallback 2: if STILL no contract, use ANY contract from the tenant (required by NOT NULL constraint)
+          if (!contract && tenantContracts.length > 0) {
+            contract = tenantContracts[0];
+            console.log(`[IMPORT] Using first available contract ${contract.tractorId} (${contract.type}) for block ${block.blockId} - no matching contract found`);
+          }
+
+          // If no contracts exist at all, skip this block
           if (!contract) {
-            results.errors.push(`Contract not found: ${contractKey} for block ${block.blockId}`);
+            results.errors.push(`No contracts available for tenant, cannot import block ${block.blockId}`);
             results.skipped++;
             continue;
           }
@@ -5069,77 +5281,101 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
           const soloMatch = contractKey?.match(/(solo[12])/i);
           const soloType = soloMatch ? soloMatch[1].toLowerCase() : contract.type;
 
-          // Parse tractor from contract key (e.g., "Solo2_Tractor_6" -> "Tractor_6")
-          const tractorMatch = contractKey?.match(/tractor_(\d+)/i);
-          const tractorId = tractorMatch ? `Tractor_${tractorMatch[1]}` : contract.tractorId;
+          // ALWAYS use the matched contract's tractorId
+          // Previously we parsed from CSV which caused mismatches when contract didn't exist
+          // The UI iterates over contracts table, so tractorId MUST match a contract
+          const tractorId = contract.tractorId;
 
           // Parse start date and time
-          const startDate = new Date(block.startDate + 'T00:00:00');
-          const [hours, minutes] = (block.canonicalStartTime || contract.startTime).split(':').map(Number);
-          const startTimestamp = new Date(startDate);
+          // IMPORTANT: Use UTC noon (12:00:00Z) to avoid timezone boundary issues
+          // This ensures the date doesn't shift to the previous day in any timezone
+          const serviceDateForDb = new Date(block.startDate + 'T12:00:00Z');
+
+          // For startTimestamp, use the actual start time with the date
+          const startTimeStr = block.canonicalStartTime || contract.startTime || '00:00';
+          const [hours, minutes] = startTimeStr.split(':').map(Number);
+          const startTimestamp = new Date(block.startDate + 'T00:00:00');
           startTimestamp.setHours(hours, minutes, 0, 0);
 
           // Calculate end timestamp
           const endTimestamp = new Date(startTimestamp);
           endTimestamp.setHours(endTimestamp.getHours() + duration);
 
-          // Check if this block already exists
-          const existingBlock = await db
-            .select()
-            .from(blocks)
-            .where(and(
-              eq(blocks.tenantId, tenantId),
-              eq(blocks.blockId, block.blockId),
-              eq(blocks.serviceDate, startDate)
-            ))
-            .limit(1);
-
-          let blockRecord;
-          if (existingBlock.length > 0) {
-            // Update existing block
-            const updated = await db
-              .update(blocks)
-              .set({
-                contractId: contract.id,
-                startTimestamp,
-                endTimestamp,
-                tractorId,
-                soloType,
-                duration,
-                status: 'assigned',
-                updatedAt: new Date(),
-              })
-              .where(eq(blocks.id, existingBlock[0].id))
-              .returning();
-            blockRecord = updated[0];
-            results.updated++;
-            console.log(`[IMPORT] Updated existing block: ${block.blockId}`);
-          } else {
-            // Create new block
-            const inserted = await db
-              .insert(blocks)
-              .values({
-                tenantId,
-                blockId: block.blockId,
-                serviceDate: startDate,
-                contractId: contract.id,
-                startTimestamp,
-                endTimestamp,
-                tractorId,
-                soloType,
-                duration,
-                status: 'assigned',
-              })
-              .returning();
-            blockRecord = inserted[0];
-            results.created++;
-            console.log(`[IMPORT] Created block: ${block.blockId}`);
-          }
+          // Create new block (existing blocks with same blockId were already deleted above)
+          const inserted = await db
+            .insert(blocks)
+            .values({
+              tenantId,
+              blockId: block.blockId,
+              serviceDate: serviceDateForDb,
+              contractId: contract.id,
+              startTimestamp,
+              endTimestamp,
+              tractorId,
+              soloType,
+              duration,
+              status: 'assigned',
+            })
+            .returning();
+          const blockRecord = inserted[0];
+          results.created++;
+          console.log(`[IMPORT] Created block: ${block.blockId} for ${block.startDate}`);
 
           // Try to create driver assignment if we have a primary driver
           if (block.primaryDriver && blockRecord) {
-            const driverName = block.primaryDriver.toLowerCase().trim();
-            const driver = driverMap.get(driverName);
+            // Normalize driver name: handle semicolons (e.g., "Robert Charles; JR Dixon" -> "Robert Charles")
+            let driverNameRaw = block.primaryDriver.trim().replace(/\s+/g, ' ');
+            if (driverNameRaw.includes(';')) {
+              driverNameRaw = driverNameRaw.split(';')[0].trim();
+              console.log(`[IMPORT] Split semicolon name to: "${driverNameRaw}" for block ${block.blockId}`);
+            }
+            const driverName = driverNameRaw.toLowerCase();
+            console.log(`[IMPORT] Looking for driver: "${driverName}" (raw: "${block.primaryDriver}")`);
+
+            // Try exact match first
+            let driver = driverMap.get(driverName);
+
+            // Try just the last name directly
+            if (!driver) {
+              const nameParts = driverName.split(' ').filter(p => p.length > 0);
+              if (nameParts.length >= 1) {
+                const lastName = nameParts[nameParts.length - 1];
+                driver = driverMap.get(lastName);
+                if (driver) {
+                  console.log(`[IMPORT] Matched by direct last name lookup: "${lastName}"`);
+                }
+              }
+            }
+
+            // Fallback 1: Try last name only match
+            if (!driver) {
+              const nameParts = driverName.split(' ').filter(p => p.length > 0);
+              if (nameParts.length >= 2) {
+                const lastName = nameParts[nameParts.length - 1];
+                // Find driver whose last name matches
+                const lastNameMatch = tenantDrivers.find(d =>
+                  d.lastName.toLowerCase() === lastName
+                );
+                if (lastNameMatch) {
+                  driver = lastNameMatch;
+                  console.log(`[IMPORT] Matched driver by last name "${lastName}": ${lastNameMatch.firstName} ${lastNameMatch.lastName}`);
+                }
+              }
+            }
+
+            // Fallback 2: Try partial match (first name + last name contains)
+            if (!driver) {
+              const partialMatch = tenantDrivers.find(d => {
+                const fullName = `${d.firstName} ${d.lastName}`.toLowerCase();
+                return driverName.includes(d.lastName.toLowerCase()) ||
+                       fullName.includes(driverName) ||
+                       driverName.includes(fullName);
+              });
+              if (partialMatch) {
+                driver = partialMatch;
+                console.log(`[IMPORT] Matched driver by partial match: ${partialMatch.firstName} ${partialMatch.lastName}`);
+              }
+            }
 
             if (driver) {
               // Check if assignment already exists
@@ -5176,12 +5412,15 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
         }
       }
 
-      console.log(`[IMPORT] Complete: ${results.created} created, ${results.updated} updated, ${results.assignments} assignments, ${results.skipped} skipped, ${results.errors.length} errors`);
+      // Set replaced count in results
+      results.replaced = replacedCount;
 
-      const totalProcessed = results.created + results.updated;
+      console.log(`[IMPORT] Complete: ${results.created} created (${replacedCount} replaced existing), ${results.assignments} assignments, ${results.skipped} skipped, ${results.errors.length} errors`);
+
+      const totalProcessed = results.created;
       res.json({
         success: true,
-        message: `Processed ${totalProcessed} blocks: ${results.created} created, ${results.updated} updated, ${results.assignments} driver assignments`,
+        message: `Imported ${totalProcessed} blocks${replacedCount > 0 ? ` (${replacedCount} replaced existing)` : ''} with ${results.assignments} driver assignments`,
         ...results,
         totalProcessed,
         importBatchId,

@@ -15,7 +15,7 @@ export type BlockType = "solo1" | "solo2" | "team";
 export type DayOfWeek = "sunday" | "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday";
 
 export interface DriverProfile {
-  id: number;
+  id: string;                     // UUID from database
   name: string;
   firstName: string;
   lastName: string;
@@ -30,7 +30,7 @@ export interface DriverProfile {
 }
 
 export interface DriverAvailabilityPreference {
-  driverId: number;
+  driverId: string;
   blockType: BlockType;
   startTime: string;              // "16:30", "20:30"
   dayOfWeek: DayOfWeek;
@@ -55,7 +55,7 @@ export interface ReconstructedBlock {
 }
 
 export interface AssignedBlock extends ReconstructedBlock {
-  driverId: number | null;
+  driverId: string | null;
   driverName: string | null;
   assignmentType: AssignmentType;
   assignmentScore: number;        // 0-100 confidence score
@@ -130,7 +130,7 @@ export interface ComplianceViolation {
   severity: "error" | "warning";
   message: string;
   details: {
-    driverId?: number;
+    driverId?: string;
     blockId?: string;
     actualValue?: number;
     requiredValue?: number;
@@ -153,7 +153,7 @@ export interface ComplianceReport {
 // =============================================================================
 
 export interface DriverWorkload {
-  driverId: number;
+  driverId: string;
   driverName: string;
   soloType: SoloType;
   assignedBlocks: AssignedBlock[];
@@ -167,7 +167,7 @@ export interface DriverWorkload {
 }
 
 export interface WatchItem {
-  driverId: number;
+  driverId: string;
   driverName: string;
   type: "at_max" | "approaching_max" | "consecutive_days" | "needs_reset";
   message: string;
@@ -178,7 +178,7 @@ export interface UnassignedBlock {
   block: ReconstructedBlock;
   reason: string;
   suggestedDrivers: {
-    driverId: number;
+    driverId: string;
     driverName: string;
     score: number;
     reason: string;
@@ -228,8 +228,8 @@ export interface FinalSchedule {
 
 export interface SwapRequest {
   blockId: string;
-  currentDriverId: number | null;
-  newDriverId: number;
+  currentDriverId: string | null;
+  newDriverId: string;
 }
 
 export interface SwapValidation {
