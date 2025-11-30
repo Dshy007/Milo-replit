@@ -22,12 +22,14 @@
 - Added `hasRejectedTrip` field to ReconstructedBlock interface (client & server)
 - Added comprehensive debug logging to trace Trip Stage values through CSV parsing
 - Updated ImportWizard to display rejected loads (red) vs unassigned blocks (yellow) separately
-- Pushed to GitHub: commit `3828f06`
+- Added Quick Prompts section to dev-session-log.md for faster session handoff
+- Pushed to GitHub: commits `3828f06`, `a81bb66`, `13165e6`
 
 **Key files touched:**
 - `server/local-reconstruct.ts` – Added tripStage parsing with `findColumn()`, hasRejectedTrip detection, debug logging
 - `server/routes.ts` – Added calendar API debug logging for isRejectedLoad
 - `client/src/components/ImportWizard.tsx` – Added hasRejectedTrip to interface, rejectedLoads/unassignedBlocks in import result
+- `docs/dev-session-log.md` – Added Quick Prompts section at top for session handoff
 
 **Current status:**
 - CSV import with Trip Stage detection is WORKING
