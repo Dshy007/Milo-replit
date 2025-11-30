@@ -41,6 +41,7 @@ interface ReconstructedBlock {
   relayDrivers: string[];
   loadCount: number;
   route: string;
+  hasRejectedTrip: boolean; // true if ANY trip in block has Trip Stage = "Rejected" → RED on calendar
 }
 
 // Detected data format type
@@ -234,7 +235,8 @@ export function ImportWizard({ open, onOpenChange, onImport, onPasteImport, onIm
     totalProcessed?: number;
     assignments?: number;
     skipped?: number;
-    rejectedLoads?: number;
+    rejectedLoads?: number; // Trip Stage = "Rejected" (RED on calendar)
+    unassignedBlocks?: number; // No driver, not rejected (YELLOW on calendar)
     unmatchedDrivers?: number;
     errors?: string[];
   } | null>(null);
@@ -494,109 +496,147 @@ export function ImportWizard({ open, onOpenChange, onImport, onPasteImport, onIm
     return blocks.filter(block => block.contract.toLowerCase().includes(filter));
   };
 
-  // Chat with Milo about the reconstruction
+  // Chat with Milo about the reconstruction - AI-first natural language processing
   const handleChatSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!chatInput.trim() || isChatting) return;
 
     const userMessage = chatInput.trim();
-    const lowerMessage = userMessage.toLowerCase();
     setChatInput("");
     setChatMessages(prev => [...prev, { role: "user", content: userMessage }]);
     setIsChatting(true);
 
     try {
-      // Check for filter commands first (local processing - fast!)
-      const dayMatch = lowerMessage.match(/(?:show|filter|only|just|get)?\s*(?:me\s+)?(?:blocks?\s+)?(?:on|for|from)?\s*(sunday|monday|tuesday|wednesday|thursday|friday|saturday|sun|mon|tue|tues|wed|thu|thur|thurs|fri|sat)/i);
-      const afterMatch = lowerMessage.match(/(?:after|from|starting|since)\s+(\d{4}-\d{2}-\d{2}|nov(?:ember)?\s*\d+|dec(?:ember)?\s*\d+)/i);
-      const beforeMatch = lowerMessage.match(/(?:before|until|through|up\s+to)\s+(\d{4}-\d{2}-\d{2}|nov(?:ember)?\s*\d+|dec(?:ember)?\s*\d+)/i);
-      const contractMatch = lowerMessage.match(/(?:show|filter|only)?\s*(?:me\s+)?(solo[12]|tractor[_\s]?\d+)/i);
-      const clearMatch = lowerMessage.match(/(?:show\s+all|clear\s+filter|reset|all\s+blocks)/i);
+      // Get unique dates and contracts for context
+      const uniqueDates = [...new Set(reconstructedBlocks.map(b => b.startDate))].sort();
+      const uniqueContracts = [...new Set(reconstructedBlocks.map(b => b.contract))];
+      const uniqueDrivers = [...new Set(reconstructedBlocks.map(b => b.primaryDriver).filter(Boolean))];
 
-      let filtered: ReconstructedBlock[] | null = null;
-      let filterDescription = "";
+      // Infer year from data
+      const years = [...new Set(reconstructedBlocks.map(b => b.startDate.slice(0, 4)))];
+      const dataYear = years.length > 0 ? years[0] : new Date().getFullYear().toString();
 
-      if (clearMatch) {
-        filtered = reconstructedBlocks;
-        filterDescription = "Showing all blocks";
-        setActiveFilter("");
-      } else if (dayMatch) {
-        const day = dayMatch[1];
-        filtered = filterBlocksByDay(reconstructedBlocks, day);
-        filterDescription = `Showing ${filtered.length} blocks starting on ${day}`;
-        setActiveFilter(`Day: ${day}`);
-      } else if (afterMatch) {
-        // Parse date like "Nov 25" or "2025-11-25"
-        let dateStr = afterMatch[1];
-        if (/nov|dec/i.test(dateStr)) {
-          const monthMatch = dateStr.match(/(nov|dec)\w*\s*(\d+)/i);
-          if (monthMatch) {
-            const month = monthMatch[1].toLowerCase().startsWith('nov') ? '11' : '12';
-            const day = monthMatch[2].padStart(2, '0');
-            dateStr = `2025-${month}-${day}`;
-          }
-        }
-        filtered = filterBlocksByDate(reconstructedBlocks, dateStr, 'after');
-        filterDescription = `Showing ${filtered.length} blocks starting on or after ${dateStr}`;
-        setActiveFilter(`After: ${dateStr}`);
-      } else if (beforeMatch) {
-        let dateStr = beforeMatch[1];
-        if (/nov|dec/i.test(dateStr)) {
-          const monthMatch = dateStr.match(/(nov|dec)\w*\s*(\d+)/i);
-          if (monthMatch) {
-            const month = monthMatch[1].toLowerCase().startsWith('nov') ? '11' : '12';
-            const day = monthMatch[2].padStart(2, '0');
-            dateStr = `2025-${month}-${day}`;
-          }
-        }
-        filtered = filterBlocksByDate(reconstructedBlocks, dateStr, 'before');
-        filterDescription = `Showing ${filtered.length} blocks starting on or before ${dateStr}`;
-        setActiveFilter(`Before: ${dateStr}`);
-      } else if (contractMatch) {
-        const contract = contractMatch[1];
-        filtered = filterBlocksByContract(reconstructedBlocks, contract);
-        filterDescription = `Showing ${filtered.length} blocks matching "${contract}"`;
-        setActiveFilter(`Contract: ${contract}`);
-      }
+      // Build AI prompt that returns structured JSON for filter actions
+      const prompt = `You are Milo, an AI assistant helping filter schedule blocks before import.
 
-      if (filtered !== null) {
-        setFilteredBlocks(filtered);
-        setChatMessages(prev => [...prev, { role: "assistant", content: filterDescription }]);
-        setIsChatting(false);
-        return;
-      }
+AVAILABLE BLOCKS DATA:
+- Total blocks: ${reconstructedBlocks.length}
+- Date range: ${uniqueDates[0] || 'N/A'} to ${uniqueDates[uniqueDates.length - 1] || 'N/A'}
+- Unique dates: ${uniqueDates.join(', ')}
+- Contracts: ${uniqueContracts.join(', ')}
+- Drivers: ${uniqueDrivers.slice(0, 10).join(', ')}${uniqueDrivers.length > 10 ? ` (+${uniqueDrivers.length - 10} more)` : ''}
+- Year context: ${dataYear}
 
-      // Fall back to AI for complex questions
-      const blocksJson = JSON.stringify(reconstructedBlocks.slice(0, 20)); // Limit for context
-      const context = `The user uploaded trip-level CSV data. Here are the reconstructed blocks (JSON):
-${blocksJson}
+USER REQUEST: "${userMessage}"
 
-Total blocks: ${reconstructedBlocks.length}
-Currently showing: ${filteredBlocks.length} blocks${activeFilter ? ` (filter: ${activeFilter})` : ''}
+IMPORTANT: You MUST respond with valid JSON in this exact format:
+{
+  "action": "filter" | "clear" | "info",
+  "filterType": "date" | "dateRange" | "dayOfWeek" | "contract" | "driver" | null,
+  "filterValue": "<the filter value>" | null,
+  "comparison": "on" | "after" | "before" | null,
+  "message": "<friendly response to user>"
+}
 
-User question: ${userMessage}
+FILTER EXAMPLES:
+- "only Dec 1" → {"action":"filter","filterType":"date","filterValue":"2025-12-01","comparison":"on","message":"Filtering to December 1st only"}
+- "starting Dec 30" → {"action":"filter","filterType":"date","filterValue":"2025-12-30","comparison":"after","message":"Showing blocks starting December 30th and later"}
+- "show Tuesday" → {"action":"filter","filterType":"dayOfWeek","filterValue":"tuesday","comparison":null,"message":"Showing Tuesday blocks"}
+- "Solo2 only" → {"action":"filter","filterType":"contract","filterValue":"Solo2","comparison":null,"message":"Filtering to Solo2 contracts"}
+- "show all" → {"action":"clear","filterType":null,"filterValue":null,"comparison":null,"message":"Showing all blocks"}
+- "how many blocks?" → {"action":"info","filterType":null,"filterValue":null,"comparison":null,"message":"You have ${reconstructedBlocks.length} blocks total"}
 
-You can help with:
-- Filtering: "show Tuesday blocks", "filter to Solo2", "blocks after Nov 25"
-- Analysis: "which driver has most blocks?", "total cost?"
-- Actions: "import to calendar", "export to CSV"
+DATE FORMAT: Always use YYYY-MM-DD format for filterValue when filterType is "date". Use the year ${dataYear} for dates.
 
-Answer concisely.`;
+Respond ONLY with the JSON object, no other text.`;
 
-      const response = await fetch("/api/neural/process", {
+      const response = await fetch("/api/gemini/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify({
-          input: context,
-          forceAgent: "architect"
+          message: prompt,
+          context: "import-filter"
         }),
       });
 
       const data = await response.json();
-      const assistantMessage = data.output || data.response || "I'm not sure how to help with that.";
-      setChatMessages(prev => [...prev, { role: "assistant", content: assistantMessage }]);
+      const aiResponse = data.response || data.output || data.message || '';
+
+      // Parse AI response as JSON
+      let parsed: {
+        action: 'filter' | 'clear' | 'info';
+        filterType: 'date' | 'dateRange' | 'dayOfWeek' | 'contract' | 'driver' | null;
+        filterValue: string | null;
+        comparison: 'on' | 'after' | 'before' | null;
+        message: string;
+      } | null = null;
+
+      try {
+        // Extract JSON from response (handle markdown code blocks)
+        const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          parsed = JSON.parse(jsonMatch[0]);
+        }
+      } catch (parseError) {
+        console.error('[Milo] Failed to parse AI response as JSON:', aiResponse);
+      }
+
+      if (parsed) {
+        // Apply the filter based on AI's structured response
+        let filtered: ReconstructedBlock[] | null = null;
+
+        if (parsed.action === 'clear') {
+          filtered = reconstructedBlocks;
+          setActiveFilter("");
+        } else if (parsed.action === 'filter' && parsed.filterType) {
+          switch (parsed.filterType) {
+            case 'date':
+              if (parsed.filterValue && parsed.comparison) {
+                filtered = filterBlocksByDate(reconstructedBlocks, parsed.filterValue, parsed.comparison);
+                setActiveFilter(`${parsed.comparison === 'on' ? 'On' : parsed.comparison === 'after' ? 'After' : 'Before'}: ${parsed.filterValue}`);
+              }
+              break;
+            case 'dayOfWeek':
+              if (parsed.filterValue) {
+                filtered = filterBlocksByDay(reconstructedBlocks, parsed.filterValue);
+                setActiveFilter(`Day: ${parsed.filterValue}`);
+              }
+              break;
+            case 'contract':
+              if (parsed.filterValue) {
+                filtered = filterBlocksByContract(reconstructedBlocks, parsed.filterValue);
+                setActiveFilter(`Contract: ${parsed.filterValue}`);
+              }
+              break;
+            case 'driver':
+              if (parsed.filterValue) {
+                const driverFilter = parsed.filterValue.toLowerCase();
+                filtered = reconstructedBlocks.filter(b =>
+                  b.primaryDriver.toLowerCase().includes(driverFilter)
+                );
+                setActiveFilter(`Driver: ${parsed.filterValue}`);
+              }
+              break;
+          }
+        }
+
+        if (filtered !== null) {
+          setFilteredBlocks(filtered);
+          const countMsg = parsed.action === 'clear'
+            ? `${parsed.message} (${filtered.length} blocks)`
+            : `${parsed.message} - ${filtered.length} block${filtered.length !== 1 ? 's' : ''} found`;
+          setChatMessages(prev => [...prev, { role: "assistant", content: countMsg }]);
+        } else {
+          // Info action or no filter applied
+          setChatMessages(prev => [...prev, { role: "assistant", content: parsed.message }]);
+        }
+      } else {
+        // Couldn't parse - show raw response
+        setChatMessages(prev => [...prev, { role: "assistant", content: aiResponse || "I'm not sure how to help with that. Try: 'only Dec 1' or 'show Tuesday' or 'filter Solo2'" }]);
+      }
     } catch (error) {
+      console.error('[Milo] Chat error:', error);
       setChatMessages(prev => [...prev, { role: "assistant", content: "Sorry, I had trouble processing that. Please try again." }]);
     } finally {
       setIsChatting(false);
@@ -655,17 +695,19 @@ Answer concisely.`;
           assignments: data.assignments,
           skipped: data.skipped,
           rejectedLoads: data.rejectedLoads,
+          unassignedBlocks: data.unassignedBlocks,
           unmatchedDrivers: data.unmatchedDrivers,
           errors: data.errors,
         });
         // Add success message to chat
         const totalBlocks = data.created || 0;
         const replaceInfo = data.replaced > 0 ? ` (${data.replaced} replaced existing)` : '';
-        const rejectedInfo = data.rejectedLoads > 0 ? ` ${data.rejectedLoads} rejected loads.` : '';
+        const rejectedInfo = data.rejectedLoads > 0 ? ` ${data.rejectedLoads} rejected loads (RED).` : '';
+        const unassignedInfo = data.unassignedBlocks > 0 ? ` ${data.unassignedBlocks} need driver assignment (YELLOW).` : '';
         const unmatchedInfo = data.unmatchedDrivers > 0 ? ` ${data.unmatchedDrivers} unassigned (driver not in system).` : '';
         setChatMessages(prev => [...prev, {
           role: "assistant",
-          content: `Successfully imported ${totalBlocks} blocks${replaceInfo} with ${data.assignments} driver assignments to your calendar!${data.skipped > 0 ? ` (${data.skipped} skipped)` : ''}${rejectedInfo}${unmatchedInfo}`
+          content: `Successfully imported ${totalBlocks} blocks${replaceInfo} with ${data.assignments} driver assignments to your calendar!${data.skipped > 0 ? ` (${data.skipped} skipped)` : ''}${rejectedInfo}${unassignedInfo}${unmatchedInfo}`
         }]);
         // Notify parent to refresh calendar data and navigate to the dominant imported week
         const dominantWeek = getDominantWeekStart(filteredBlocks);
@@ -1271,7 +1313,7 @@ Answer concisely.`;
                     type="text"
                     value={chatInput}
                     onChange={(e) => setChatInput(e.target.value)}
-                    placeholder="Try: 'show Tuesday blocks' or 'filter to Solo2' or 'after Nov 25'"
+                    placeholder="Ask anything: 'only Dec 1', 'import starting Dec 30', 'show Solo2 blocks'..."
                     className="flex-1 px-3 py-2 text-sm rounded-lg border border-gray-200 bg-white text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-300"
                     disabled={isChatting || isImporting}
                   />
@@ -1299,12 +1341,21 @@ Answer concisely.`;
             {/* Filter indicator - show when filter is active, hide after import */}
             {activeFilter && !importResult && (
               <div className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                <span className="text-sm text-amber-700">
-                  Filtered: {activeFilter} ({filteredBlocks.length} of {reconstructedBlocks.length} blocks)
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-amber-700">
+                    Filtered: <strong>{activeFilter}</strong> ({filteredBlocks.length} of {reconstructedBlocks.length})
+                  </span>
+                  <button
+                    onClick={() => { setFilteredBlocks(reconstructedBlocks); setActiveFilter(""); setChatMessages(prev => [...prev, { role: "assistant", content: `Filter cleared - showing all ${reconstructedBlocks.length} blocks` }]); }}
+                    className="p-1 text-amber-600 hover:text-amber-800 hover:bg-amber-100 rounded transition-colors"
+                    title="Clear filter"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
                 <button
-                  onClick={() => { setFilteredBlocks(reconstructedBlocks); setActiveFilter(""); }}
-                  className="text-xs text-amber-600 hover:text-amber-800 font-medium transition-colors"
+                  onClick={() => { setFilteredBlocks(reconstructedBlocks); setActiveFilter(""); setChatMessages(prev => [...prev, { role: "assistant", content: `Filter cleared - showing all ${reconstructedBlocks.length} blocks` }]); }}
+                  className="px-2 py-1 text-xs bg-amber-100 text-amber-700 hover:bg-amber-200 rounded font-medium transition-colors"
                 >
                   Show All
                 </button>
@@ -1378,12 +1429,17 @@ Answer concisely.`;
                         )}
                         {(importResult.rejectedLoads || 0) > 0 && (
                           <li className="text-red-600">
-                            <span className="font-semibold">{importResult.rejectedLoads}</span> rejected loads (no driver in Amazon data) - added to calendar
+                            <span className="font-semibold">{importResult.rejectedLoads}</span> rejected loads (Trip Stage = Rejected, shown in RED)
+                          </li>
+                        )}
+                        {(importResult.unassignedBlocks || 0) > 0 && (
+                          <li className="text-amber-600">
+                            <span className="font-semibold">{importResult.unassignedBlocks}</span> need driver assignment (shown in YELLOW)
                           </li>
                         )}
                         {(importResult.unmatchedDrivers || 0) > 0 && (
                           <li className="text-amber-600">
-                            <span className="font-semibold">{importResult.unmatchedDrivers}</span> unassigned (driver not found in system) - added to calendar
+                            <span className="font-semibold">{importResult.unmatchedDrivers}</span> driver not found in system
                           </li>
                         )}
                       </ul>

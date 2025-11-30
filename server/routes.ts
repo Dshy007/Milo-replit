@@ -1466,9 +1466,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // DEBUG: Log blocks without drivers (rejected loads)
       const blocksWithoutDrivers = simplifiedBlocks.filter(b => !b.driverName);
       if (blocksWithoutDrivers.length > 0) {
-        console.log(`[CALENDAR DEBUG] Blocks WITHOUT drivers (rejected loads): ${blocksWithoutDrivers.length}`);
+        console.log(`[CALENDAR DEBUG] Blocks WITHOUT drivers: ${blocksWithoutDrivers.length}`);
         blocksWithoutDrivers.forEach(b => {
-          console.log(`[CALENDAR DEBUG REJECTED] Block ${b.blockId}: tractorId="${b.tractorId}", serviceDate="${b.serviceDate}", startTime="${b.startTime}"`);
+          console.log(`[CALENDAR DEBUG] Block ${b.blockId}: isRejectedLoad=${b.isRejectedLoad}, tractorId="${b.tractorId}", serviceDate="${b.serviceDate}"`);
+        });
+      }
+
+      // Also log any blocks with isRejectedLoad=true
+      const rejectedLoadBlocks = simplifiedBlocks.filter(b => b.isRejectedLoad);
+      console.log(`[CALENDAR DEBUG] Total blocks with isRejectedLoad=true: ${rejectedLoadBlocks.length}`);
+      if (rejectedLoadBlocks.length > 0) {
+        rejectedLoadBlocks.forEach(b => {
+          console.log(`[CALENDAR DEBUG REJECTED] Block ${b.blockId}: isRejectedLoad=${b.isRejectedLoad}, driverName="${b.driverName || 'none'}"`);
         });
       }
 
@@ -5193,6 +5202,52 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
     }
   });
 
+  // POST /api/gemini/chat - General Gemini chat endpoint for natural language processing
+  app.post("/api/gemini/chat", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { message, context } = req.body;
+
+      if (!message) {
+        return res.status(400).json({ message: "Missing required field: message" });
+      }
+
+      const apiKey = process.env.GOOGLE_AI_API_KEY;
+      if (!apiKey) {
+        return res.status(500).json({
+          success: false,
+          message: "GOOGLE_AI_API_KEY not configured",
+        });
+      }
+
+      const { GoogleGenerativeAI } = await import("@google/generative-ai");
+      const genAI = new GoogleGenerativeAI(apiKey);
+      const model = genAI.getGenerativeModel({
+        model: "gemini-2.0-flash",
+        generationConfig: {
+          maxOutputTokens: 2048,
+        }
+      });
+
+      console.log(`[Gemini Chat] Processing message for context: ${context || 'general'}`);
+
+      const result = await model.generateContent(message);
+      const response = await result.response;
+      const text = response.text();
+
+      res.json({
+        success: true,
+        response: text,
+      });
+    } catch (error: any) {
+      console.error("[Gemini Chat] Error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Gemini chat failed",
+        error: error.message,
+      });
+    }
+  });
+
   // POST /api/schedules/import-reconstructed - Import reconstructed blocks to calendar
   app.post("/api/schedules/import-reconstructed", requireAuth, async (req: Request, res: Response) => {
     try {
@@ -5300,9 +5355,21 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
         blockId: string;
         reason: string;
         primaryDriver: string | null;
+        hasRejectedTrip: boolean;
       }> = [];
 
       const importBatchId = `recon_${Date.now()}`;
+
+      // DEBUG: Log hasRejectedTrip values coming from client
+      const blocksWithRejectedTrip = reconstructedBlocks.filter((b: any) => b.hasRejectedTrip === true);
+      const blocksWithoutRejectedTrip = reconstructedBlocks.filter((b: any) => !b.hasRejectedTrip);
+      console.log(`[IMPORT DEBUG] Blocks received from client:`);
+      console.log(`[IMPORT DEBUG]   Total blocks: ${reconstructedBlocks.length}`);
+      console.log(`[IMPORT DEBUG]   Blocks with hasRejectedTrip=true: ${blocksWithRejectedTrip.length}`);
+      console.log(`[IMPORT DEBUG]   Blocks with hasRejectedTrip=false/undefined: ${blocksWithoutRejectedTrip.length}`);
+      if (blocksWithRejectedTrip.length > 0) {
+        console.log(`[IMPORT DEBUG]   Sample REJECTED blocks: ${blocksWithRejectedTrip.slice(0, 5).map((b: any) => b.blockId).join(', ')}`);
+      }
 
       for (const block of reconstructedBlocks) {
         try {
@@ -5373,8 +5440,10 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
           endTimestamp.setHours(endTimestamp.getHours() + duration);
 
           // Create new block (existing blocks with same blockId were already deleted above)
-          // isRejectedLoad = true when there's no primaryDriver in CSV (Amazon rejected the assignment)
-          const isRejectedLoad = !block.primaryDriver;
+          // isRejectedLoad comes from the Trip Stage column in CSV:
+          // - Trip Stage = "Rejected" → isRejectedLoad = true → RED on calendar
+          // - Empty driver without "Rejected" → isRejectedLoad = false → YELLOW on calendar
+          const isRejectedLoad = block.hasRejectedTrip || false;
           const inserted = await db
             .insert(blocks)
             .values({
@@ -5395,13 +5464,13 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
           results.created++;
           console.log(`[IMPORT] Created block: ${block.blockId} for ${block.startDate} with tractorId="${tractorId}", contractKey="${contractKey}"`);
 
-          // Extra debug for blocks without driver (rejected loads)
+          // Debug for blocks without driver assignment
           if (!block.primaryDriver) {
-            console.log(`[IMPORT DEBUG REJECTED] Block ${block.blockId}: NO DRIVER IN CSV (rejected load)`);
-            console.log(`[IMPORT DEBUG REJECTED]   tractorId stored: "${tractorId}"`);
-            console.log(`[IMPORT DEBUG REJECTED]   serviceDate: ${block.startDate}`);
-            console.log(`[IMPORT DEBUG REJECTED]   contractKey from CSV: "${contractKey}"`);
-            console.log(`[IMPORT DEBUG REJECTED]   contract matched: ${contract ? contract.tractorId : 'NONE'}`);
+            if (block.hasRejectedTrip) {
+              console.log(`[IMPORT DEBUG] Block ${block.blockId}: Trip Stage=Rejected - will show RED (rejected load)`);
+            } else {
+              console.log(`[IMPORT DEBUG] Block ${block.blockId}: No driver in CSV - will show YELLOW (unassigned)`);
+            }
           }
 
           // Try to create driver assignment if we have a primary driver
@@ -5491,6 +5560,7 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
                 blockId: block.blockId,
                 reason: `Driver not found in database: "${block.primaryDriver}"`,
                 primaryDriver: block.primaryDriver,
+                hasRejectedTrip: block.hasRejectedTrip || false,
               });
             }
           } else {
@@ -5499,6 +5569,7 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
               blockId: block.blockId,
               reason: 'No primaryDriver in CSV data',
               primaryDriver: null,
+              hasRejectedTrip: block.hasRejectedTrip || false,
             });
           }
         } catch (blockError: any) {
@@ -5510,11 +5581,17 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
       // Set replaced count in results
       results.replaced = replacedCount;
 
-      // Count rejected loads (blocks without driver in CSV data - Amazon rejected)
-      const rejectedLoads = blocksWithoutAssignments.filter(
-        item => item.reason === 'No primaryDriver in CSV data'
+      // Count rejected loads (Trip Stage = "Rejected" in CSV - Amazon rejected the driver)
+      const rejectedLoadBlocks = blocksWithoutAssignments.filter(
+        item => item.hasRejectedTrip
       );
-      const rejectedLoadCount = rejectedLoads.length;
+      const rejectedCount = rejectedLoadBlocks.length;
+
+      // Count unassigned blocks (no driver in CSV data AND NOT rejected - need AI recommendation)
+      const unassignedBlocksNotRejected = blocksWithoutAssignments.filter(
+        item => item.reason === 'No primaryDriver in CSV data' && !item.hasRejectedTrip
+      );
+      const unassignedCount = unassignedBlocksNotRejected.length;
 
       // Count unmatched drivers (blocks with driver in CSV but driver not found in database)
       const unmatchedDrivers = blocksWithoutAssignments.filter(
@@ -5522,16 +5599,17 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
       );
       const unmatchedDriverCount = unmatchedDrivers.length;
 
-      console.log(`[IMPORT] Complete: ${results.created} created (${replacedCount} replaced existing), ${results.assignments} assignments, ${rejectedLoadCount} rejected loads, ${unmatchedDriverCount} unmatched drivers, ${results.skipped} skipped, ${results.errors.length} errors`);
+      console.log(`[IMPORT] Complete: ${results.created} created (${replacedCount} replaced existing), ${results.assignments} assignments, ${rejectedCount} rejected (Trip Stage=Rejected), ${unassignedCount} unassigned (no driver, not rejected), ${unmatchedDriverCount} unmatched drivers, ${results.skipped} skipped, ${results.errors.length} errors`);
 
       // DEBUG: Log all blocks without assignments
       if (blocksWithoutAssignments.length > 0) {
         console.log(`\n[IMPORT DEBUG] ========== BLOCKS WITHOUT DRIVER ASSIGNMENTS ==========`);
         console.log(`[IMPORT DEBUG] Total: ${blocksWithoutAssignments.length} blocks without assignments`);
-        console.log(`[IMPORT DEBUG] Rejected loads (no driver in CSV): ${rejectedLoadCount}`);
+        console.log(`[IMPORT DEBUG] REJECTED (Trip Stage=Rejected, will be RED): ${rejectedCount}`);
+        console.log(`[IMPORT DEBUG] Unassigned (no driver, not rejected, will be YELLOW): ${unassignedCount}`);
         console.log(`[IMPORT DEBUG] Unmatched drivers (driver in CSV but not in database): ${unmatchedDriverCount}`);
         for (const item of blocksWithoutAssignments) {
-          console.log(`[IMPORT DEBUG]   Block ${item.blockId}: ${item.reason}`);
+          console.log(`[IMPORT DEBUG]   Block ${item.blockId}: ${item.reason} | hasRejectedTrip=${item.hasRejectedTrip}`);
         }
         console.log(`[IMPORT DEBUG] ============================================================\n`);
       }
@@ -5543,7 +5621,8 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
         ...results,
         totalProcessed,
         importBatchId,
-        rejectedLoads: rejectedLoadCount, // Number of blocks that had no driver in CSV (Amazon rejected the load)
+        rejectedLoads: rejectedCount, // Number of blocks where Trip Stage = "Rejected" (RED on calendar)
+        unassignedBlocks: unassignedCount, // Number of blocks with no driver in CSV AND not rejected (YELLOW on calendar)
         unmatchedDrivers: unmatchedDriverCount, // Number of blocks where driver in CSV couldn't be matched to database
       });
     } catch (error: any) {

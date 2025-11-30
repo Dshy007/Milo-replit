@@ -35,6 +35,7 @@ export interface ReconstructedBlock {
   relayDrivers: string[];
   loadCount: number;
   route: string;
+  hasRejectedTrip: boolean; // true if ANY trip in block has Trip Stage = "Rejected"
 }
 
 interface TripRow {
@@ -45,6 +46,7 @@ interface TripRow {
   cost: number;
   origin: string;
   destination: string;
+  tripStage: string; // "Rejected", "Upcoming", etc.
 }
 
 /**
@@ -243,6 +245,8 @@ export function reconstructBlocksLocally(csvData: string): {
         cost: parseCost(findColumn(row, ['Estimated Cost', 'Cost', 'Total Cost', 'TotalCost'])),
         origin: findColumn(row, ['Stop 1', 'Origin', 'Origin Location']),
         destination: findColumn(row, ['Stop 2', 'Destination', 'Destination Location']),
+        // Trip Stage column: "Rejected", "Upcoming", etc. - CRITICAL for RED vs YELLOW distinction
+        tripStage: findColumn(row, ['Trip Stage', 'TripStage', 'Stage', 'Block Stage', 'BlockStage']),
       };
 
       if (!blockGroups.has(blockId)) {
@@ -254,6 +258,27 @@ export function reconstructBlocksLocally(csvData: string): {
     }
 
     console.log(`[Local] Found ${blockGroups.size} unique blocks`);
+
+    // CRITICAL DEBUG: Log all unique Trip Stage values found in the CSV
+    const allTripStages = new Set<string>();
+    for (const trips of blockGroups.values()) {
+      for (const trip of trips) {
+        if (trip.tripStage) {
+          allTripStages.add(trip.tripStage);
+        }
+      }
+    }
+    console.log(`[Local DEBUG] All unique Trip Stage values in CSV: ${[...allTripStages].join(', ') || '(none found)'}`);
+
+    // Log which blocks have "Rejected" trips (if any)
+    const blocksWithRejected: string[] = [];
+    for (const [blockId, trips] of blockGroups) {
+      const hasRejected = trips.some(t => t.tripStage.toLowerCase() === 'rejected');
+      if (hasRejected) {
+        blocksWithRejected.push(blockId);
+      }
+    }
+    console.log(`[Local DEBUG] Blocks with Trip Stage = "Rejected": ${blocksWithRejected.length > 0 ? blocksWithRejected.join(', ') : '(none)'}`);
 
     // Debug: Log sample extracted data from first few rows
     if (blockGroups.size > 0) {
@@ -332,10 +357,25 @@ export function reconstructBlocksLocally(csvData: string): {
       const primaryDriver = sortedDrivers[0]?.[0] || '';
       const relayDrivers = sortedDrivers.slice(1).map(d => d[0]);
 
+      // Check if ANY trip in this block has Trip Stage = "Rejected"
+      // This is the CRITICAL distinction: Rejected = RED, otherwise YELLOW
+      const hasRejectedTrip = trips.some(t =>
+        t.tripStage.toLowerCase() === 'rejected'
+      );
+
+      // Debug: ALWAYS log if hasRejectedTrip is true (this is the critical path!)
+      if (hasRejectedTrip) {
+        console.log(`[Local DEBUG] Block ${blockId} has REJECTED trip!`);
+        console.log(`[Local DEBUG]   Primary driver: ${primaryDriver || '(none)'}`);
+        console.log(`[Local DEBUG]   Trip stages: ${trips.map(t => t.tripStage || '(empty)').join(', ')}`);
+      }
+
       // Debug: Log blocks that have no driver detected
       if (!primaryDriver) {
         console.log(`[Local DEBUG] Block ${blockId} has NO driver. Trip count: ${trips.length}`);
         console.log(`[Local DEBUG]   Trip drivers in CSV: ${trips.map(t => t.driver || '(empty)').join(', ')}`);
+        console.log(`[Local DEBUG]   Trip stages: ${trips.map(t => t.tripStage || '(empty)').join(', ')}`);
+        console.log(`[Local DEBUG]   hasRejectedTrip: ${hasRejectedTrip}`);
       }
 
       // Build route from first and last distinct locations
@@ -356,6 +396,7 @@ export function reconstructBlocksLocally(csvData: string): {
         relayDrivers,
         loadCount: trips.length,
         route,
+        hasRejectedTrip,
       });
     }
 
@@ -371,7 +412,12 @@ export function reconstructBlocksLocally(csvData: string): {
     // Debug: Log how many blocks have drivers
     const blocksWithDrivers = blocks.filter(b => b.primaryDriver);
     const blocksWithoutDrivers = blocks.filter(b => !b.primaryDriver);
+    const rejectedBlocks = blocks.filter(b => b.hasRejectedTrip);
+    const unassignedBlocks = blocksWithoutDrivers.filter(b => !b.hasRejectedTrip);
+
     console.log(`[Local] Blocks with drivers: ${blocksWithDrivers.length}, Blocks without drivers: ${blocksWithoutDrivers.length}`);
+    console.log(`[Local] REJECTED blocks (Trip Stage=Rejected): ${rejectedBlocks.length} → will be RED`);
+    console.log(`[Local] UNASSIGNED blocks (no driver, not rejected): ${unassignedBlocks.length} → will be YELLOW`);
 
     // Log first few blocks with drivers
     console.log(`[Local] Sample blocks WITH drivers:`, blocksWithDrivers.slice(0, 5).map(b => ({
@@ -379,9 +425,19 @@ export function reconstructBlocksLocally(csvData: string): {
       primaryDriver: b.primaryDriver
     })));
 
-    // Log first few blocks without drivers
-    if (blocksWithoutDrivers.length > 0) {
-      console.log(`[Local] Sample blocks WITHOUT drivers:`, blocksWithoutDrivers.slice(0, 5).map(b => ({
+    // Log first few rejected blocks
+    if (rejectedBlocks.length > 0) {
+      console.log(`[Local] Sample REJECTED blocks:`, rejectedBlocks.slice(0, 5).map(b => ({
+        blockId: b.blockId,
+        contract: b.contract,
+        startDate: b.startDate,
+        hasRejectedTrip: b.hasRejectedTrip
+      })));
+    }
+
+    // Log first few unassigned (not rejected) blocks
+    if (unassignedBlocks.length > 0) {
+      console.log(`[Local] Sample UNASSIGNED (not rejected) blocks:`, unassignedBlocks.slice(0, 5).map(b => ({
         blockId: b.blockId,
         contract: b.contract,
         startDate: b.startDate
