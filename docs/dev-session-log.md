@@ -1,5 +1,18 @@
 # Development Session Log
 
+## Quick Prompts
+
+**Sign On (start of session):**
+> I'm back. Read docs/dev-session-log.md and give me: 1) Where we left off 2) What's next 3) Any gotchas
+
+**Sign Off (end of session):**
+> Update the dev session log with today's progress and push to GitHub.
+
+**Data Debug (when CSV parsing fails):**
+> The CSV has column "[NAME]" with value "[VALUE]". Check if findColumn() in local-reconstruct.ts is looking for it.
+
+---
+
 ## [2025-11-29 – EST] Session Summary
 
 **Branch:** main
