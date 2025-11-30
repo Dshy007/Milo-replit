@@ -1,5 +1,40 @@
 # Development Session Log
 
+## [2025-11-29 – EST] Session Summary
+
+**Branch:** main
+
+**What we did:**
+- Fixed Trip Stage detection for rejected loads (RED vs YELLOW on calendar)
+- Added `hasRejectedTrip` field to ReconstructedBlock interface (client & server)
+- Added comprehensive debug logging to trace Trip Stage values through CSV parsing
+- Updated ImportWizard to display rejected loads (red) vs unassigned blocks (yellow) separately
+- Pushed to GitHub: commit `3828f06`
+
+**Key files touched:**
+- `server/local-reconstruct.ts` – Added tripStage parsing with `findColumn()`, hasRejectedTrip detection, debug logging
+- `server/routes.ts` – Added calendar API debug logging for isRejectedLoad
+- `client/src/components/ImportWizard.tsx` – Added hasRejectedTrip to interface, rejectedLoads/unassignedBlocks in import result
+
+**Current status:**
+- CSV import with Trip Stage detection is WORKING
+- RED = Trip Stage "Rejected" (isRejectedLoad=true)
+- YELLOW = No driver, not rejected (unassigned)
+- GREEN = Has driver assigned
+
+**Lessons learned (for future sessions):**
+- When debugging CSV parsing, trace data flow from parsing → API → database
+- Use specific test files: Nov 23-29.csv has "Rejected" blocks, Nov 30-Dec6.csv has "Upcoming"
+- Add debug logging that shows actual column values, not just counts
+
+**Next session START HERE:**
+1. ScheduleBuilder integration - component exists, may need UI work
+2. DOT compliance validation - hours-of-service rules
+3. Driver assignment UI - click YELLOW block to assign driver
+4. Consider updating ScheduleBuilder.tsx to use the calendar data
+
+---
+
 ## [2025-11-28 – EST] Session Summary
 
 **Branch:** main
