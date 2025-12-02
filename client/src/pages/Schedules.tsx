@@ -36,6 +36,7 @@ import { queryClient } from "@/lib/queryClient";
 import { DriverAssignmentModal } from "@/components/DriverAssignmentModal";
 import { ScheduleListView } from "@/components/ScheduleListView";
 import { DriverPoolSidebar } from "@/components/DriverPoolSidebar";
+import { AnalysisPanel } from "@/components/AnalysisPanel";
 import type { Block, BlockAssignment, Driver, Contract } from "@shared/schema";
 
 // Simplified occurrence from new calendar API
@@ -288,6 +289,9 @@ export default function Schedules() {
     pendingFile: File | null;
   } | null>(null);
   const [isComparingActuals, setIsComparingActuals] = useState(false);
+
+  // Analysis Panel state
+  const [showAnalysisPanel, setShowAnalysisPanel] = useState(false);
 
   // Compliance analysis state
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -1533,23 +1537,17 @@ export default function Schedules() {
               <Button
                 variant="default"
                 size="sm"
-                onClick={handleAnalyzeCompliance}
-                disabled={isAnalyzing}
+                onClick={() => setShowAnalysisPanel(true)}
                 className="bg-green-600 hover:bg-green-700 text-white"
-                data-testid="button-analyze-compliance"
+                data-testid="button-analyze"
               >
                 <Shield className="w-4 h-4 mr-2" />
-                Analyze Now
-                {analysisResults && (
+                Analyze
+                {calendarData && (
                   <>
-                    {(analysisResults.violationCount > 0 || analysisResults.warningCount > 0) && (
-                      <Badge variant="destructive" className="ml-2 text-xs">
-                        {analysisResults.violationCount + analysisResults.warningCount}
-                      </Badge>
-                    )}
-                    {analysisResults.bumpCount > 0 && (
-                      <Badge variant="outline" className="ml-1 text-xs bg-yellow-500/20 text-yellow-300 border-yellow-500/50">
-                        {analysisResults.bumpCount} bump{analysisResults.bumpCount > 1 ? 's' : ''}
+                    {calendarData.occurrences.filter(b => !b.driverId && !b.isRejectedLoad).length > 0 && (
+                      <Badge variant="outline" className="ml-2 text-xs bg-amber-500/20 text-amber-300 border-amber-500/50">
+                        {calendarData.occurrences.filter(b => !b.driverId && !b.isRejectedLoad).length}
                       </Badge>
                     )}
                   </>
@@ -1887,11 +1885,16 @@ export default function Schedules() {
                     {weekRange.weekDays.map((day) => {
                       const dayISO = format(day, "yyyy-MM-dd");
                       // Filter occurrences by tractorId. For shift occurrences, also filter by startTime.
-                      // For imported blocks, don't filter by startTime - they have actual start times from CSV.
+                      // For imported blocks, filter by contractType (soloType) - e.g. Tractor_6/solo1 vs Tractor_6/solo2
                       const dayOccurrences = (occurrencesByContract[contract.tractorId]?.[dayISO] || [])
-                        .filter(occ =>
-                          occ.source === 'imported_block' || occ.startTime === contract.startTime
-                        );
+                        .filter(occ => {
+                          if (occ.source === 'imported_block') {
+                            // Imported blocks must match contract type (solo1/solo2/team)
+                            return occ.contractType?.toLowerCase() === contract.type.toLowerCase();
+                          }
+                          // Shift occurrences match by startTime
+                          return occ.startTime === contract.startTime;
+                        });
 
                       const cellId = `cell-${dayISO}-${contract.tractorId}-${contract.startTime}`;
 
@@ -2367,6 +2370,47 @@ export default function Schedules() {
             )}
           </div>
         </div>
+      )}
+
+      {/* Analysis Panel */}
+      {calendarData && (
+        <AnalysisPanel
+          open={showAnalysisPanel}
+          weekStart={weekRange.weekStart}
+          weekEnd={addDays(weekRange.weekStart, 6)}
+          blocks={calendarData.occurrences.map(occ => ({
+            id: occ.occurrenceId,
+            blockId: occ.blockId,
+            driverId: occ.driverId,
+            driverName: occ.driverName,
+            serviceDate: occ.serviceDate,
+            startTime: occ.startTime,
+            contractType: occ.contractType || 'unknown',
+            isRejectedLoad: occ.isRejectedLoad,
+          }))}
+          onAssignDriver={async (blockId, driverId) => {
+            // Find the occurrence by blockId
+            const occurrence = calendarData.occurrences.find(o => o.blockId === blockId);
+            if (!occurrence) return;
+
+            // Use the existing assignment mutation
+            await updateAssignmentMutation.mutateAsync({
+              occurrenceId: occurrence.occurrenceId,
+              driverId,
+            });
+          }}
+          onUnassignAll={async () => {
+            // Unassign all blocks that have drivers
+            const assignedOccurrences = calendarData.occurrences.filter(o => o.driverId);
+            for (const occ of assignedOccurrences) {
+              await updateAssignmentMutation.mutateAsync({
+                occurrenceId: occ.occurrenceId,
+                driverId: null,
+              });
+            }
+          }}
+          onClose={() => setShowAnalysisPanel(false)}
+        />
       )}
     </div>
   </div>

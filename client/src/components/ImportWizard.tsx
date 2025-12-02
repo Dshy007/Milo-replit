@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef } from "react";
 import { format, startOfWeek, endOfWeek, addWeeks, subWeeks, parse } from "date-fns";
-import { Upload, FileSpreadsheet, Calendar, History, Sparkles, X, ChevronRight, AlertTriangle, ClipboardPaste, FileText, Check, Brain, Loader2, Send, MessageCircle, FileBarChart } from "lucide-react";
+import { Upload, FileSpreadsheet, Calendar, History, Sparkles, X, ChevronRight, AlertTriangle, ClipboardPaste, FileText, Check, Brain, Loader2, Send, MessageCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -10,8 +10,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ExecutiveReport, generateReportData, type ExecutiveReportData, type ScheduleBlock } from "./ExecutiveReport";
-import { ScheduleBuilder } from "./ScheduleBuilder";
-import type { ReconstructedBlock as ScheduleReconstructedBlock, FinalSchedule } from "@/lib/schedule-types";
 
 interface ImportFile {
   file: File;
@@ -245,8 +243,6 @@ export function ImportWizard({ open, onOpenChange, onImport, onPasteImport, onIm
   const [showReport, setShowReport] = useState(false);
   const [reportData, setReportData] = useState<ExecutiveReportData | null>(null);
 
-  // Schedule Builder state
-  const [showScheduleBuilder, setShowScheduleBuilder] = useState(false);
 
   // File input ref
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1557,73 +1553,8 @@ Respond ONLY with the JSON object, no other text.`;
         data={reportData}
       />
 
-      {/* Schedule Builder Modal */}
-      <Dialog open={showScheduleBuilder} onOpenChange={setShowScheduleBuilder}>
-        <DialogContent className="max-w-6xl h-[90vh] p-0 overflow-hidden">
-          {filteredBlocks.length > 0 && (
-            <ScheduleBuilder
-              blocks={filteredBlocks.map(block => ({
-                blockId: block.blockId,
-                date: block.startDate,
-                dayOfWeek: getDayOfWeekFromDate(block.startDate),
-                startTime: block.canonicalStartTime,
-                blockType: getBlockType(block.duration),
-                duration: parseDurationToHours(block.duration),
-                estimatedPay: block.cost,
-                stops: block.loadCount,
-                trips: [],
-                source: "csv" as const,
-              }))}
-              weekStart={getDominantWeekStart(filteredBlocks)}
-              tenantId={1}
-              onComplete={(schedule: FinalSchedule) => {
-                setShowScheduleBuilder(false);
-                // Generate report from final schedule - use dominant week from actual data
-                const dataWeekStart = getDominantWeekStart(filteredBlocks);
-                const scheduleBlocks: ScheduleBlock[] = schedule.blocks.map(block => ({
-                  blockId: block.blockId,
-                  startDate: block.date,
-                  startTime: block.startTime,
-                  driverName: block.driverName || "Unassigned",
-                  blockType: block.blockType === "team" ? "solo2" : block.blockType,
-                  duration: `${block.duration}h`,
-                  cost: block.estimatedPay,
-                }));
-                const data = generateReportData(scheduleBlocks, dataWeekStart);
-                setReportData(data);
-                setShowReport(true);
-              }}
-              onCancel={() => setShowScheduleBuilder(false)}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
     </Dialog>
   );
-}
-
-// Helper functions for ScheduleBuilder integration
-function getDayOfWeekFromDate(dateStr: string): "sunday" | "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" {
-  const date = new Date(dateStr);
-  const days: ("sunday" | "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday")[] =
-    ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
-  return days[date.getDay()];
-}
-
-function getBlockType(duration: string): "solo1" | "solo2" | "team" {
-  const hours = parseDurationToHours(duration);
-  if (hours <= 20) return "solo1";
-  if (hours <= 42) return "solo2";
-  return "team";
-}
-
-function parseDurationToHours(duration: string): number {
-  // Handle formats like "14h", "38h", "1d 14h", etc.
-  const dayMatch = duration.match(/(\d+)d/);
-  const hourMatch = duration.match(/(\d+)h/);
-  const days = dayMatch ? parseInt(dayMatch[1]) : 0;
-  const hours = hourMatch ? parseInt(hourMatch[1]) : 0;
-  return days * 24 + hours;
 }
 
 // Find the dominant week from a set of blocks (week with most blocks)

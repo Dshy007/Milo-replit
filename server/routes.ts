@@ -19,7 +19,7 @@ import {
   blocks, blockAssignments, assignmentHistory, driverContractStats, drivers, protectedDriverRules,
   shiftOccurrences, shiftTemplates, contracts, trucks, driverAvailabilityPreferences
 } from "@shared/schema";
-import { eq, and, inArray, sql, gte, lte, not } from "drizzle-orm";
+import { eq, and, inArray, sql, gte, lte, not, desc } from "drizzle-orm";
 import session from "express-session";
 import { fromZodError } from "zod-validation-error";
 import bcrypt from "bcryptjs";
@@ -4855,47 +4855,66 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
       const tenantId = req.session.tenantId!;
       const userId = req.session.userId!;
       
-      const { blocks, constraints } = req.body;
-      
-      if (!blocks || !Array.isArray(blocks)) {
+      const { blocks: inputBlocks, constraints } = req.body;
+
+      if (!inputBlocks || !Array.isArray(inputBlocks)) {
         return res.status(400).json({ message: "Missing required field: blocks (array)" });
       }
 
       // Get all drivers for matching
-      const allDrivers = await db
+      const allDriversRaw = await db
         .select()
         .from(drivers)
         .where(eq(drivers.tenantId, tenantId));
 
-      // Get historical assignments for better predictions
+      // Format drivers for Python: id, name, type
+      const formattedDrivers = allDriversRaw.map(d => ({
+        id: d.id,
+        name: `${d.firstName} ${d.lastName}`.trim(),
+        type: d.soloType || 'solo1',
+      }));
+
+      // Get historical assignments from IMPORTED BLOCKS (the actual data source)
+      // Join blocks table with blockAssignments to find past driver-block assignments
       const historicalAssignments = await db
         .select({
-          driverId: shiftOccurrences.driverId,
-          blockId: shiftOccurrences.blockId,
-          completed: sql<boolean>`true`, // Assuming past assignments were completed
+          driverId: blockAssignments.driverId,
+          blockId: blocks.blockId,
+          serviceDate: blocks.serviceDate,
+          dayOfWeek: sql<number>`EXTRACT(DOW FROM ${blocks.serviceDate}::date)`,
+          startTime: sql<string>`TO_CHAR(${blocks.startTimestamp}, 'HH24:MI')`,
+          durationHours: blocks.duration,
+          contractType: blocks.soloType,
+          completed: sql<boolean>`true`,
         })
-        .from(shiftOccurrences)
-        .where(and(
-          eq(shiftOccurrences.tenantId, tenantId),
-          sql`${shiftOccurrences.driver_id} IS NOT NULL`
+        .from(blocks)
+        .innerJoin(blockAssignments, and(
+          eq(blockAssignments.blockId, blocks.id),
+          eq(blockAssignments.isActive, true)
         ))
-        .limit(1000);
+        .where(eq(blocks.tenantId, tenantId))
+        .limit(2000);
+
+      console.log(`[Predict] ${inputBlocks.length} blocks, ${formattedDrivers.length} drivers, ${historicalAssignments.length} historical records`);
+      if (historicalAssignments.length > 0) {
+        console.log(`[Predict] Sample historical:`, JSON.stringify(historicalAssignments[0]));
+      }
 
       const startTime = Date.now();
       const { predictAssignments } = await import("./python-bridge");
       const pythonResult = await predictAssignments({
         action: 'predict',
-        blocks,
-        drivers: allDrivers,
+        blocks: inputBlocks,
+        drivers: formattedDrivers,
         constraints: constraints || {},
         historical: historicalAssignments,
       });
       const executionTime = Date.now() - startTime;
 
       if (!pythonResult.success || !pythonResult.data) {
-        return res.status(400).json({ 
-          message: "Failed to generate predictions", 
-          error: pythonResult.error 
+        return res.status(400).json({
+          message: "Failed to generate predictions",
+          error: pythonResult.error
         });
       }
 
@@ -4904,7 +4923,7 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
       await db.insert(analysisResults).values({
         tenantId,
         analysisType: 'assignment_prediction',
-        inputData: { blocksCount: blocks.length, driversCount: allDrivers.length },
+        inputData: { blocksCount: inputBlocks.length, driversCount: formattedDrivers.length },
         result: pythonResult.data as any,
         success: true,
         executionTimeMs: executionTime,
@@ -4934,20 +4953,26 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
         return res.status(400).json({ message: "Missing required fields: weekStart, weekEnd" });
       }
 
-      // Get schedule for the week
+      // Get schedule for the week with proper joins
       const schedule = await db
         .select({
           id: shiftOccurrences.id,
-          blockId: shiftOccurrences.blockId,
-          driverId: shiftOccurrences.driverId,
-          date: shiftOccurrences.shiftDate,
-          contractType: shiftOccurrences.contractType,
+          externalBlockId: shiftOccurrences.externalBlockId,
+          serviceDate: shiftOccurrences.serviceDate,
+          status: shiftOccurrences.status,
+          driverId: blockAssignments.driverId,
+          contractType: shiftTemplates.soloType,
         })
         .from(shiftOccurrences)
+        .leftJoin(blockAssignments, and(
+          eq(blockAssignments.shiftOccurrenceId, shiftOccurrences.id),
+          eq(blockAssignments.isActive, true)
+        ))
+        .leftJoin(shiftTemplates, eq(shiftTemplates.id, shiftOccurrences.templateId))
         .where(and(
           eq(shiftOccurrences.tenantId, tenantId),
-          sql`${shiftOccurrences.shift_date} >= ${weekStart}`,
-          sql`${shiftOccurrences.shift_date} <= ${weekEnd}`
+          gte(shiftOccurrences.serviceDate, weekStart),
+          lte(shiftOccurrences.serviceDate, weekEnd)
         ));
 
       const startTime = Date.now();
@@ -4955,10 +4980,11 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
       const pythonResult = await analyzeCoverage({
         action: 'analyze_coverage',
         schedule: schedule.map(s => ({
-          blockId: s.blockId,
+          blockId: s.externalBlockId,
           driverId: s.driverId,
-          date: s.date?.toISOString(),
+          date: s.serviceDate,
           contractType: s.contractType,
+          status: s.status,
         })),
         date_range: { start: weekStart, end: weekEnd },
       });
@@ -5283,7 +5309,14 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
         if (existingBlocks.length > 0) {
           const idsToDelete = existingBlocks.map(b => b.id);
 
-          // Delete assignments first
+          // Delete assignment history first (references blocks.id)
+          await db.delete(assignmentHistory)
+            .where(and(
+              eq(assignmentHistory.tenantId, tenantId),
+              inArray(assignmentHistory.blockId, idsToDelete)
+            ));
+
+          // Delete block assignments (references blocks.id)
           await db.delete(blockAssignments)
             .where(and(
               eq(blockAssignments.tenantId, tenantId),
@@ -5314,6 +5347,27 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
         .from(drivers)
         .where(eq(drivers.tenantId, tenantId));
 
+      // Canonical start times from contracts table (must match local-reconstruct.ts)
+      const CANONICAL_START_TIMES: Record<string, string> = {
+        "Solo1_Tractor_1": "16:30",
+        "Solo1_Tractor_2": "20:30",
+        "Solo1_Tractor_3": "20:30",
+        "Solo1_Tractor_4": "17:30",
+        "Solo1_Tractor_5": "21:30",
+        "Solo1_Tractor_6": "01:30",
+        "Solo1_Tractor_7": "18:30",
+        "Solo1_Tractor_8": "00:30",
+        "Solo1_Tractor_9": "16:30",
+        "Solo1_Tractor_10": "20:30",
+        "Solo2_Tractor_1": "18:30",
+        "Solo2_Tractor_2": "23:30",
+        "Solo2_Tractor_3": "21:30",
+        "Solo2_Tractor_4": "08:30",
+        "Solo2_Tractor_5": "15:30",
+        "Solo2_Tractor_6": "11:30",
+        "Solo2_Tractor_7": "16:30",
+      };
+
       // Build lookup maps
       const contractMap = new Map<string, typeof tenantContracts[0]>();
       for (const contract of tenantContracts) {
@@ -5323,6 +5377,9 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
         // Also support lowercase key
         contractMap.set(key.toLowerCase(), contract);
       }
+
+      // Track created contracts during import to avoid duplicates
+      const createdContracts: string[] = [];
 
       // Build driver lookup by name (normalized)
       const driverMap = new Map<string, typeof tenantDrivers[0]>();
@@ -5384,21 +5441,57 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
           const contractKey = block.contract;
           let contract = contractMap.get(contractKey) || contractMap.get(contractKey?.toLowerCase());
 
-          // Fallback 1: if contract not found, try to find a matching contract by type
+          // Auto-create contract if it doesn't exist
+          // This ensures each block shows in the correct calendar row
           if (!contract && contractKey) {
-            // Extract solo type from key (e.g., "Solo2_Tractor_6" -> "solo2")
-            const typeMatch = contractKey.match(/(solo[12]|team)/i);
+            const typeMatch = contractKey.match(/(solo[12])/i);
             const blockType = typeMatch ? typeMatch[1].toLowerCase() : 'solo2';
+            const tractorMatch = contractKey.match(/Tractor_(\d+)/i);
+            const tractorIdParsed = tractorMatch ? `Tractor_${tractorMatch[1]}` : null;
 
-            // Find first contract matching the type
-            const fallbackContract = tenantContracts.find(c => c.type.toLowerCase() === blockType);
-            if (fallbackContract) {
-              contract = fallbackContract;
-              console.log(`[IMPORT] Using type-based fallback contract ${fallbackContract.tractorId} (${fallbackContract.type}) for block ${block.blockId}`);
+            // Only auto-create if we have both type and tractor
+            if (tractorIdParsed) {
+              // Check if we already created this contract in this import batch
+              if (!createdContracts.includes(contractKey)) {
+                // Get start time from canonical lookup
+                const startTime = CANONICAL_START_TIMES[contractKey] || block.canonicalStartTime || '00:00';
+                const duration = blockType === 'solo1' ? 14 : 38;
+                const baseRoutes = blockType === 'solo1' ? 10 : 7;
+                const contractName = `${blockType.toUpperCase()} ${startTime} ${tractorIdParsed}`;
+
+                try {
+                  const [newContract] = await db.insert(contracts).values({
+                    tenantId,
+                    name: contractName,
+                    type: blockType,
+                    tractorId: tractorIdParsed,
+                    startTime,
+                    duration,
+                    baseRoutes,
+                    status: "active",
+                    domicile: "MKC",
+                    daysPerWeek: 6,
+                    protectedDrivers: false,
+                  }).returning();
+
+                  // Add to maps so future blocks can find it
+                  contract = newContract;
+                  contractMap.set(contractKey, newContract);
+                  contractMap.set(contractKey.toLowerCase(), newContract);
+                  createdContracts.push(contractKey);
+
+                  console.log(`[IMPORT] Auto-created contract ${contractName} for block ${block.blockId}`);
+                } catch (e) {
+                  console.log(`[IMPORT] Failed to auto-create contract ${contractKey}: ${e}`);
+                }
+              } else {
+                // Already created in this batch, try to get it from map now
+                contract = contractMap.get(contractKey) || contractMap.get(contractKey.toLowerCase());
+              }
             }
           }
 
-          // Fallback 2: if STILL no contract, use ANY contract from the tenant (required by NOT NULL constraint)
+          // Fallback: if STILL no contract, use first available (required by NOT NULL constraint)
           if (!contract && tenantContracts.length > 0) {
             contract = tenantContracts[0];
             console.log(`[IMPORT] Using first available contract ${contract.tractorId} (${contract.type}) for block ${block.blockId} - no matching contract found`);
@@ -5419,10 +5512,15 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
           const soloMatch = contractKey?.match(/(solo[12])/i);
           const soloType = soloMatch ? soloMatch[1].toLowerCase() : contract.type;
 
-          // ALWAYS use the matched contract's tractorId
-          // Previously we parsed from CSV which caused mismatches when contract didn't exist
-          // The UI iterates over contracts table, so tractorId MUST match a contract
-          const tractorId = contract.tractorId;
+          // Parse tractorId from CSV's contract key (e.g., "Solo1_Tractor_10" -> "Tractor_10")
+          // This preserves the actual tractor assignment from Amazon's CSV even if we had to use a fallback contract
+          const tractorMatch = contractKey?.match(/Tractor_(\d+)/i);
+          const tractorId = tractorMatch ? `Tractor_${tractorMatch[1]}` : contract.tractorId;
+
+          // Log if we're using a different tractorId than the contract's
+          if (tractorId !== contract.tractorId) {
+            console.log(`[IMPORT] Block ${block.blockId}: Using tractorId="${tractorId}" from CSV (contract has "${contract.tractorId}")`);
+          }
 
           // Parse start date and time
           // IMPORTANT: Use UTC noon (12:00:00Z) to avoid timezone boundary issues

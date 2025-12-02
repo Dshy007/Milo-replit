@@ -27,6 +27,8 @@ import {
 import {
   AlertCircle,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Clock,
   TrendingUp,
   Brain,
@@ -89,6 +91,12 @@ export default function AutoBuild() {
   const [currentPreview, setCurrentPreview] = useState<AutoBuildPreview | null>(null);
   const [manualOverrides, setManualOverrides] = useState<Map<string, string>>(new Map());
 
+  // Week selector - defaults to next week
+  const [targetWeekOffset, setTargetWeekOffset] = useState(1); // 1 = next week, 0 = this week, 2 = two weeks out
+
+  const targetWeekStart = startOfWeek(addWeeks(new Date(), targetWeekOffset), { weekStartsOn: 0 });
+  const targetWeekEnd = addWeeks(targetWeekStart, 1);
+
   const { data: allDrivers = [] } = useQuery<Array<{ id: string; firstName: string; lastName: string }>>({
     queryKey: ["/api/drivers"],
   });
@@ -120,9 +128,9 @@ export default function AutoBuild() {
 
   const generatePreviewMutation = useMutation({
     mutationFn: async () => {
-      const nextWeekStart = startOfWeek(addWeeks(new Date(), 1), { weekStartsOn: 0 });
+      // Use the selected target week
       const res = await apiRequest("POST", "/api/auto-build/preview", {
-        targetWeekStart: nextWeekStart.toISOString(),
+        targetWeekStart: targetWeekStart.toISOString(),
       });
       return res.json();
     },
@@ -248,11 +256,44 @@ export default function AutoBuild() {
     <div className="container mx-auto p-6 space-y-6">
       {/* Header with Progress Stepper */}
       <div className="space-y-4">
-        <div>
-          <h1 className="text-3xl font-bold">Auto-Build Next Week</h1>
-          <p className="text-muted-foreground">
-            AI-powered schedule generation using historical patterns and workload balance
-          </p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold">Auto-Build Schedule</h1>
+            <p className="text-muted-foreground">
+              AI-powered schedule generation using historical patterns and workload balance
+            </p>
+          </div>
+
+          {/* Week Selector */}
+          {!currentPreview && (
+            <div className="flex items-center gap-3 bg-muted/50 p-3 rounded-lg">
+              <span className="text-sm font-medium text-muted-foreground">Target Week:</span>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setTargetWeekOffset(Math.max(0, targetWeekOffset - 1))}
+                  disabled={targetWeekOffset <= 0}
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </Button>
+                <div className="text-sm font-semibold min-w-[160px] text-center">
+                  {format(targetWeekStart, "MMM d")} - {format(addWeeks(targetWeekStart, 1), "MMM d, yyyy")}
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setTargetWeekOffset(targetWeekOffset + 1)}
+                  disabled={targetWeekOffset >= 4}
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </Button>
+              </div>
+              <Badge variant={targetWeekOffset === 0 ? "secondary" : targetWeekOffset === 1 ? "default" : "outline"}>
+                {targetWeekOffset === 0 ? "This Week" : targetWeekOffset === 1 ? "Next Week" : `+${targetWeekOffset} weeks`}
+              </Badge>
+            </div>
+          )}
         </div>
 
         {/* Progress Stepper */}
@@ -367,7 +408,7 @@ export default function AutoBuild() {
             data-testid="button-generate-autobuild"
           >
             <Brain className="w-4 h-4 mr-2" />
-            {generatePreviewMutation.isPending ? "Generating..." : "Generate Next Week Schedule"}
+            {generatePreviewMutation.isPending ? "Generating..." : `Generate Schedule (${format(targetWeekStart, "MMM d")} - ${format(addWeeks(targetWeekStart, 1), "MMM d")})`}
           </Button>
         )}
       </div>

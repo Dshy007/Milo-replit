@@ -280,6 +280,7 @@ export function ScheduleBuilder({
   const [expandedDays, setExpandedDays] = useState<Set<DayOfWeek>>(new Set(DAY_ORDER));
   const [swapBlockId, setSwapBlockId] = useState<string | null>(null);
   const [compliancePanelOpen, setCompliancePanelOpen] = useState(true);
+  const [usePythonML, setUsePythonML] = useState(true); // Toggle for Python ML vs TypeScript engine
 
   // Fetch driver roster
   const { data: rosterData, isLoading: isLoadingRoster } = useQuery({
@@ -293,6 +294,87 @@ export function ScheduleBuilder({
     },
   });
 
+  // Call Python ML API for predictions
+  const fetchPythonPredictions = async (
+    blocksToAssign: ReconstructedBlock[],
+    driverProfiles: DriverProfile[]
+  ): Promise<AssignedBlock[]> => {
+    try {
+      const response = await fetch("/api/analysis/predict-assignments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          blocks: blocksToAssign.map((b) => {
+            // Calculate day of week (0=Sunday, 6=Saturday) from date
+            const date = new Date(b.date);
+            const dayOfWeek = date.getDay();
+            return {
+              blockId: b.blockId,
+              contractType: b.blockType,
+              shiftStart: `${b.date}T${b.startTime}:00Z`,
+              shiftEnd: `${b.date}T${b.startTime}:00Z`, // Approximate
+              dayOfWeek, // Pass day of week for pattern matching
+              startTime: b.startTime, // Pass start time for time slot matching
+              serviceDate: b.date,
+            };
+          }),
+          drivers: driverProfiles.map((d) => ({
+            id: d.id,
+            name: d.name,
+            type: d.soloType === "both" ? "solo2" : d.soloType,
+          })),
+        }),
+      });
+
+      if (!response.ok) {
+        console.warn("[ScheduleBuilder] Python ML API failed, falling back to TypeScript engine");
+        return autoAssignDrivers(blocksToAssign, driverProfiles).assignments;
+      }
+
+      const data = await response.json();
+      console.log("[ScheduleBuilder] Python ML predictions:", data);
+
+      // Convert Python recommendations to AssignedBlock format
+      const assignedBlocks: AssignedBlock[] = blocksToAssign.map((block) => {
+        const prediction = data.recommendations?.find(
+          (r: any) => r.block_id === block.blockId
+        );
+
+        if (prediction?.recommendations?.length > 0) {
+          const topDriver = prediction.recommendations[0];
+          const matchedDriver = driverProfiles.find((d) => d.id === topDriver.driver_id);
+
+          return {
+            ...block,
+            driverId: topDriver.driver_id,
+            driverName: topDriver.driver_name || matchedDriver?.name || null,
+            assignmentType: topDriver.score >= 0.8 ? "exact_match" :
+                           topDriver.score >= 0.6 ? "close_match" : "pattern_match",
+            assignmentScore: Math.round(topDriver.score * 100),
+            conflicts: [],
+          } as AssignedBlock;
+        }
+
+        // No prediction - leave unassigned
+        return {
+          ...block,
+          driverId: null,
+          driverName: null,
+          assignmentType: "unassigned",
+          assignmentScore: 0,
+          conflicts: [],
+        } as AssignedBlock;
+      });
+
+      return assignedBlocks;
+    } catch (error) {
+      console.error("[ScheduleBuilder] Python ML error:", error);
+      // Fall back to TypeScript engine
+      return autoAssignDrivers(blocksToAssign, driverProfiles).assignments;
+    }
+  };
+
   // Initialize on roster load
   useEffect(() => {
     if (rosterData?.drivers && blocks.length > 0) {
@@ -303,12 +385,21 @@ export function ScheduleBuilder({
       }));
       setDrivers(driverProfiles);
 
-      // Run auto-assignment
-      const result = autoAssignDrivers(blocks, driverProfiles);
-      setAssignments(result.assignments);
-      setIsLoading(false);
+      // Run auto-assignment (Python ML or TypeScript)
+      const runAssignment = async () => {
+        if (usePythonML) {
+          const pythonAssignments = await fetchPythonPredictions(blocks, driverProfiles);
+          setAssignments(pythonAssignments);
+        } else {
+          const result = autoAssignDrivers(blocks, driverProfiles);
+          setAssignments(result.assignments);
+        }
+        setIsLoading(false);
+      };
+
+      runAssignment();
     }
-  }, [rosterData, blocks]);
+  }, [rosterData, blocks, usePythonML]);
 
   // Derived data
   const workloads = useMemo(
@@ -372,10 +463,15 @@ export function ScheduleBuilder({
   }, [swapBlockId, assignments, drivers]);
 
   // Handlers
-  const handleReassignAll = () => {
+  const handleReassignAll = async () => {
     setIsLoading(true);
-    const result = autoAssignDrivers(blocks, drivers);
-    setAssignments(result.assignments);
+    if (usePythonML) {
+      const pythonAssignments = await fetchPythonPredictions(blocks, drivers);
+      setAssignments(pythonAssignments);
+    } else {
+      const result = autoAssignDrivers(blocks, drivers);
+      setAssignments(result.assignments);
+    }
     setIsLoading(false);
   };
 
@@ -468,7 +564,7 @@ export function ScheduleBuilder({
         </div>
 
         {/* Action Buttons */}
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
           <Button variant="outline" onClick={handleReassignAll}>
             <RefreshCw className="w-4 h-4 mr-2" />
             Auto-Assign All
@@ -481,6 +577,18 @@ export function ScheduleBuilder({
             <Eye className="w-4 h-4 mr-2" />
             Show Gaps
           </Button>
+          <div className="ml-4 flex items-center gap-2">
+            <Badge
+              variant={usePythonML ? "default" : "secondary"}
+              className={`cursor-pointer ${usePythonML ? "bg-green-600" : "bg-gray-400"}`}
+              onClick={() => setUsePythonML(!usePythonML)}
+            >
+              {usePythonML ? "Python ML" : "TypeScript"}
+            </Badge>
+            <span className="text-xs text-muted-foreground">
+              {usePythonML ? "Using ML predictions" : "Using rule-based"}
+            </span>
+          </div>
         </div>
       </div>
 

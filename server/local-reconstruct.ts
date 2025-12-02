@@ -24,6 +24,130 @@ const CANONICAL_START_TIMES: Record<string, string> = {
   "Solo2_Tractor_7": "16:30",
 };
 
+// Group tractors by contract type for fuzzy matching
+const SOLO1_TRACTORS = Object.entries(CANONICAL_START_TIMES)
+  .filter(([key]) => key.startsWith('Solo1_'))
+  .map(([key, time]) => ({ contract: key, time }));
+
+const SOLO2_TRACTORS = Object.entries(CANONICAL_START_TIMES)
+  .filter(([key]) => key.startsWith('Solo2_'))
+  .map(([key, time]) => ({ contract: key, time }));
+
+/**
+ * Parse time string to minutes from midnight for comparison
+ */
+function timeToMinutes(timeStr: string): number {
+  if (!timeStr) return -1;
+
+  // Handle various time formats: "HH:MM", "HH:MM:SS", "HH:MM AM/PM"
+  const cleanTime = timeStr.trim().toUpperCase();
+
+  // Check for AM/PM format
+  const isPM = cleanTime.includes('PM');
+  const isAM = cleanTime.includes('AM');
+  const timeOnly = cleanTime.replace(/\s*(AM|PM)\s*/i, '');
+
+  const parts = timeOnly.split(':');
+  if (parts.length < 2) return -1;
+
+  let hours = parseInt(parts[0], 10);
+  const minutes = parseInt(parts[1], 10);
+
+  if (isNaN(hours) || isNaN(minutes)) return -1;
+
+  // Handle AM/PM conversion
+  if (isPM && hours < 12) hours += 12;
+  if (isAM && hours === 12) hours = 0;
+
+  return hours * 60 + minutes;
+}
+
+/**
+ * Calculate time difference in minutes, handling overnight spans
+ */
+function getTimeDifferenceMinutes(time1: string, time2: string): number {
+  const m1 = timeToMinutes(time1);
+  const m2 = timeToMinutes(time2);
+
+  if (m1 < 0 || m2 < 0) return Infinity;
+
+  // Calculate absolute difference, considering overnight wrap
+  const diff1 = Math.abs(m2 - m1);
+  const diff2 = 1440 - diff1; // 1440 = 24 hours in minutes
+
+  return Math.min(diff1, diff2);
+}
+
+/**
+ * Calculate block duration in hours from start and end times
+ */
+function calculateDurationHours(startTime: string, endTime: string): number {
+  const startMins = timeToMinutes(startTime);
+  const endMins = timeToMinutes(endTime);
+
+  if (startMins < 0 || endMins < 0) return 14; // Default to Solo1 duration
+
+  let durationMins = endMins - startMins;
+  // Handle overnight shifts
+  if (durationMins < 0) {
+    durationMins += 1440; // Add 24 hours
+  }
+
+  return durationMins / 60;
+}
+
+/**
+ * FUZZY MATCHING: Find the best tractor assignment for a block without explicit Tractor_ in Operator ID
+ *
+ * Logic:
+ * 1. Determine contract type (Solo1 vs Solo2) based on duration (≤15h = Solo1, >15h = Solo2)
+ * 2. Find the tractor with the closest canonical start time to the block's actual departure time
+ * 3. Track used tractors per date to avoid collisions
+ */
+function fuzzyMatchTractor(
+  departureTime: string,
+  durationHours: number,
+  date: string,
+  usedTractors: Map<string, Set<string>> // Map<date, Set<contract>>
+): { contract: string; canonicalTime: string; reason: string } {
+  // Determine contract type based on duration
+  // Solo1 routes are typically ≤15 hours, Solo2 are longer
+  const contractType = durationHours <= 15 ? 'Solo1' : 'Solo2';
+  const tractorList = contractType === 'Solo1' ? SOLO1_TRACTORS : SOLO2_TRACTORS;
+
+  // Get already-used tractors for this date
+  const usedForDate = usedTractors.get(date) || new Set<string>();
+
+  // Find available tractors sorted by time proximity
+  const candidates = tractorList
+    .filter(t => !usedForDate.has(t.contract))
+    .map(t => ({
+      ...t,
+      timeDiff: getTimeDifferenceMinutes(departureTime, t.time)
+    }))
+    .sort((a, b) => a.timeDiff - b.timeDiff);
+
+  if (candidates.length === 0) {
+    // All tractors used for this date - assign to first available tractor anyway
+    console.log(`[FUZZY] WARNING: All ${contractType} tractors used for ${date}, using first available`);
+    const firstTractor = tractorList[0];
+    return {
+      contract: firstTractor.contract,
+      canonicalTime: firstTractor.time,
+      reason: `FUZZY: All ${contractType} tractors occupied, forced assignment`
+    };
+  }
+
+  const bestMatch = candidates[0];
+  console.log(`[FUZZY] Matched ${contractType} block at ${departureTime} → ${bestMatch.contract} (canonical ${bestMatch.time}, diff ${bestMatch.timeDiff} mins)`);
+
+  return {
+    contract: bestMatch.contract,
+    canonicalTime: bestMatch.time,
+    reason: `FUZZY: Matched by time proximity (${bestMatch.timeDiff} min diff, ${durationHours.toFixed(1)}h duration → ${contractType})`
+  };
+}
+
 export interface ReconstructedBlock {
   blockId: string;
   contract: string;
@@ -43,6 +167,8 @@ interface TripRow {
   operatorId: string;
   driver: string;
   departureDate: string;
+  departureTime: string;  // For fuzzy matching
+  arrivalTime: string;    // For duration calculation
   cost: number;
   origin: string;
   destination: string;
@@ -128,12 +254,16 @@ function findColumn(row: Record<string, string>, possibleNames: string[]): strin
 /**
  * Extract contract name from Operator ID
  * Example: "FTIM_MKC_Solo2_Tractor_6_d1" -> "Solo2_Tractor_6"
+ * Normalizes case to match CANONICAL_START_TIMES keys (e.g., Solo1, Solo2, Tractor)
  */
 function extractContract(operatorId: string): string {
-  // Match Solo1_Tractor_N or Solo2_Tractor_N pattern
-  const match = operatorId.match(/(Solo[12]_Tractor_\d+)/i);
+  // Match Solo1_Tractor_N or Solo2_Tractor_N pattern (case insensitive)
+  const match = operatorId.match(/(solo)([12])_(tractor)_(\d+)/i);
   if (match) {
-    return match[1];
+    // Normalize to proper case: "Solo1_Tractor_N" or "Solo2_Tractor_N"
+    const soloNum = match[2];  // 1 or 2
+    const tractorNum = match[4];  // tractor number
+    return `Solo${soloNum}_Tractor_${tractorNum}`;
   }
   return operatorId;
 }
@@ -242,6 +372,22 @@ export function reconstructBlocksLocally(csvData: string): {
           // Legacy column names
           'Departure Date', 'DepartureDate', 'Date'
         ]),
+        // FUZZY MATCHING: Capture departure TIME for time-based tractor matching
+        departureTime: findColumn(row, [
+          'Stop 1  Planned Departure Time',
+          'Stop 1 Planned Departure Time',
+          'Stop 1 Actual Departure Time',
+          'Stop 1  Actual Departure Time',
+          'Departure Time', 'DepartureTime'
+        ]),
+        // FUZZY MATCHING: Capture arrival TIME for duration calculation
+        arrivalTime: findColumn(row, [
+          'Stop 2  Planned Arrival Time',
+          'Stop 2 Planned Arrival Time',
+          'Stop 2 Actual Arrival Time',
+          'Stop 2  Actual Arrival Time',
+          'Arrival Time', 'ArrivalTime'
+        ]),
         cost: parseCost(findColumn(row, ['Estimated Cost', 'Cost', 'Total Cost', 'TotalCost'])),
         origin: findColumn(row, ['Stop 1', 'Origin', 'Origin Location']),
         destination: findColumn(row, ['Stop 2', 'Destination', 'Destination Location']),
@@ -300,14 +446,100 @@ export function reconstructBlocksLocally(csvData: string): {
     // Reconstruct each block
     const blocks: ReconstructedBlock[] = [];
 
+    // Track used tractors per date for fuzzy matching collision detection
+    const usedTractorsPerDate = new Map<string, Set<string>>();
+
+    // First pass: Process blocks WITH explicit Tractor_ pattern to mark them as used
+    const blocksWithTractor: [string, TripRow[]][] = [];
+    const blocksWithoutTractor: [string, TripRow[]][] = [];
+
+    for (const [blockId, trips] of blockGroups) {
+      if (trips.length === 0) continue;
+      const operatorId = trips[0].operatorId;
+      const hasTractorPattern = /tractor_\d+/i.test(operatorId);
+
+      if (hasTractorPattern) {
+        blocksWithTractor.push([blockId, trips]);
+      } else {
+        blocksWithoutTractor.push([blockId, trips]);
+      }
+    }
+
+    console.log(`[Local] Blocks with explicit Tractor_: ${blocksWithTractor.length}, Blocks needing fuzzy match: ${blocksWithoutTractor.length}`);
+
+    // Process blocks WITH Tractor_ first (they claim their slots)
+    for (const [blockId, trips] of blocksWithTractor) {
+      const contract = extractContract(trips[0].operatorId);
+      const dates = trips.map(t => parseDate(t.departureDate)).filter(d => d).sort();
+      const startDate = dates[0] || '';
+
+      // Mark this tractor as used for this date
+      if (startDate && contract) {
+        if (!usedTractorsPerDate.has(startDate)) {
+          usedTractorsPerDate.set(startDate, new Set());
+        }
+        usedTractorsPerDate.get(startDate)!.add(contract);
+      }
+    }
+
+    // Now process ALL blocks (with and without Tractor_)
     for (const [blockId, trips] of blockGroups) {
       if (trips.length === 0) continue;
 
       // Extract contract from first trip's Operator ID
-      const contract = extractContract(trips[0].operatorId);
+      let contract = extractContract(trips[0].operatorId);
+      let canonicalStartTime: string;
+      let fuzzyMatchReason = '';
 
-      // Look up canonical start time
-      const canonicalStartTime = CANONICAL_START_TIMES[contract] || '00:00';
+      // Check if contract lookup succeeds (has Tractor_ pattern)
+      const hasTractorPattern = /tractor_\d+/i.test(trips[0].operatorId);
+
+      if (hasTractorPattern && CANONICAL_START_TIMES[contract]) {
+        // Direct lookup succeeded
+        canonicalStartTime = CANONICAL_START_TIMES[contract];
+      } else {
+        // FUZZY MATCHING: No Tractor_ pattern in Operator ID
+        // Use departure time and duration to find best matching tractor
+
+        // Get earliest departure time and latest arrival time for duration calculation
+        const departureTimes = trips.map(t => t.departureTime).filter(Boolean);
+        const arrivalTimes = trips.map(t => t.arrivalTime).filter(Boolean);
+
+        // Get first departure time (earliest trip start)
+        const blockDepartureTime = departureTimes[0] || '12:00'; // Default to noon if no time found
+
+        // Calculate duration from times, or estimate from trip count
+        let durationHours = 14; // Default to Solo1 duration
+        if (departureTimes[0] && arrivalTimes[arrivalTimes.length - 1]) {
+          durationHours = calculateDurationHours(departureTimes[0], arrivalTimes[arrivalTimes.length - 1]);
+        } else {
+          // Estimate: more trips usually means longer route
+          durationHours = trips.length > 3 ? 20 : 14;
+        }
+
+        // Get the date for collision tracking
+        const dates = trips.map(t => parseDate(t.departureDate)).filter(d => d).sort();
+        const startDate = dates[0] || '';
+
+        // Perform fuzzy match
+        const fuzzyResult = fuzzyMatchTractor(blockDepartureTime, durationHours, startDate, usedTractorsPerDate);
+        contract = fuzzyResult.contract;
+        canonicalStartTime = fuzzyResult.canonicalTime;
+        fuzzyMatchReason = fuzzyResult.reason;
+
+        // Mark this tractor as now used for this date
+        if (startDate) {
+          if (!usedTractorsPerDate.has(startDate)) {
+            usedTractorsPerDate.set(startDate, new Set());
+          }
+          usedTractorsPerDate.get(startDate)!.add(contract);
+        }
+
+        console.log(`[FUZZY] Block ${blockId}: ${fuzzyMatchReason}`);
+        console.log(`[FUZZY]   Operator ID was: "${trips[0].operatorId}"`);
+        console.log(`[FUZZY]   Departure time: ${blockDepartureTime}, Duration: ${durationHours.toFixed(1)}h`);
+        console.log(`[FUZZY]   Assigned to: ${contract} (${canonicalStartTime})`);
+      }
 
       // Determine duration based on contract type
       const duration = contract.toLowerCase().includes('solo2') ? '38h' : '14h';
@@ -400,19 +632,59 @@ export function reconstructBlocksLocally(csvData: string): {
       });
     }
 
+    // DEDUPLICATION: Merge blocks with same contract+date into a single block
+    // Rule: Only ONE block per (contract + date) combination
+    // - Keep the first blockId found (for tracking)
+    // - Aggregate costs and load counts
+    // - Prefer driver from non-rejected blocks
+    const deduped = new Map<string, ReconstructedBlock>();
+    for (const block of blocks) {
+      const key = `${block.contract}_${block.startDate}`;
+
+      if (!deduped.has(key)) {
+        deduped.set(key, { ...block });
+      } else {
+        // Merge: aggregate costs and loads, prefer driver with assignment
+        const existing = deduped.get(key)!;
+        existing.cost += block.cost;
+        existing.loadCount += block.loadCount;
+
+        // If existing has no driver but this one does, use this driver
+        if (!existing.primaryDriver && block.primaryDriver) {
+          existing.primaryDriver = block.primaryDriver;
+          existing.relayDrivers = block.relayDrivers;
+        }
+        // Add any new relay drivers
+        for (const relay of block.relayDrivers) {
+          if (relay && !existing.relayDrivers.includes(relay) && relay !== existing.primaryDriver) {
+            existing.relayDrivers.push(relay);
+          }
+        }
+        // If any merged block has rejected trip, mark the merged block as rejected
+        if (block.hasRejectedTrip) {
+          existing.hasRejectedTrip = true;
+        }
+
+        console.log(`[Local DEDUP] Merged block ${block.blockId} into ${existing.blockId} for ${key}`);
+      }
+    }
+
+    const dedupedBlocks = Array.from(deduped.values());
+    console.log(`[Local] Deduplicated: ${blocks.length} blocks → ${dedupedBlocks.length} unique contract+date combinations`);
+
     // Sort blocks by date then by block ID
-    blocks.sort((a, b) => {
+    dedupedBlocks.sort((a, b) => {
       const dateCompare = a.startDate.localeCompare(b.startDate);
       if (dateCompare !== 0) return dateCompare;
       return a.blockId.localeCompare(b.blockId);
     });
 
-    console.log(`[Local] Reconstructed ${blocks.length} blocks`);
+    console.log(`[Local] Reconstructed ${dedupedBlocks.length} blocks (from ${blocks.length} raw blocks)`);
 
     // Debug: Log how many blocks have drivers
-    const blocksWithDrivers = blocks.filter(b => b.primaryDriver);
-    const blocksWithoutDrivers = blocks.filter(b => !b.primaryDriver);
-    const rejectedBlocks = blocks.filter(b => b.hasRejectedTrip);
+    const blocksWithDrivers = dedupedBlocks.filter(b => b.primaryDriver);
+    const blocksWithoutDrivers = dedupedBlocks.filter(b => !b.primaryDriver);
+    const rejectedBlocks = dedupedBlocks.filter(b => b.hasRejectedTrip);
     const unassignedBlocks = blocksWithoutDrivers.filter(b => !b.hasRejectedTrip);
 
     console.log(`[Local] Blocks with drivers: ${blocksWithDrivers.length}, Blocks without drivers: ${blocksWithoutDrivers.length}`);
@@ -446,7 +718,7 @@ export function reconstructBlocksLocally(csvData: string): {
 
     return {
       success: true,
-      blocks,
+      blocks: dedupedBlocks,
     };
   } catch (error) {
     console.error('[Local] Reconstruction error:', error);

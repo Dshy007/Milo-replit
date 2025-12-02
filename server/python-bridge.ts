@@ -9,13 +9,41 @@ export interface PythonResult<T = any> {
   errorType?: string;
 }
 
+/**
+ * Get the Python executable path for the current platform
+ */
+function getPythonCommand(): string {
+  if (process.platform === 'win32') {
+    // Windows: Try common Python install locations
+    const windowsPaths = [
+      path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python312', 'python.exe'),
+      path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python311', 'python.exe'),
+      path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python310', 'python.exe'),
+      'C:\\Python312\\python.exe',
+      'C:\\Python311\\python.exe',
+      'python', // Fall back to PATH
+    ];
+
+    for (const pythonPath of windowsPaths) {
+      if (fs.existsSync(pythonPath)) {
+        return pythonPath;
+      }
+    }
+    return 'python'; // Last resort
+  }
+
+  // Unix/Mac: Use python3
+  return 'python3';
+}
+
 export async function runPythonScript<T = any>(
   scriptName: string,
-  args: string[] = []
+  args: string[] = [],
+  stdinData?: string
 ): Promise<PythonResult<T>> {
   return new Promise((resolve) => {
     const scriptPath = path.join(process.cwd(), 'python', scriptName);
-    
+
     if (!fs.existsSync(scriptPath)) {
       resolve({
         success: false,
@@ -25,8 +53,12 @@ export async function runPythonScript<T = any>(
       return;
     }
 
-    const pythonProcess = spawn('python3', [scriptPath, ...args]);
-    
+    const pythonCommand = getPythonCommand();
+    console.log(`[Python Bridge] Running: ${pythonCommand} ${scriptPath}${stdinData ? ' (with stdin data)' : ''}`);
+
+    // Only pass args if no stdinData (for large payloads, use stdin)
+    const pythonProcess = spawn(pythonCommand, [scriptPath, ...(stdinData ? [] : args)]);
+
     let stdout = '';
     let stderr = '';
 
@@ -70,6 +102,12 @@ export async function runPythonScript<T = any>(
         errorType: 'SpawnError'
       });
     });
+
+    // Write stdin data if provided
+    if (stdinData) {
+      pythonProcess.stdin.write(stdinData);
+      pythonProcess.stdin.end();
+    }
   });
 }
 
@@ -155,7 +193,8 @@ export async function predictAssignments(input: {
   historical?: any[];
 }): Promise<PythonResult<{ recommendations: AssignmentRecommendation[] }>> {
   const jsonInput = JSON.stringify(input);
-  return runPythonScript('assignment_predictor.py', [jsonInput]);
+  // Use stdin for large payloads to avoid ENAMETOOLONG error on Windows
+  return runPythonScript('assignment_predictor.py', [], jsonInput);
 }
 
 export async function analyzeCoverage(input: {
@@ -165,5 +204,65 @@ export async function analyzeCoverage(input: {
   historical?: any[];
 }): Promise<PythonResult<{ analysis: CoverageAnalysis }>> {
   const jsonInput = JSON.stringify(input);
-  return runPythonScript('assignment_predictor.py', [jsonInput]);
+  // Use stdin for large payloads to avoid ENAMETOOLONG error on Windows
+  return runPythonScript('assignment_predictor.py', [], jsonInput);
+}
+
+// ============================================================================
+// Vector Store (ChromaDB) Functions
+// ============================================================================
+
+export interface VectorStoreStats {
+  patterns_count: number;
+  blocks_count: number;
+  drivers_count: number;
+}
+
+export interface VectorMatch {
+  id: string;
+  document: string;
+  metadata: Record<string, any>;
+  distance: number | null;
+}
+
+export async function getVectorStoreStats(): Promise<PythonResult<{ stats: VectorStoreStats }>> {
+  return runPythonScript('vector_store.py', [], JSON.stringify({ action: 'stats' }));
+}
+
+export async function bulkImportToVectorStore(records: any[]): Promise<PythonResult<{
+  result: {
+    added: number;
+    skipped: number;
+    errors: number;
+    total: number;
+  };
+}>> {
+  return runPythonScript('vector_store.py', [], JSON.stringify({
+    action: 'bulk_import',
+    records
+  }));
+}
+
+export async function findSimilarAssignments(params: {
+  block_id?: string;
+  day_of_week?: number;
+  start_time?: string;
+  contract_type?: string;
+  n_results?: number;
+}): Promise<PythonResult<{ matches: VectorMatch[] }>> {
+  return runPythonScript('vector_store.py', [], JSON.stringify({
+    action: 'find_similar',
+    ...params
+  }));
+}
+
+export async function getDriverVectorHistory(driverId: string): Promise<PythonResult<{ history: VectorMatch[] }>> {
+  return runPythonScript('vector_store.py', [], JSON.stringify({
+    action: 'driver_history',
+    driver_id: driverId
+  }));
+}
+
+export async function resetVectorStore(): Promise<PythonResult<{ message: string }>> {
+  return runPythonScript('vector_store.py', [], JSON.stringify({ action: 'reset' }));
 }
