@@ -13,6 +13,49 @@
 
 ---
 
+## [2025-12-01 – EST] Session Summary
+
+**Branch:** main
+
+**What we did:**
+- **Driver DNA Feature Enhancements** - Major work on the Schedule Intelligence page
+- Created database table for `driver_dna_profiles` (script in `scripts/create-dna-table.ts`)
+- Added 3D flip cards to driver profiles - click to flip and see AI summary + insights
+- Made "How It Works" arrow functional - scrolls to cards with instruction text
+- Added hover movement effect on cards (`hover:-translate-y-1`)
+- Changed all match % to green (removed conditional coloring)
+- Slowed analysis progress animation from 1.5s to 6s
+- **Fixed canonical start times lookup** - Added `CANONICAL_START_TIMES` lookup table to use contract times instead of raw UTC timestamps
+- Created plan file at `.claude/plan.md` documenting the implementation approach
+
+**Key files touched:**
+- `server/dna-analyzer.ts` – Added CANONICAL_START_TIMES lookup table, getCanonicalStartTime() helper function, updated fetchHistoricalAssignments() to use canonical times based on soloType + tractorId
+- `server/ai/agents/gemini-profiler.ts` – Changed calculateConsistencyScore() to be pattern match % (Sun-Wed or Wed-Sat alignment instead of entropy-based)
+- `client/src/pages/ScheduleIntelligence.tsx` – Added 3D flip card animation, insights display on back, functional arrow with scroll behavior, hover effects
+- `scripts/create-dna-table.ts` – NEW FILE: Database migration script for driver_dna_profiles table
+- `.claude/plan.md` – NEW FILE: Implementation plan for Driver DNA improvements
+
+**Current status - NEEDS CONTINUATION:**
+The Driver DNA feature is partially working but has issues:
+1. **Start times still showing incorrectly** (e.g., "1:30 AM, 1:46 AM") - The canonical lookup was added but may not be getting the right data. Need to re-run analysis and verify tractorId/soloType are being passed correctly.
+2. **Match % is low** (16% for Richard who clearly works Sun-Wed) - This suggests pattern detection is returning 'mixed' when it should be 'sunWed'. May be a data quality issue from the source.
+3. **Need to verify data source** - Should be pulling from cleaned schedule data, not raw CSV imports
+
+**Canonical Start Times Reference:**
+```
+Solo1: Tractor_1=16:30, Tractor_2=20:30, Tractor_6=01:30, Tractor_8=00:30
+Solo2: Tractor_4=08:30, Tractor_5=15:30, Tractor_6=11:30
+```
+
+**Next session START HERE:**
+1. Debug why canonical times aren't showing correctly after re-analysis
+2. Check if tractorId and soloType are populated in blockAssignments query results
+3. Verify pattern detection logic - Richard on Tractor_6 (01:30) works Sun-Wed consistently
+4. Consider adding debug logging to DNA analysis to trace data flow
+5. Test with re-running "Re-analyze" button after the code changes
+
+---
+
 ## [2025-11-29 – EST] Session Summary
 
 **Branch:** main
