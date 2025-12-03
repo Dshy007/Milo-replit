@@ -1665,6 +1665,15 @@ export default function Schedules() {
                 Clear All
               </Button>
 
+              {/* DEBUG: DNA Matching Status */}
+              {activeDriverId && (
+                <div className="px-3 py-1 bg-purple-500/20 border border-purple-500/50 rounded text-xs">
+                  <span className="text-purple-300">
+                    🧬 {hoveredDriverProfile ? `Matching: ${miloActiveDriver?.name}` : 'NO PROFILE!'}
+                  </span>
+                </div>
+              )}
+
               <Button
                 variant="outline"
                 size="sm"
@@ -2005,13 +2014,6 @@ export default function Schedules() {
 
                       const cellId = `cell-${dayISO}-${contract.tractorId}-${contract.startTime}`;
 
-                      // Log cell creation with occurrence count
-                      if (dayOccurrences.length === 0) {
-                        console.log('⚠️ DIAGNOSTIC: Creating EMPTY cell:', cellId);
-                      } else {
-                        console.log('✅ DIAGNOSTIC: Creating cell with', dayOccurrences.length, 'occurrence(s):', cellId);
-                      }
-
                       return (
                         <DroppableCell
                           key={day.toISOString()}
@@ -2030,20 +2032,23 @@ export default function Schedules() {
                                 const hasProfile = !!hoveredDriverProfile;
                                 const notRejected = !occ.isRejectedLoad;
 
-                                // DEBUG: Log calculation conditions for first few blocks
-                                if (occIndex < 2 && hasProfile) {
-                                  console.log('[MATCH CALC DEBUG]', {
+                                // DEBUG: Log calculation conditions for first 3 UNASSIGNED blocks
+                                if (isUnassigned && occIndex < 3) {
+                                  console.log('[MATCH CALC DEBUG] Unassigned block:', {
                                     blockId: occ.blockId,
                                     isUnassigned,
                                     hasProfile,
                                     notRejected,
+                                    activeDriverId,
+                                    selectedDriverId,
+                                    hoveredDriverId,
                                     willCalculate: isUnassigned && hasProfile && notRejected,
                                     profileData: hoveredDriverProfile ? {
                                       days: hoveredDriverProfile.preferredDays,
                                       times: hoveredDriverProfile.preferredStartTimes,
                                       tractors: hoveredDriverProfile.preferredTractors,
                                       contract: hoveredDriverProfile.preferredContractType,
-                                    } : null,
+                                    } : 'NO PROFILE - Driver may not have DNA analysis',
                                     occData: {
                                       serviceDate: occ.serviceDate,
                                       startTime: occ.startTime,
@@ -2101,8 +2106,14 @@ export default function Schedules() {
                                         data-testid={`occurrence-static-${occ.occurrenceId}`}
                                       >
                                         {/* Block ID */}
-                                        <div className="font-mono font-semibold text-foreground">
+                                        <div className="font-mono font-semibold text-foreground flex items-center gap-1">
                                           {occ.blockId}
+                                          {/* DEBUG: Show match score when driver is selected */}
+                                          {isUnassigned && hoveredDriverProfile && (
+                                            <span className="text-[8px] text-purple-500 font-bold">
+                                              {Math.round(dnaMatchScore * 100)}%
+                                            </span>
+                                          )}
                                         </div>
 
                                         {/* Tractor + Contract Type */}

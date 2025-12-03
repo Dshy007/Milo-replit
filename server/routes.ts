@@ -3778,6 +3778,19 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
         getFleetDNAStats(tenantId),
       ]);
 
+      // Debug: log first 2 profiles to see their data structure
+      if (profiles.length > 0) {
+        console.log('[DNA API] Sample profiles:', profiles.slice(0, 2).map(p => ({
+          driverId: p.driverId,
+          driverName: p.driverName,
+          preferredDays: p.preferredDays,
+          preferredTimes: p.preferredStartTimes,
+          preferredTractors: p.preferredTractors,
+          contractType: p.preferredContractType,
+          patternGroup: p.patternGroup,
+        })));
+      }
+
       res.json({
         profiles,
         stats,
