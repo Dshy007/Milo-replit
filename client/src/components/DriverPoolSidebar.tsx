@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
-import { User, Search, ChevronDown, ChevronRight, Sparkles, ExternalLink, Calendar, Clock, Truck, Dna } from "lucide-react";
+import { User, Search, ChevronDown, ChevronRight, Sparkles, ExternalLink, Calendar, Clock, Truck, Dna, Filter } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { DNAPatternBadge } from "@/components/DNAPatternBadge";
 import { ContractTypeBadge } from "@/components/ContractTypeBadge";
 import { useLocation } from "wouter";
+import { getMatchColor } from "@/lib/utils";
 import type { Driver, DriverDnaProfile } from "@shared/schema";
 
 type ShiftOccurrence = {
@@ -37,6 +38,12 @@ type DNAProfileResponse = {
   profiles: Record<string, DriverDnaProfile>;
 };
 
+// Matching block type for display
+type MatchingBlock = {
+  occurrence: ShiftOccurrence;
+  matchScore: number;
+};
+
 interface DraggableDriverProps {
   driver: Driver;
   dnaProfile?: DriverDnaProfile | null;
@@ -44,12 +51,14 @@ interface DraggableDriverProps {
   onHoverEnd?: () => void;
   onSelect?: (driverId: string) => void;
   isSelected?: boolean;
-  matchingBlockCount?: number;
+  matchingBlocks?: MatchingBlock[];
+  onBlockClick?: (occurrenceId: string) => void;
 }
 
 // Draggable driver flip card component
-function DraggableDriver({ driver, dnaProfile, onHoverStart, onHoverEnd, onSelect, isSelected, matchingBlockCount }: DraggableDriverProps) {
+function DraggableDriver({ driver, dnaProfile, onHoverStart, onHoverEnd, onSelect, isSelected, matchingBlocks = [], onBlockClick }: DraggableDriverProps) {
   const [isFlipped, setIsFlipped] = useState(false);
+  const matchingBlockCount = matchingBlocks.length;
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: `driver-${driver.id}`,
     data: {
@@ -66,14 +75,26 @@ function DraggableDriver({ driver, dnaProfile, onHoverStart, onHoverEnd, onSelec
     }
   };
 
-  // Format day names for display
+  // Format day names for display (Sun-Sat order with proper abbreviations)
+  const DAY_ORDER = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+  const DAY_ABBREV: Record<string, string> = {
+    sunday: "Sun", monday: "Mon", tuesday: "Tue", wednesday: "Wed",
+    thursday: "Thu", friday: "Fri", saturday: "Sat",
+  };
   const formatDays = (days: string[] | null | undefined) => {
     if (!days || days.length === 0) return "Any";
-    return days.map(d => d.slice(0, 3)).join(", ");
+    // Sort by day order (Sun-Sat) and format to abbreviations
+    const sorted = [...days].sort((a, b) =>
+      DAY_ORDER.indexOf(a.toLowerCase()) - DAY_ORDER.indexOf(b.toLowerCase())
+    );
+    return sorted.map(d => DAY_ABBREV[d.toLowerCase()] || d.slice(0, 3)).join(", ");
   };
 
-  // Calculate height based on whether it's flipped
-  const cardHeight = isFlipped ? (dnaProfile ? 160 : 100) : 40;
+  // Calculate height based on whether it's flipped and how many blocks to show
+  const blocksToShow = Math.min(matchingBlocks.length, 4);
+  const cardHeight = isFlipped
+    ? (dnaProfile ? 120 + blocksToShow * 32 : 100) // Base height + blocks
+    : 40;
 
   return (
     <div
@@ -96,7 +117,7 @@ function DraggableDriver({ driver, dnaProfile, onHoverStart, onHoverEnd, onSelec
           transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0deg)',
         }}
       >
-        {/* FRONT FACE - Compact driver chip */}
+        {/* FRONT FACE - Compact driver chip with match indicator */}
         <div
           className={`
             absolute inset-0 flex items-center gap-1.5 p-2 pr-1.5 rounded-lg
@@ -116,6 +137,12 @@ function DraggableDriver({ driver, dnaProfile, onHoverStart, onHoverEnd, onSelec
             {driver.firstName} {driver.lastName}
           </span>
           <div className="flex items-center gap-1 flex-shrink-0">
+            {/* Match count badge - visible on front */}
+            {matchingBlockCount !== undefined && matchingBlockCount > 0 && (
+              <Badge variant="secondary" className="h-5 px-1.5 text-[10px] font-bold bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300 border-0">
+                {matchingBlockCount}
+              </Badge>
+            )}
             {dnaProfile && (
               <>
                 <DNAPatternBadge pattern={dnaProfile.patternGroup} size="sm" showIcon={false} />
@@ -128,10 +155,10 @@ function DraggableDriver({ driver, dnaProfile, onHoverStart, onHoverEnd, onSelec
           </div>
         </div>
 
-        {/* BACK FACE - Profile details */}
+        {/* BACK FACE - Matching Blocks */}
         <div
           className={`
-            absolute inset-0 p-3 rounded-lg overflow-hidden
+            absolute inset-0 p-2.5 rounded-lg overflow-hidden
             bg-gradient-to-br from-purple-50 to-violet-50 dark:from-purple-950/40 dark:to-violet-950/40
             border-2 border-purple-400 dark:border-purple-600
             shadow-[0_0_20px_rgba(147,51,234,0.3)]
@@ -143,59 +170,76 @@ function DraggableDriver({ driver, dnaProfile, onHoverStart, onHoverEnd, onSelec
           }}
           onClick={handleClick}
         >
-          {/* Header */}
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-2">
-              <div className="w-6 h-6 rounded-full bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center flex-shrink-0">
-                <User className="w-3 h-3 text-white" />
-              </div>
-              <span className="font-semibold text-xs truncate">{driver.firstName} {driver.lastName}</span>
-            </div>
-            <div className="flex items-center gap-1 flex-shrink-0">
-              <DNAPatternBadge pattern={dnaProfile?.patternGroup} size="sm" showIcon={false} />
-              <ContractTypeBadge contractType={dnaProfile?.preferredContractType} size="sm" showIcon={false} />
-            </div>
-          </div>
-
           {dnaProfile ? (
             <>
-              {/* Quick Stats */}
-              <div className="space-y-1 text-[10px] mb-2">
-                <div className="flex items-center gap-1.5 text-muted-foreground">
-                  <Calendar className="w-3 h-3 text-purple-500 flex-shrink-0" />
-                  <span className="truncate">{formatDays(dnaProfile.preferredDays)}</span>
+              {/* Compact header with DNA summary */}
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="flex items-center gap-1.5">
+                  <DNAPatternBadge pattern={dnaProfile.patternGroup} size="sm" showIcon={false} />
+                  <ContractTypeBadge contractType={dnaProfile.preferredContractType} size="sm" showIcon={false} />
                 </div>
-                <div className="flex items-center gap-1.5 text-muted-foreground">
-                  <Clock className="w-3 h-3 text-purple-500 flex-shrink-0" />
-                  <span className="truncate">{dnaProfile.preferredStartTimes?.slice(0, 2).join(", ") || "Any time"}</span>
-                </div>
-                <div className="flex items-center gap-1.5 text-muted-foreground">
-                  <Truck className="w-3 h-3 text-purple-500 flex-shrink-0" />
-                  <span className="truncate">{dnaProfile.preferredTractors?.slice(0, 2).join(", ") || "Any tractor"}</span>
-                </div>
-              </div>
-
-              {/* AI Summary snippet */}
-              {dnaProfile.aiSummary && (
-                <div className="text-[9px] text-muted-foreground italic line-clamp-2 mb-1 border-t border-purple-200 dark:border-purple-800 pt-1">
-                  {dnaProfile.aiSummary}
-                </div>
-              )}
-
-              {/* Match count and score */}
-              <div className="flex items-center justify-between text-[10px] border-t border-purple-200 dark:border-purple-800 pt-1">
-                {matchingBlockCount !== undefined && matchingBlockCount > 0 ? (
-                  <div className="flex items-center gap-1 text-purple-600 dark:text-purple-400">
-                    <Sparkles className="w-3 h-3" />
-                    <span className="font-medium">{matchingBlockCount} matches</span>
-                  </div>
-                ) : (
-                  <span className="text-muted-foreground">No matches</span>
-                )}
-                <span className="font-bold text-purple-600">
+                <span className={`text-xs font-bold ${dnaProfile.consistencyScore ? getMatchColor(Math.round(Number(dnaProfile.consistencyScore) * 100)) : 'text-muted-foreground'}`}>
                   {dnaProfile.consistencyScore ? `${Math.round(Number(dnaProfile.consistencyScore) * 100)}%` : "—"}
                 </span>
               </div>
+
+              {/* DNA preference row */}
+              <div className="flex items-center gap-2 text-[9px] text-muted-foreground mb-2 pb-1.5 border-b border-purple-200 dark:border-purple-700">
+                <span className="flex items-center gap-0.5">
+                  <Calendar className="w-2.5 h-2.5" />
+                  {formatDays(dnaProfile.preferredDays)}
+                </span>
+                <span className="flex items-center gap-0.5">
+                  <Clock className="w-2.5 h-2.5" />
+                  {dnaProfile.preferredStartTimes?.[0] || "Any"}
+                </span>
+              </div>
+
+              {/* Matching Blocks List */}
+              {matchingBlocks.length > 0 ? (
+                <div className="space-y-1">
+                  <div className="text-[9px] font-semibold text-purple-700 dark:text-purple-300 flex items-center gap-1">
+                    <Sparkles className="w-2.5 h-2.5" />
+                    Matching Blocks
+                  </div>
+                  {matchingBlocks.slice(0, 4).map(({ occurrence: occ, matchScore }) => {
+                    const date = new Date(occ.serviceDate + 'T00:00:00');
+                    const dayAbbrev = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][date.getDay()];
+                    const dateStr = `${date.getMonth() + 1}/${date.getDate()}`;
+                    const scorePercent = Math.round(matchScore * 100);
+                    const scoreColor = scorePercent >= 75 ? 'text-emerald-600 dark:text-emerald-400' :
+                                       scorePercent >= 50 ? 'text-green-600 dark:text-green-400' :
+                                       'text-lime-600 dark:text-lime-400';
+
+                    return (
+                      <button
+                        key={occ.occurrenceId}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onBlockClick?.(occ.occurrenceId);
+                        }}
+                        className="w-full flex items-center justify-between px-1.5 py-1 rounded bg-white/60 dark:bg-slate-800/60 border border-purple-200 dark:border-purple-700 hover:bg-purple-100 dark:hover:bg-purple-900/40 transition-colors text-[10px]"
+                      >
+                        <span className="font-mono font-medium truncate">{occ.blockId}</span>
+                        <span className="flex items-center gap-1.5 text-muted-foreground">
+                          <span>{dayAbbrev} {dateStr}</span>
+                          <span>@ {occ.startTime}</span>
+                          <span className={`font-bold ${scoreColor}`}>{scorePercent}%</span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                  {matchingBlocks.length > 4 && (
+                    <div className="text-[9px] text-center text-muted-foreground">
+                      +{matchingBlocks.length - 4} more
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="text-[10px] text-center text-muted-foreground py-2 italic">
+                  No matching blocks available
+                </div>
+              )}
             </>
           ) : (
             <div className="flex flex-col items-center justify-center py-2">
@@ -218,6 +262,7 @@ interface DriverPoolSidebarProps {
   hoveredDriverId?: string | null;
   selectedDriverId?: string | null;
   unassignedOccurrences?: ShiftOccurrence[];
+  onBlockClick?: (occurrenceId: string) => void;
 }
 
 // Droppable zone for Available Drivers section
@@ -249,74 +294,87 @@ function timeToMinutes(time: string): number {
 }
 
 // Calculate match score between a block and a DNA profile
+// "Holy Grail" approach: Day + Time + Contract Type MUST all match
+// Returns 1.0 (100%) if all match, 0 if any fails
 function calculateBlockMatch(
   occurrence: ShiftOccurrence,
   dnaProfile: DriverDnaProfile,
   debug: boolean = false
 ): number {
-  let score = 0;
+  // REQUIRED: Contract type must match
+  const driverContract = dnaProfile.preferredContractType?.toLowerCase();
+  const blockContract = occurrence.contractType?.toLowerCase();
+
+  if (driverContract && blockContract && driverContract !== blockContract) {
+    if (debug) {
+      console.log('[DNA MATCH] Contract mismatch - block rejected', {
+        blockId: occurrence.blockId,
+        blockContract: blockContract,
+        driverContract: driverContract,
+      });
+    }
+    return 0;
+  }
 
   // Get day of week from service date (lowercase full day names to match DB format)
   const date = new Date(occurrence.serviceDate + 'T00:00:00');
   const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
   const dayOfWeek = days[date.getDay()];
 
-  // Day match (40% weight)
+  // REQUIRED: Day must match exactly
   const preferredDays = dnaProfile.preferredDays || [];
-  // Check both exact match and case-insensitive match for robustness
   const dayMatches = preferredDays.some(d => d.toLowerCase() === dayOfWeek);
-  if (dayMatches) {
-    score += 0.4;
+
+  if (!dayMatches) {
+    if (debug) {
+      console.log('[DNA MATCH] Day mismatch - block rejected', {
+        blockId: occurrence.blockId,
+        blockDay: dayOfWeek,
+        profileDays: preferredDays,
+      });
+    }
+    return 0;
   }
 
-  // Time match (35% weight) - check if within 2 hours of preferred
+  // REQUIRED: Time must be within ±2 hours of preferred start time
   const preferredTimes = dnaProfile.preferredStartTimes || [];
   const blockTimeMinutes = timeToMinutes(occurrence.startTime);
-  const timeMatches = preferredTimes.some((prefTime: string) => {
+
+  let bestTimeDiff = Infinity;
+  for (const prefTime of preferredTimes) {
     const prefMinutes = timeToMinutes(prefTime);
     const diff = Math.abs(blockTimeMinutes - prefMinutes);
     // Handle wraparound for overnight times
     const wrapDiff = Math.min(diff, 1440 - diff);
-    return wrapDiff <= 120; // Within 2 hours
-  });
-  if (timeMatches) {
-    score += 0.35;
+    bestTimeDiff = Math.min(bestTimeDiff, wrapDiff);
   }
 
-  // Tractor match (25% weight)
-  const preferredTractors = dnaProfile.preferredTractors || [];
-  const tractorMatches = occurrence.tractorId && preferredTractors.includes(occurrence.tractorId);
-  if (tractorMatches) {
-    score += 0.25;
+  const timeMatches = bestTimeDiff <= 120; // Within 2 hours
+
+  if (!timeMatches) {
+    if (debug) {
+      console.log('[DNA MATCH] Time mismatch - block rejected', {
+        blockId: occurrence.blockId,
+        blockTime: occurrence.startTime,
+        profileTimes: preferredTimes,
+        timeDiffMinutes: bestTimeDiff,
+      });
+    }
+    return 0;
   }
 
-  // Contract type bonus (+10% if matches, capped at 100%)
-  const contractMatches = dnaProfile.preferredContractType && occurrence.contractType &&
-    dnaProfile.preferredContractType.toLowerCase() === occurrence.contractType.toLowerCase();
-  if (contractMatches) {
-    score = Math.min(1.0, score + 0.1);
-  }
-
-  // Debug logging - now includes all match results and final score
+  // All criteria match - valid match!
   if (debug) {
-    console.log('[DNA MATCH DEBUG]', {
+    console.log('[DNA MATCH] Valid match found!', {
       blockId: occurrence.blockId,
-      blockDate: occurrence.serviceDate,
       blockDay: dayOfWeek,
       blockTime: occurrence.startTime,
-      blockTractor: occurrence.tractorId,
-      blockContract: occurrence.contractType,
-      profileDays: preferredDays,
-      profileTimes: dnaProfile.preferredStartTimes,
-      profileTractors: dnaProfile.preferredTractors,
-      profileContract: dnaProfile.preferredContractType,
-      matches: { dayMatches, timeMatches, tractorMatches, contractMatches },
-      finalScore: score,
-      scoreBreakdown: `Day(${dayMatches ? 0.4 : 0}) + Time(${timeMatches ? 0.35 : 0}) + Tractor(${tractorMatches ? 0.25 : 0}) + Contract(${contractMatches ? 0.1 : 0})`,
+      blockContract: blockContract,
+      timeDiffMinutes: bestTimeDiff,
     });
   }
 
-  return score;
+  return 1.0; // 100% match
 }
 
 export function DriverPoolSidebar({
@@ -328,11 +386,13 @@ export function DriverPoolSidebar({
   hoveredDriverId,
   selectedDriverId,
   unassignedOccurrences = [],
+  onBlockClick,
 }: DriverPoolSidebarProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [showAvailable, setShowAvailable] = useState(true);
   const [showAssigned, setShowAssigned] = useState(true);
   const [showUnavailable, setShowUnavailable] = useState(false);
+  const [contractFilter, setContractFilter] = useState<'all' | 'solo1' | 'solo2'>('all');
 
   // Fetch all drivers
   const { data: drivers = [], isLoading: driversLoading } = useQuery<Driver[]>({
@@ -377,13 +437,28 @@ export function DriverPoolSidebar({
     (d.status !== 'active' || !d.loadEligible)
   );
 
-  // Filter by search query
+  // Filter by search query and contract type
   const filterDrivers = (driverList: Driver[]) => {
-    if (!searchQuery) return driverList;
-    const query = searchQuery.toLowerCase();
-    return driverList.filter(d =>
-      `${d.firstName} ${d.lastName}`.toLowerCase().includes(query)
-    );
+    let filtered = driverList;
+
+    // Filter by search query
+    if (searchQuery) {
+      const query = searchQuery.toLowerCase();
+      filtered = filtered.filter(d =>
+        `${d.firstName} ${d.lastName}`.toLowerCase().includes(query)
+      );
+    }
+
+    // Filter by contract type (based on DNA profile)
+    if (contractFilter !== 'all') {
+      filtered = filtered.filter(d => {
+        const profile = dnaProfileMap.get(d.id);
+        if (!profile) return false;
+        return profile.preferredContractType?.toLowerCase() === contractFilter;
+      });
+    }
+
+    return filtered;
   };
 
   const filteredAvailable = filterDrivers(availableDrivers);
@@ -414,29 +489,50 @@ export function DriverPoolSidebar({
     };
   };
 
-  // Calculate matching block count for a driver
-  const getMatchingBlockCount = (driverId: string): number => {
+  // Calculate matching blocks for a driver (Holy Grail: day + time + contract must match)
+  // Returns ONE block per preferred day (driver can only work one block per day)
+  const getMatchingBlocks = (driverId: string): MatchingBlock[] => {
     const profile = dnaProfileMap.get(driverId);
     if (!profile) {
-      console.log('[SIDEBAR MATCH] No profile for driver:', driverId);
-      return 0;
+      return [];
     }
 
-    console.log('[SIDEBAR MATCH] Calculating for driver:', driverId, {
-      unassignedCount: unassignedOccurrences.length,
-      profileDays: profile.preferredDays,
-      profileTimes: profile.preferredStartTimes,
-      profileTractors: profile.preferredTractors,
-    });
+    const allMatches = unassignedOccurrences
+      .map(occ => ({
+        occurrence: occ,
+        matchScore: calculateBlockMatch(occ, profile, false),
+      }))
+      .filter(item => item.matchScore > 0) // Only blocks that match all criteria
+      .sort((a, b) => {
+        // Sort by date first, then by how close to preferred time
+        const dateCompare = a.occurrence.serviceDate.localeCompare(b.occurrence.serviceDate);
+        if (dateCompare !== 0) return dateCompare;
+        // For same date, prefer time closest to preferred start time
+        const prefTimes = profile.preferredStartTimes || [];
+        const prefMinutes = prefTimes.length > 0 ? timeToMinutes(prefTimes[0]) : 0;
+        const aDiff = Math.abs(timeToMinutes(a.occurrence.startTime) - prefMinutes);
+        const bDiff = Math.abs(timeToMinutes(b.occurrence.startTime) - prefMinutes);
+        return aDiff - bDiff;
+      });
 
-    const matches = unassignedOccurrences.filter(occ => {
-      const score = calculateBlockMatch(occ, profile, true); // Enable debug
-      console.log('[SIDEBAR MATCH] Block:', occ.blockId, 'Score:', score);
-      return score >= 0.5; // Count blocks with 50%+ match
-    });
+    // ONE block per day - pick the best match for each unique date
+    // Driver can only work one block per day, but we show ALL valid days
+    // The rolling 6-day rule and 38hr reset logic will determine which are actually feasible
+    const seenDates = new Set<string>();
+    const onePerDay: MatchingBlock[] = [];
 
-    console.log('[SIDEBAR MATCH] Total matches for', driverId, ':', matches.length);
-    return matches.length;
+    for (const match of allMatches) {
+      const date = match.occurrence.serviceDate;
+      if (!seenDates.has(date)) {
+        seenDates.add(date);
+        onePerDay.push(match);
+      }
+    }
+
+    // Return all valid matches (one per day) - no artificial cap
+    // The scheduling rules (rolling 6, 38hr reset) determine actual feasibility
+    // This gives the scheduler visibility into ALL options for this driver
+    return onePerDay;
   };
 
   return (
@@ -446,7 +542,7 @@ export function DriverPoolSidebar({
         <h2 className="text-lg font-semibold mb-3">Driver Pool</h2>
 
         {/* Search */}
-        <div className="relative">
+        <div className="relative mb-3">
           <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder="Search drivers..."
@@ -454,6 +550,37 @@ export function DriverPoolSidebar({
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-8"
           />
+        </div>
+
+        {/* Contract Type Filter */}
+        <div className="flex items-center gap-2">
+          <Filter className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+          <div className="flex gap-1 flex-1">
+            <Button
+              variant={contractFilter === 'all' ? 'default' : 'outline'}
+              size="sm"
+              className="flex-1 h-7 text-xs"
+              onClick={() => setContractFilter('all')}
+            >
+              All
+            </Button>
+            <Button
+              variant={contractFilter === 'solo1' ? 'default' : 'outline'}
+              size="sm"
+              className={`flex-1 h-7 text-xs ${contractFilter === 'solo1' ? 'bg-blue-600 hover:bg-blue-700' : ''}`}
+              onClick={() => setContractFilter('solo1')}
+            >
+              Solo1
+            </Button>
+            <Button
+              variant={contractFilter === 'solo2' ? 'default' : 'outline'}
+              size="sm"
+              className={`flex-1 h-7 text-xs ${contractFilter === 'solo2' ? 'bg-emerald-600 hover:bg-emerald-700' : ''}`}
+              onClick={() => setContractFilter('solo2')}
+            >
+              Solo2
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -495,7 +622,8 @@ export function DriverPoolSidebar({
                       onHoverEnd={onDriverHoverEnd}
                       onSelect={onDriverSelect}
                       isSelected={selectedDriverId === driver.id}
-                      matchingBlockCount={getMatchingBlockCount(driver.id)}
+                      matchingBlocks={getMatchingBlocks(driver.id)}
+                      onBlockClick={onBlockClick}
                     />
                   ))
                 )}
@@ -545,6 +673,7 @@ export function DriverPoolSidebar({
                           onHoverEnd={onDriverHoverEnd}
                           onSelect={onDriverSelect}
                           isSelected={selectedDriverId === driver.id}
+                          matchingBlocks={[]} // Assigned drivers don't show matches
                         />
                         <div className="text-xs text-blue-700 dark:text-blue-300 font-medium pl-6">
                           {counts.total} shift{counts.total !== 1 ? 's' : ''} ({typeSummary})
