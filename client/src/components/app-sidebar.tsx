@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Home, Users, Calendar, Route, Truck, FileText, Upload, Sparkles, Settings, LogOut, MessageSquare, Brain, FileSpreadsheet, CalendarCheck, GitBranch, Send, Loader2, ChevronDown, ChevronUp, User, Trash2, RotateCcw } from "lucide-react";
+import { Home, Users, Calendar, Route, Truck, FileText, Upload, Sparkles, Settings, LogOut, MessageSquare, Brain, FileSpreadsheet, CalendarCheck, GitBranch, Send, Loader2, ChevronDown, ChevronUp, User, Trash2, RotateCcw, Dna } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -69,6 +69,12 @@ const navItems = [
     url: "/special-requests",
     icon: MessageSquare,
     testId: "nav-special-requests",
+  },
+  {
+    title: "Driver Profile",
+    url: "/schedule-intelligence",
+    icon: Dna,
+    testId: "nav-schedule-intelligence",
   },
   {
     title: "Auto-Build",

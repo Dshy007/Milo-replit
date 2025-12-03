@@ -22,6 +22,7 @@ import Loads from "@/pages/Loads";
 import Import from "@/pages/Import";
 import Chat from "@/pages/Chat";
 import SpecialRequests from "@/pages/SpecialRequests";
+import ScheduleIntelligence from "@/pages/ScheduleIntelligence";
 import AutoBuild from "@/pages/AutoBuild";
 import DriverAvailability from "@/pages/DriverAvailability";
 import NotFound from "@/pages/not-found";
@@ -122,6 +123,13 @@ function Router() {
         <ProtectedRoute>
           <ProtectedLayout>
             <SpecialRequests />
+          </ProtectedLayout>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/schedule-intelligence">
+        <ProtectedRoute>
+          <ProtectedLayout>
+            <ScheduleIntelligence />
           </ProtectedLayout>
         </ProtectedRoute>
       </Route>

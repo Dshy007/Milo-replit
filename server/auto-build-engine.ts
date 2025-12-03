@@ -8,12 +8,14 @@ import {
   protectedDriverRules,
   autoBuildRuns,
   driverAvailabilityPreferences,
+  driverDnaProfiles,
   type Block,
   type Driver,
   type InsertAutoBuildRun,
   type AutoBuildRun,
+  type DriverDnaProfile,
 } from "@shared/schema";
-import { startOfWeek, endOfWeek, addWeeks, format, differenceInDays } from "date-fns";
+import { startOfWeek, endOfWeek, addWeeks, format, differenceInDays, getDay } from "date-fns";
 import {
   generateBlockSignature,
   getPatternsForSignature,
@@ -56,6 +58,14 @@ export interface AutoBuildPreview {
   lowConfidence: number;
   unassignable: BlockSuggestion[];
   warnings: string[];
+}
+
+/**
+ * Options for filtering auto-build generation
+ */
+export interface AutoBuildOptions {
+  soloTypeFilter?: "solo1" | "solo2" | "team" | null;
+  driverId?: string | null;
 }
 
 /**
@@ -102,8 +112,74 @@ async function calculateComplianceScore(
     allBlockAssignments,
     block.id
   );
-  
+
   return validation.canAssign ? 1.0 : 0.0;
+}
+
+/**
+ * Calculate DNA profile score for a driver-block assignment
+ * Returns a bonus score (0-0.15) based on how well the block matches the driver's DNA profile
+ *
+ * DNA matching criteria (each contributes up to 0.05):
+ * - Preferred day of week
+ * - Preferred start time (within 1 hour)
+ * - Preferred tractor
+ * - Preferred contract type
+ *
+ * The bonus is scaled by the driver's consistency score (more consistent = more reliable DNA)
+ */
+function calculateDNAScore(
+  dnaProfile: DriverDnaProfile | null,
+  block: Block
+): number {
+  if (!dnaProfile) return 0;
+
+  let dnaBonus = 0;
+  const blockDate = new Date(block.startTimestamp);
+  const dayOfWeek = getDay(blockDate);
+  const blockStartTime = format(blockDate, "HH:mm");
+  const blockTractorId = block.tractorId || "";
+  const blockSoloType = block.soloType?.toLowerCase() || "";
+
+  // Map day index to day name (0 = Sunday, etc.)
+  const dayNames = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+  const blockDayName = dayNames[dayOfWeek];
+
+  // Check preferred day match (5% bonus)
+  if (dnaProfile.preferredDays && dnaProfile.preferredDays.includes(blockDayName)) {
+    dnaBonus += 0.05;
+  }
+
+  // Check preferred start time match (5% bonus) - allow 1 hour tolerance
+  if (dnaProfile.preferredStartTimes && dnaProfile.preferredStartTimes.length > 0) {
+    const blockHour = parseInt(blockStartTime.split(":")[0]);
+    const timeMatch = dnaProfile.preferredStartTimes.some(prefTime => {
+      const prefHour = parseInt(prefTime.split(":")[0]);
+      return Math.abs(blockHour - prefHour) <= 1;
+    });
+    if (timeMatch) {
+      dnaBonus += 0.05;
+    }
+  }
+
+  // Check preferred tractor match (3% bonus)
+  if (dnaProfile.preferredTractors && blockTractorId) {
+    if (dnaProfile.preferredTractors.includes(blockTractorId)) {
+      dnaBonus += 0.03;
+    }
+  }
+
+  // Check preferred contract type match (2% bonus)
+  if (dnaProfile.preferredContractType && blockSoloType) {
+    if (dnaProfile.preferredContractType.toLowerCase() === blockSoloType) {
+      dnaBonus += 0.02;
+    }
+  }
+
+  // Scale bonus by consistency score (more consistent drivers get full bonus)
+  const consistencyMultiplier = parseFloat(dnaProfile.consistencyScore as string) || 0.5;
+
+  return dnaBonus * consistencyMultiplier;
 }
 
 /**
@@ -167,29 +243,40 @@ async function getProtectedDriverForBlock(
 
 /**
  * Generate auto-build suggestions for a target week
+ * @param tenantId - The tenant ID
+ * @param targetWeekStart - Start date for the target week
+ * @param userId - Optional user ID for tracking
+ * @param options - Optional filtering options (soloTypeFilter, driverId)
  */
 export async function generateAutoBuildPreview(
   tenantId: string,
   targetWeekStart: Date,
-  userId?: string
+  userId?: string,
+  options?: AutoBuildOptions
 ): Promise<AutoBuildPreview> {
   const weekStart = startOfWeek(targetWeekStart, { weekStartsOn: 0 });
   const weekEnd = endOfWeek(targetWeekStart, { weekStartsOn: 0 });
-  
-  // Fetch all blocks for the target week
+
+  // Build where conditions for blocks query
+  const blockWhereConditions = [
+    eq(blocks.tenantId, tenantId),
+    gte(blocks.startTimestamp, weekStart),
+    lt(blocks.startTimestamp, weekEnd)
+  ];
+
+  // Add soloType filter if specified
+  if (options?.soloTypeFilter) {
+    blockWhereConditions.push(eq(blocks.soloType, options.soloTypeFilter));
+  }
+
+  // Fetch blocks for the target week (with optional soloType filter)
   const weekBlocks = await db
     .select()
     .from(blocks)
-    .where(
-      and(
-        eq(blocks.tenantId, tenantId),
-        gte(blocks.startTimestamp, weekStart),
-        lt(blocks.startTimestamp, weekEnd)
-      )
-    );
+    .where(and(...blockWhereConditions));
 
-  // Fetch all drivers for the tenant
-  const allDrivers = await db
+  // Fetch all active, load-eligible drivers for the tenant
+  let allDrivers = await db
     .select()
     .from(drivers)
     .where(
@@ -199,6 +286,11 @@ export async function generateAutoBuildPreview(
         eq(drivers.loadEligible, true)
       )
     );
+
+  // If driverId filter specified, only consider that driver
+  if (options?.driverId) {
+    allDrivers = allDrivers.filter(d => d.id === options.driverId);
+  }
 
   // Fetch driver availability preferences for the tenant
   const allPreferences = await db
@@ -250,6 +342,18 @@ export async function generateAutoBuildPreview(
     .select()
     .from(blockAssignments)
     .where(eq(blockAssignments.tenantId, tenantId));
+
+  // Fetch Driver DNA profiles for intelligent matching
+  const allDnaProfiles = await db
+    .select()
+    .from(driverDnaProfiles)
+    .where(eq(driverDnaProfiles.tenantId, tenantId));
+
+  // Build a cache of DNA profiles by driver ID for efficient lookup
+  const dnaProfileCache = new Map<string, DriverDnaProfile>();
+  for (const profile of allDnaProfiles) {
+    dnaProfileCache.set(profile.driverId, profile);
+  }
 
   // Calculate current workload for each driver
   const driverWorkloads = new Map<string, number>();
@@ -375,11 +479,17 @@ export async function generateAutoBuildPreview(
       // If compliance score is 0, skip this driver (DOT violation)
       if (complianceScore === 0) continue;
 
-      // Calculate composite score: pattern (50%) + workload (30%) + compliance (20%)
+      // Calculate DNA profile bonus (0-0.15 based on preference matching)
+      const dnaProfile = dnaProfileCache.get(driver.id) || null;
+      const dnaBonus = calculateDNAScore(dnaProfile, block);
+
+      // Calculate composite score: pattern (50%) + workload (30%) + compliance (20%) + DNA bonus
+      // DNA bonus is additive (up to ~15% boost for perfect DNA match)
       const compositeScore =
         patternScore * 0.5 +
         workloadScore * 0.3 +
-        complianceScore * 0.2;
+        complianceScore * 0.2 +
+        dnaBonus;
 
       driverScores.push({
         driver,

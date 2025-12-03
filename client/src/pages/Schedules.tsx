@@ -1,7 +1,7 @@
-import { useState, useMemo, memo, useCallback } from "react";
+import React, { useState, useMemo, memo, useCallback, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format, startOfWeek, addWeeks, subWeeks, eachDayOfInterval, addDays } from "date-fns";
-import { ChevronLeft, ChevronRight, Calendar, User, Upload, X, LayoutGrid, List, UserMinus, Undo2, Redo2, CheckSquare, XSquare, Moon, Sun, Zap, Cpu, Shield, AlertTriangle, Search } from "lucide-react";
+import { ChevronLeft, ChevronRight, Calendar, User, Upload, X, LayoutGrid, List, UserMinus, Undo2, Redo2, CheckSquare, XSquare, Moon, Sun, Zap, Cpu, Shield, AlertTriangle, Search, Sparkles, Loader2, Dna, Clock, Truck } from "lucide-react";
 import { ImportOverlay } from "@/components/ImportOverlay";
 import { ImportWizard } from "@/components/ImportWizard";
 import { ActualsComparisonReview } from "@/components/ActualsComparisonReview";
@@ -35,7 +35,10 @@ import { useToast } from "@/hooks/use-toast";
 import { queryClient } from "@/lib/queryClient";
 import { DriverAssignmentModal } from "@/components/DriverAssignmentModal";
 import { ScheduleListView } from "@/components/ScheduleListView";
-import { DriverPoolSidebar } from "@/components/DriverPoolSidebar";
+import { DriverPoolSidebar, calculateBlockMatch } from "@/components/DriverPoolSidebar";
+import { ContractTypeBadge } from "@/components/ContractTypeBadge";
+import { DNAPatternBadge } from "@/components/DNAPatternBadge";
+import type { DriverDnaProfile } from "@shared/schema";
 import { AnalysisPanel } from "@/components/AnalysisPanel";
 import type { Block, BlockAssignment, Driver, Contract } from "@shared/schema";
 
@@ -331,6 +334,23 @@ export default function Schedules() {
     };
   } | null>(null);
 
+  // Driver DNA hover state for block matching
+  // selectedDriverId = "sticky" selection that persists for Milo interaction
+  // hoveredDriverId = ephemeral hover state for visual highlighting
+  const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
+  const [hoveredDriverId, setHoveredDriverId] = useState<string | null>(null);
+  const [isCardFlipped, setIsCardFlipped] = useState(false); // Flip card state
+  const [showAllBlocks, setShowAllBlocks] = useState(false); // Show all matching blocks vs top 4
+
+  // The "active" driver is either selected (sticky) or hovered
+  const activeDriverId = selectedDriverId || hoveredDriverId;
+
+  // Reset flip state when driver changes
+  useEffect(() => {
+    setIsCardFlipped(false);
+    setShowAllBlocks(false);
+  }, [selectedDriverId]);
+
   // Use global theme
   const { themeMode, setThemeMode, themeStyles } = useTheme();
 
@@ -357,6 +377,67 @@ export default function Schedules() {
   const { data: allDrivers = [] } = useQuery<Driver[]>({
     queryKey: ["/api/drivers"],
   });
+
+  // Fetch all DNA profiles for block matching
+  const { data: dnaData } = useQuery<{ profiles: DriverDnaProfile[]; stats: any }>({
+    queryKey: ["/api/driver-dna"],
+  });
+
+  // Convert DNA profiles array to map for easy lookup
+  const dnaProfileMap = useMemo(() => {
+    const map = new Map<string, DriverDnaProfile>();
+    if (dnaData?.profiles) {
+      for (const profile of dnaData.profiles) {
+        map.set(profile.driverId, profile);
+      }
+    }
+    return map;
+  }, [dnaData]);
+
+  // Get the active driver's DNA profile (selected or hovered)
+  // Use || null to ensure undefined from .get() becomes null
+  const activeDriverProfile = activeDriverId ? (dnaProfileMap.get(activeDriverId) || null) : null;
+
+  // Get the active driver's info for the Milo assistant
+  const miloActiveDriver = useMemo(() => {
+    if (!activeDriverId) return null;
+    const driver = allDrivers.find(d => d.id === activeDriverId);
+    if (!driver) return null;
+    return {
+      id: driver.id,
+      name: `${driver.firstName} ${driver.lastName}`,
+      profile: dnaProfileMap.get(driver.id) || null,
+    };
+  }, [activeDriverId, allDrivers, dnaProfileMap]);
+
+  // Legacy aliases for compatibility
+  const hoveredDriverProfile = activeDriverProfile;
+  const hoveredDriverName = miloActiveDriver?.name || null;
+
+  // DEBUG: Log when driver profile changes
+  useEffect(() => {
+    console.log('[DNA DEBUG STATE]', {
+      activeDriverId,
+      selectedDriverId,
+      hoveredDriverId,
+      hasActiveProfile: !!activeDriverProfile,
+      hasHoveredProfile: !!hoveredDriverProfile,
+      dnaProfileMapSize: dnaProfileMap.size,
+    });
+    if (activeDriverId) {
+      console.log('[DNA DEBUG] Active driver changed:', activeDriverId);
+      console.log('[DNA DEBUG] Profile found:', activeDriverProfile);
+      if (activeDriverProfile) {
+        console.log('[DNA DEBUG] Preferred days:', activeDriverProfile.preferredDays);
+        console.log('[DNA DEBUG] Preferred times:', activeDriverProfile.preferredStartTimes);
+        console.log('[DNA DEBUG] Preferred tractors:', activeDriverProfile.preferredTractors);
+        console.log('[DNA DEBUG] Contract type:', activeDriverProfile.preferredContractType);
+      } else {
+        console.log('[DNA DEBUG WARNING] Active driver has NO DNA profile in map!');
+        console.log('[DNA DEBUG] Available profile IDs:', Array.from(dnaProfileMap.keys()));
+      }
+    }
+  }, [activeDriverId, selectedDriverId, hoveredDriverId, activeDriverProfile, hoveredDriverProfile, dnaProfileMap]);
 
   const handleOccurrenceClick = (occurrence: ShiftOccurrence) => {
     setSelectedOccurrence(occurrence);
@@ -1365,6 +1446,26 @@ export default function Schedules() {
     return calendarData.occurrences.filter(matchesSearch).length;
   }, [searchQuery, calendarData, matchesSearch]);
 
+  // Get list of unassigned occurrences for DNA matching
+  const unassignedOccurrences = useMemo(() => {
+    if (!calendarData) return [];
+    return calendarData.occurrences.filter(occ => !occ.driverId);
+  }, [calendarData]);
+
+  // Get top matching blocks for the active driver, sorted by match score
+  const topMatchingBlocks = useMemo(() => {
+    if (!miloActiveDriver?.profile) return [];
+    const profile = miloActiveDriver.profile;
+
+    return unassignedOccurrences
+      .map(occ => ({
+        occurrence: occ,
+        matchScore: calculateBlockMatch(occ, profile),
+      }))
+      .filter(item => item.matchScore >= 0.5) // Only 50%+ matches
+      .sort((a, b) => b.matchScore - a.matchScore); // Highest first
+  }, [miloActiveDriver?.profile, unassignedOccurrences]);
+
   // Group occurrences by contract (tractor), then by date
   // This allows each row to show one tractor's schedule across the week
   const occurrencesByContract = useMemo(() => {
@@ -1792,6 +1893,12 @@ export default function Schedules() {
           <DriverPoolSidebar
             currentWeekStart={weekRange.weekStart}
             currentWeekEnd={addDays(weekRange.weekStart, 6)}
+            onDriverHoverStart={(driverId) => setHoveredDriverId(driverId)}
+            onDriverHoverEnd={() => setHoveredDriverId(null)}
+            onDriverSelect={(driverId) => setSelectedDriverId(prev => prev === driverId ? null : driverId)}
+            hoveredDriverId={hoveredDriverId}
+            selectedDriverId={selectedDriverId}
+            unassignedOccurrences={unassignedOccurrences}
           />
 
           {/* Calendar */}
@@ -1806,7 +1913,7 @@ export default function Schedules() {
               }}
             >
               <tr>
-                <th className="text-left p-3 font-semibold min-w-[220px] border-r shadow-sm">
+                <th className="text-left p-3 font-semibold min-w-[140px] border-r shadow-sm">
                   Start Times
                 </th>
                 {weekRange.weekDays.map((day) => (
@@ -1916,12 +2023,70 @@ export default function Schedules() {
                         >
                           {dayOccurrences.length > 0 ? (
                             <div className="space-y-1">
-                              {dayOccurrences.map((occ) => {
+                              {dayOccurrences.map((occ, occIndex) => {
                                 const isSearchMatch = searchQuery && matchesSearch(occ);
+                                // Calculate DNA match for UNASSIGNED blocks only
+                                const isUnassigned = !occ.driverId;
+                                const hasProfile = !!hoveredDriverProfile;
+                                const notRejected = !occ.isRejectedLoad;
+
+                                // DEBUG: Log calculation conditions for first few blocks
+                                if (occIndex < 2 && hasProfile) {
+                                  console.log('[MATCH CALC DEBUG]', {
+                                    blockId: occ.blockId,
+                                    isUnassigned,
+                                    hasProfile,
+                                    notRejected,
+                                    willCalculate: isUnassigned && hasProfile && notRejected,
+                                    profileData: hoveredDriverProfile ? {
+                                      days: hoveredDriverProfile.preferredDays,
+                                      times: hoveredDriverProfile.preferredStartTimes,
+                                      tractors: hoveredDriverProfile.preferredTractors,
+                                      contract: hoveredDriverProfile.preferredContractType,
+                                    } : null,
+                                    occData: {
+                                      serviceDate: occ.serviceDate,
+                                      startTime: occ.startTime,
+                                      tractorId: occ.tractorId,
+                                      contractType: occ.contractType,
+                                    }
+                                  });
+                                }
+
+                                const dnaMatchScore = isUnassigned && hasProfile && notRejected
+                                  ? calculateBlockMatch(occ, hoveredDriverProfile!, true) // Always debug for now
+                                  : 0;
+                                const isHighMatch = dnaMatchScore >= 0.75;
+                                const isMedMatch = dnaMatchScore >= 0.5 && dnaMatchScore < 0.75;
+                                const isLowMatch = dnaMatchScore > 0 && dnaMatchScore < 0.5;
+                                const hasAnyMatch = dnaMatchScore > 0;
+
                                 return (
                                   <div
                                     key={occ.occurrenceId}
-                                    className={`space-y-1 ${isSearchMatch ? 'ring-2 ring-yellow-400 ring-offset-1 rounded-md bg-yellow-400/10' : ''}`}
+                                    className={`
+                                      rounded-md transition-all duration-300 ease-out
+                                      ${isSearchMatch ? 'ring-2 ring-yellow-400 ring-offset-1 bg-yellow-400/10' : ''}
+                                      ${hasAnyMatch ? 'transform scale-[1.02]' : ''}
+                                    `}
+                                    style={{
+                                      // AI purple glow theme for DNA matching
+                                      boxShadow: isHighMatch
+                                        ? '0 0 20px rgba(147, 51, 234, 0.6), 0 0 40px rgba(147, 51, 234, 0.3), inset 0 0 15px rgba(147, 51, 234, 0.15)'
+                                        : isMedMatch
+                                        ? '0 0 15px rgba(139, 92, 246, 0.5), 0 0 30px rgba(139, 92, 246, 0.2), inset 0 0 10px rgba(139, 92, 246, 0.1)'
+                                        : isLowMatch
+                                        ? '0 0 8px rgba(167, 139, 250, 0.4), inset 0 0 6px rgba(167, 139, 250, 0.08)'
+                                        : undefined,
+                                      outline: isHighMatch
+                                        ? '2px solid rgba(147, 51, 234, 0.8)'
+                                        : isMedMatch
+                                        ? '2px solid rgba(139, 92, 246, 0.7)'
+                                        : isLowMatch
+                                        ? '1px solid rgba(167, 139, 250, 0.5)'
+                                        : undefined,
+                                      outlineOffset: hasAnyMatch ? '1px' : undefined,
+                                    }}
                                   >
                                     {/* STATIC SECTION - Never moves */}
                                     <div className="relative group">
@@ -2096,22 +2261,61 @@ export default function Schedules() {
                                         </TooltipProvider>
                                       </DraggableOccurrence>
                                     ) : (
+                                      (() => {
+                                        // Calculate DNA match score if a driver is hovered/selected
+                                        const dnaMatchScore = hoveredDriverProfile && !occ.isRejectedLoad
+                                          ? calculateBlockMatch(occ, hoveredDriverProfile, false)
+                                          : 0;
+                                        const isHighMatch = dnaMatchScore >= 0.75;
+                                        const isMedMatch = dnaMatchScore >= 0.5 && dnaMatchScore < 0.75;
+                                        const isLowMatch = dnaMatchScore > 0 && dnaMatchScore < 0.5;
+
+                                        return (
                                       <div
                                         className="w-full p-2 rounded-b-md border border-t-0 border-dashed text-xs text-center transition-all cursor-pointer"
                                         style={{
-                                          // RED for rejected loads (Amazon rejected), YELLOW/AMBER for unassigned (driver not found in system)
-                                          backgroundColor: themeMode === 'day'
+                                          // DNA match highlighting with AI purple glow theme
+                                          backgroundColor: isHighMatch
+                                            ? 'rgba(147, 51, 234, 0.15)'  // purple-600
+                                            : isMedMatch
+                                            ? 'rgba(139, 92, 246, 0.1)'   // violet-500
+                                            : isLowMatch
+                                            ? 'rgba(167, 139, 250, 0.08)' // violet-400
+                                            : themeMode === 'day'
                                             ? (occ.isRejectedLoad ? 'rgba(239, 68, 68, 0.1)' : 'rgba(245, 158, 11, 0.1)')
                                             : (occ.isRejectedLoad ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)'),
-                                          borderColor: themeMode === 'day'
+                                          borderColor: isHighMatch
+                                            ? 'rgba(147, 51, 234, 0.5)'   // purple-600
+                                            : isMedMatch
+                                            ? 'rgba(139, 92, 246, 0.35)'  // violet-500
+                                            : isLowMatch
+                                            ? 'rgba(167, 139, 250, 0.2)'  // violet-400
+                                            : themeMode === 'day'
                                             ? (occ.isRejectedLoad ? 'rgba(239, 68, 68, 0.3)' : 'rgba(245, 158, 11, 0.3)')
                                             : (occ.isRejectedLoad ? 'rgba(239, 68, 68, 0.3)' : 'rgba(245, 158, 11, 0.3)'),
                                           color: themeMode === 'day'
                                             ? (occ.isRejectedLoad ? '#dc2626' : '#d97706')
-                                            : (occ.isRejectedLoad ? '#ff6b6b' : '#fbbf24')
+                                            : (occ.isRejectedLoad ? '#ff6b6b' : '#fbbf24'),
+                                          boxShadow: isHighMatch
+                                            ? '0 0 20px rgba(147, 51, 234, 0.6), inset 0 0 10px rgba(147, 51, 234, 0.2)'
+                                            : isMedMatch
+                                            ? '0 0 12px rgba(139, 92, 246, 0.4), inset 0 0 6px rgba(139, 92, 246, 0.15)'
+                                            : isLowMatch
+                                            ? '0 0 6px rgba(167, 139, 250, 0.25)'
+                                            : undefined,
                                         }}
                                         onContextMenu={(e) => handleRightClickUnassigned(e, occ)}
-                                        title={occ.isRejectedLoad ? "Rejected load - Amazon rejected driver assignment" : "Right-click to assign driver"}
+                                        title={
+                                          isHighMatch
+                                            ? `AI Match: ${Math.round(dnaMatchScore * 100)}% - Excellent fit for ${hoveredDriverName}`
+                                            : isMedMatch
+                                            ? `AI Match: ${Math.round(dnaMatchScore * 100)}% - Good fit for ${hoveredDriverName}`
+                                            : isLowMatch
+                                            ? `AI Match: ${Math.round(dnaMatchScore * 100)}% - Partial fit for ${hoveredDriverName}`
+                                            : occ.isRejectedLoad
+                                            ? "Rejected load - Amazon rejected driver assignment"
+                                            : "Right-click to assign driver"
+                                        }
                                       >
                                         <Badge
                                           variant="secondary"
@@ -2129,6 +2333,8 @@ export default function Schedules() {
                                           {occ.isRejectedLoad ? 'Rejected' : 'Unassigned'}
                                         </Badge>
                                       </div>
+                                        );
+                                      })()
                                     )}
                                   </div>
                                 );
@@ -2187,6 +2393,278 @@ export default function Schedules() {
               </div>
             ) : null}
           </DragOverlay>
+
+          {/* Milo Driver Profile Card - Flip Card Design with Glowing Block Suggestions */}
+          {miloActiveDriver && (
+            <div
+              className={`
+                fixed bottom-6 right-6 z-50
+                transition-all duration-500 ease-out
+                ${selectedDriverId ? 'animate-in fade-in slide-in-from-bottom-4' : 'animate-in fade-in slide-in-from-right-3'}
+              `}
+              style={{ perspective: '1000px' }}
+              onMouseEnter={() => {
+                if (hoveredDriverId) setHoveredDriverId(hoveredDriverId);
+              }}
+            >
+              {/* Flip Card Container - needs min-height for absolute positioned children */}
+              <div
+                className="relative w-80 transition-transform duration-500 ease-out"
+                style={{
+                  transformStyle: 'preserve-3d',
+                  transform: isCardFlipped ? 'rotateY(180deg)' : 'rotateY(0deg)',
+                  minHeight: isCardFlipped ? '320px' : `${Math.max(280, 180 + Math.min(topMatchingBlocks.length, showAllBlocks ? topMatchingBlocks.length : 4) * 52)}px`,
+                }}
+              >
+                {/* FRONT SIDE - Driver Name + Quick View */}
+                <Card
+                  className={`
+                    absolute inset-0 w-full h-full cursor-pointer
+                    shadow-2xl backdrop-blur-sm
+                    transition-all duration-300
+                    ${selectedDriverId
+                      ? 'border-2 border-sky-500 shadow-[0_0_40px_rgba(14,165,233,0.4)]'
+                      : 'border border-sky-300 dark:border-sky-700 hover:border-sky-400'
+                    }
+                    bg-gradient-to-br from-white/95 to-sky-50/95 dark:from-slate-900/95 dark:to-sky-950/95
+                  `}
+                  style={{ backfaceVisibility: 'hidden' }}
+                  onClick={() => setIsCardFlipped(true)}
+                >
+                  <CardContent className="p-4">
+                    {/* Header: Milo + Driver Name (Close together) */}
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-3">
+                        <div className={`
+                          w-10 h-10 rounded-full flex items-center justify-center
+                          bg-gradient-to-br from-sky-500 to-blue-600
+                          ${selectedDriverId ? 'shadow-[0_0_20px_rgba(14,165,233,0.6)] animate-pulse' : 'shadow-lg'}
+                        `}>
+                          <Sparkles className="w-5 h-5 text-white" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-base">{miloActiveDriver.name}</span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <DNAPatternBadge pattern={miloActiveDriver.profile?.patternGroup} size="sm" showIcon={false} />
+                            <ContractTypeBadge contractType={miloActiveDriver.profile?.preferredContractType} size="sm" showIcon={false} />
+                          </div>
+                        </div>
+                      </div>
+                      {selectedDriverId && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 w-7 p-0 hover:bg-slate-200 dark:hover:bg-slate-700"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedDriverId(null);
+                          }}
+                        >
+                          <X className="w-4 h-4" />
+                        </Button>
+                      )}
+                    </div>
+
+                    {/* Quick Stats - Days/Times/Contract (mirrors Driver Profile page) */}
+                    {miloActiveDriver.profile && (
+                      <div className="space-y-1.5 mb-3 text-xs">
+                        <div className="flex items-center gap-2 text-muted-foreground">
+                          <Calendar className="w-3.5 h-3.5" />
+                          <span>{(miloActiveDriver.profile.preferredDays || []).slice(0, 4).join(", ") || "Any day"}</span>
+                        </div>
+                        <div className="flex items-center gap-2 text-muted-foreground">
+                          <Clock className="w-3.5 h-3.5" />
+                          <span>{(miloActiveDriver.profile.preferredStartTimes || []).slice(0, 2).join(", ") || "Any time"}</span>
+                        </div>
+                        <div className="flex items-center gap-2 text-muted-foreground">
+                          <Truck className="w-3.5 h-3.5" />
+                          <span>{miloActiveDriver.profile.preferredContractType?.toUpperCase() || "Any contract"}</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Glowing Block Suggestions - Top 4 (only if profile exists) */}
+                    {miloActiveDriver.profile ? (
+                      <div className="mb-3">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-xs font-semibold text-purple-700 dark:text-purple-400 flex items-center gap-1">
+                            <Sparkles className="w-3 h-3" />
+                            AI Matches ({topMatchingBlocks.length})
+                          </span>
+                          {topMatchingBlocks.length > 4 && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-5 px-2 text-[10px] text-sky-600"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setShowAllBlocks(!showAllBlocks);
+                              }}
+                            >
+                              {showAllBlocks ? 'Show less' : `+${topMatchingBlocks.length - 4} more`}
+                            </Button>
+                          )}
+                        </div>
+                        <div className="space-y-1.5">
+                          {(showAllBlocks ? topMatchingBlocks : topMatchingBlocks.slice(0, 4)).map(({ occurrence: occ, matchScore }) => (
+                            <div
+                              key={occ.occurrenceId}
+                              className={`
+                                p-2 rounded-lg text-xs flex items-center justify-between
+                                transition-all duration-300 cursor-pointer
+                                ${matchScore >= 0.75
+                                  ? 'bg-purple-50 dark:bg-purple-950/40 border border-purple-300 dark:border-purple-700 shadow-[0_0_12px_rgba(147,51,234,0.3)]'
+                                  : 'bg-violet-50 dark:bg-violet-950/40 border border-violet-300 dark:border-violet-700 shadow-[0_0_8px_rgba(139,92,246,0.25)]'
+                                }
+                                hover:scale-[1.02]
+                              `}
+                            >
+                              <div className="flex items-center gap-2">
+                                <div className={`
+                                  w-1.5 h-6 rounded-full
+                                  ${matchScore >= 0.75 ? 'bg-purple-500' : 'bg-violet-400'}
+                                `} />
+                                <div>
+                                  <div className="font-medium">{occ.blockId}</div>
+                                  <div className="text-muted-foreground">
+                                    {format(new Date(occ.serviceDate), 'EEE M/d')} @ {occ.startTime}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <div className={`font-bold ${matchScore >= 0.75 ? 'text-purple-600' : 'text-violet-500'}`}>
+                                  {Math.round(matchScore * 100)}%
+                                </div>
+                                <div className="text-[10px] text-muted-foreground">{occ.tractorId || 'Any'}</div>
+                              </div>
+                            </div>
+                          ))}
+                          {topMatchingBlocks.length === 0 && (
+                            <div className="text-center py-3 text-xs text-muted-foreground italic">
+                              No matching blocks found
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="mb-3 p-4 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-dashed border-slate-300 dark:border-slate-600">
+                        <div className="text-center">
+                          <Dna className="w-8 h-8 mx-auto mb-2 text-slate-400" />
+                          <p className="text-sm text-muted-foreground mb-2">No profile data yet</p>
+                          <p className="text-xs text-muted-foreground">
+                            Run analysis from Driver Profile page to enable matching
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Flip hint (only if profile exists) */}
+                    {miloActiveDriver.profile && (
+                      <div className="text-[10px] text-center text-muted-foreground pt-2 border-t flex items-center justify-center gap-1">
+                        <ChevronRight className="w-3 h-3" />
+                        Tap for profile details
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* BACK SIDE - DNA Details */}
+                <Card
+                  className={`
+                    absolute inset-0 w-full h-full cursor-pointer
+                    shadow-2xl backdrop-blur-sm
+                    transition-all duration-300
+                    border-2 border-blue-500 shadow-[0_0_40px_rgba(59,130,246,0.4)]
+                    bg-gradient-to-br from-white/95 to-blue-50/95 dark:from-slate-900/95 dark:to-blue-950/95
+                  `}
+                  style={{ backfaceVisibility: 'hidden', transform: 'rotateY(180deg)' }}
+                  onClick={() => setIsCardFlipped(false)}
+                >
+                  <CardContent className="p-4">
+                    {/* Back Header */}
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <Dna className="w-5 h-5 text-blue-600" />
+                        <span className="font-bold text-sm">Driver Profile</span>
+                      </div>
+                      <Badge variant="secondary" className="text-[10px]">
+                        {miloActiveDriver.name}
+                      </Badge>
+                    </div>
+
+                    {/* Profile Details - AI Summary and Insights (mirrors Driver Profile page) */}
+                    {miloActiveDriver.profile ? (
+                      <>
+                        {/* AI Summary */}
+                        <div className="mb-3">
+                          <h4 className="text-xs font-medium text-purple-700 dark:text-purple-300 mb-1">AI Summary</h4>
+                          <p className="text-xs text-muted-foreground">
+                            {miloActiveDriver.profile.aiSummary || "No AI summary available yet. Run analysis from Driver Profile page."}
+                          </p>
+                        </div>
+
+                        {/* Insights */}
+                        {Array.isArray(miloActiveDriver.profile.insights) && miloActiveDriver.profile.insights.length > 0 && (
+                          <div className="mb-3">
+                            <h4 className="text-xs font-medium text-purple-700 dark:text-purple-300 mb-1">Insights</h4>
+                            <ul className="text-xs text-muted-foreground space-y-1">
+                              {miloActiveDriver.profile.insights.slice(0, 3).map((insight: string, i: number) => (
+                                <li key={i} className="flex items-start gap-1">
+                                  <Sparkles className="w-3 h-3 mt-0.5 text-purple-500 flex-shrink-0" />
+                                  <span>{insight}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+
+                        {/* Quick Stats Row */}
+                        <div className="grid grid-cols-3 gap-2 mb-3">
+                          <div className="p-2 rounded-lg bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 text-center">
+                            <div className="text-[10px] text-muted-foreground">Days</div>
+                            <div className="text-xs font-medium">{(miloActiveDriver.profile.preferredDays || []).length || '—'}</div>
+                          </div>
+                          <div className="p-2 rounded-lg bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800 text-center">
+                            <div className="text-[10px] text-muted-foreground">Times</div>
+                            <div className="text-xs font-medium">{(miloActiveDriver.profile.preferredStartTimes || []).length || '—'}</div>
+                          </div>
+                          <div className="p-2 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-center">
+                            <div className="text-[10px] text-muted-foreground">Score</div>
+                            <div className="text-xs font-medium text-purple-600">{Math.round(Number(miloActiveDriver.profile.consistencyScore || 0) * 100)}%</div>
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="p-4 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-dashed border-slate-300 dark:border-slate-600 mb-3">
+                        <div className="text-center">
+                          <Dna className="w-8 h-8 mx-auto mb-2 text-slate-400" />
+                          <p className="text-sm text-muted-foreground mb-2">No profile data</p>
+                          <p className="text-xs text-muted-foreground">
+                            Run analysis from Driver Profile page
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Flip back hint */}
+                    <div className="text-[10px] text-center text-muted-foreground pt-2 border-t flex items-center justify-center gap-1">
+                      <ChevronRight className="w-3 h-3 rotate-180" />
+                      Tap to go back
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* Hint below card when not selected */}
+              {!selectedDriverId && (
+                <div className="text-[10px] text-center text-muted-foreground mt-2 animate-in fade-in">
+                  Click a driver to keep panel open
+                </div>
+              )}
+            </div>
+          )}
         </DndContext>
       )}
 

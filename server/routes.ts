@@ -17,7 +17,7 @@ import {
   insertSpecialRequestSchema, updateSpecialRequestSchema,
   insertDriverAvailabilityPreferenceSchema, updateDriverAvailabilityPreferenceSchema,
   blocks, blockAssignments, assignmentHistory, driverContractStats, drivers, protectedDriverRules,
-  shiftOccurrences, shiftTemplates, contracts, trucks, driverAvailabilityPreferences
+  shiftOccurrences, shiftTemplates, contracts, trucks, driverAvailabilityPreferences, driverDnaProfiles
 } from "@shared/schema";
 import { eq, and, inArray, sql, gte, lte, not, desc } from "drizzle-orm";
 import session from "express-session";
@@ -26,9 +26,17 @@ import bcrypt from "bcryptjs";
 import { benchContracts } from "./seed-data";
 import multer from "multer";
 import { validateBlockAssignment, normalizeSoloType, blockToAssignmentSubject } from "./rolling6-calculator";
-import { subDays, parseISO, format, startOfWeek, addWeeks } from "date-fns";
+import { subDays, parseISO, format, startOfWeek, endOfWeek, addWeeks } from "date-fns";
 import { findSwapCandidates, getAllDriverWorkloads } from "./workload-calculator";
 import { analyzeCascadeEffect, executeCascadeChange, type CascadeAnalysisRequest } from "./cascade-analyzer";
+import {
+  analyzeDriverDNA,
+  getDriverDNAProfile,
+  getAllDNAProfiles,
+  getFleetDNAStats,
+  deleteDNAProfile,
+  refreshAllDNAProfiles,
+} from "./dna-analyzer";
 
 // Require SESSION_SECRET
 const SESSION_SECRET = process.env.SESSION_SECRET!;
@@ -3710,22 +3718,247 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
     try {
       const { id } = req.params;
       const tenantId = req.session.tenantId!;
-      
+
       const request = await dbStorage.getSpecialRequest(id);
       if (!request) {
         return res.status(404).json({ message: "Special request not found" });
       }
-      
+
       if (request.tenantId !== tenantId) {
         return res.status(403).json({ message: "Access denied" });
       }
-      
+
       await dbStorage.deleteSpecialRequest(id);
-      
+
       res.json({ message: "Special request deleted successfully" });
     } catch (error: any) {
       console.error("Delete special request error:", error);
       res.status(500).json({ message: "Failed to delete special request", error: error.message });
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════════
+  //                     DRIVER DNA / SCHEDULE INTELLIGENCE APIs
+  // ═══════════════════════════════════════════════════════════════════════════════
+
+  // POST /api/driver-dna/analyze - Trigger AI analysis for drivers
+  app.post("/api/driver-dna/analyze", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { driverId, startDate, endDate, dayThreshold } = req.body;
+
+      console.log(`[Driver DNA] Analysis requested for tenant ${tenantId}, threshold: ${dayThreshold ?? 0.5}`);
+
+      const result = await analyzeDriverDNA({
+        tenantId,
+        driverId: driverId || undefined,
+        startDate: startDate ? parseISO(startDate) : undefined,
+        endDate: endDate ? parseISO(endDate) : undefined,
+        dayThreshold: dayThreshold !== undefined ? Number(dayThreshold) : undefined,
+      });
+
+      res.json({
+        success: true,
+        message: `Analyzed ${result.totalDrivers} drivers`,
+        ...result,
+      });
+    } catch (error: any) {
+      console.error("Driver DNA analysis error:", error);
+      res.status(500).json({ message: "Failed to analyze driver DNA", error: error.message });
+    }
+  });
+
+  // GET /api/driver-dna - Get all DNA profiles with fleet stats
+  app.get("/api/driver-dna", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+
+      const [profiles, stats] = await Promise.all([
+        getAllDNAProfiles(tenantId),
+        getFleetDNAStats(tenantId),
+      ]);
+
+      res.json({
+        profiles,
+        stats,
+      });
+    } catch (error: any) {
+      console.error("Get all DNA profiles error:", error);
+      res.status(500).json({ message: "Failed to get DNA profiles", error: error.message });
+    }
+  });
+
+  // GET /api/driver-dna/stats - Get fleet-wide DNA statistics
+  app.get("/api/driver-dna/stats", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const stats = await getFleetDNAStats(tenantId);
+      res.json(stats);
+    } catch (error: any) {
+      console.error("Get DNA stats error:", error);
+      res.status(500).json({ message: "Failed to get DNA stats", error: error.message });
+    }
+  });
+
+  // GET /api/driver-dna/bulk - Get DNA profiles for multiple drivers
+  app.get("/api/driver-dna/bulk", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const driverIds = req.query.driverIds as string | undefined;
+
+      if (!driverIds) {
+        return res.status(400).json({ message: "driverIds query parameter required" });
+      }
+
+      const ids = driverIds.split(",").filter(id => id.trim());
+
+      if (ids.length === 0) {
+        return res.json({ profiles: {} });
+      }
+
+      // Fetch all profiles for the specified driver IDs
+      const profiles = await db
+        .select()
+        .from(driverDnaProfiles)
+        .where(
+          and(
+            eq(driverDnaProfiles.tenantId, tenantId),
+            inArray(driverDnaProfiles.driverId, ids)
+          )
+        );
+
+      // Convert to a map for easy lookup
+      const profileMap: Record<string, typeof profiles[0]> = {};
+      for (const profile of profiles) {
+        profileMap[profile.driverId] = profile;
+      }
+
+      res.json({ profiles: profileMap });
+    } catch (error: any) {
+      console.error("Get bulk DNA profiles error:", error);
+      res.status(500).json({ message: "Failed to get DNA profiles", error: error.message });
+    }
+  });
+
+  // GET /api/driver-dna/:driverId - Get DNA profile for a specific driver
+  app.get("/api/driver-dna/:driverId", requireAuth, async (req, res) => {
+    try {
+      const { driverId } = req.params;
+      const tenantId = req.session.tenantId!;
+
+      const profile = await getDriverDNAProfile(tenantId, driverId);
+
+      if (!profile) {
+        return res.status(404).json({ message: "DNA profile not found for this driver" });
+      }
+
+      res.json(profile);
+    } catch (error: any) {
+      console.error("Get driver DNA profile error:", error);
+      res.status(500).json({ message: "Failed to get DNA profile", error: error.message });
+    }
+  });
+
+  // POST /api/driver-dna/refresh - Re-run analysis with latest data
+  app.post("/api/driver-dna/refresh", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+
+      console.log(`[Driver DNA] Refresh requested for tenant ${tenantId}`);
+
+      const result = await refreshAllDNAProfiles(tenantId);
+
+      res.json({
+        success: true,
+        message: `Refreshed ${result.profilesUpdated + result.profilesCreated} profiles`,
+        ...result,
+      });
+    } catch (error: any) {
+      console.error("Refresh DNA profiles error:", error);
+      res.status(500).json({ message: "Failed to refresh DNA profiles", error: error.message });
+    }
+  });
+
+  // DELETE /api/driver-dna/:driverId - Delete a DNA profile
+  app.delete("/api/driver-dna/:driverId", requireAuth, async (req, res) => {
+    try {
+      const { driverId } = req.params;
+      const tenantId = req.session.tenantId!;
+
+      const deleted = await deleteDNAProfile(tenantId, driverId);
+
+      if (!deleted) {
+        return res.status(404).json({ message: "DNA profile not found" });
+      }
+
+      res.json({ message: "DNA profile deleted successfully" });
+    } catch (error: any) {
+      console.error("Delete DNA profile error:", error);
+      res.status(500).json({ message: "Failed to delete DNA profile", error: error.message });
+    }
+  });
+
+  // PATCH /api/driver-dna/:driverId - Update DNA profile preferences
+  app.patch("/api/driver-dna/:driverId", requireAuth, async (req, res) => {
+    try {
+      const { driverId } = req.params;
+      const tenantId = req.session.tenantId!;
+      const { preferredDays, preferredStartTimes, preferredTractors } = req.body;
+
+      // Find existing profile
+      const existingProfile = await db
+        .select()
+        .from(driverDnaProfiles)
+        .where(
+          and(
+            eq(driverDnaProfiles.tenantId, tenantId),
+            eq(driverDnaProfiles.driverId, driverId)
+          )
+        )
+        .limit(1);
+
+      if (existingProfile.length === 0) {
+        return res.status(404).json({ message: "DNA profile not found for this driver" });
+      }
+
+      // Build update object with only provided fields
+      const updateData: Record<string, any> = {
+        updatedAt: new Date(),
+      };
+
+      if (preferredDays !== undefined) {
+        updateData.preferredDays = preferredDays;
+      }
+      if (preferredStartTimes !== undefined) {
+        updateData.preferredStartTimes = preferredStartTimes;
+      }
+      if (preferredTractors !== undefined) {
+        updateData.preferredTractors = preferredTractors;
+      }
+
+      // Update the profile
+      const [updated] = await db
+        .update(driverDnaProfiles)
+        .set(updateData)
+        .where(eq(driverDnaProfiles.id, existingProfile[0].id))
+        .returning();
+
+      // Re-calculate consistency score based on new preferences
+      // This would be more accurate if we recalculated from assignment history,
+      // but for now we set it to 100% since user is explicitly setting these as correct
+      await db
+        .update(driverDnaProfiles)
+        .set({ consistencyScore: "1.0" })
+        .where(eq(driverDnaProfiles.id, existingProfile[0].id));
+
+      res.json({
+        success: true,
+        message: "DNA profile updated successfully",
+        profile: updated,
+      });
+    } catch (error: any) {
+      console.error("Update DNA profile error:", error);
+      res.status(500).json({ message: "Failed to update DNA profile", error: error.message });
     }
   });
 
@@ -3920,26 +4153,37 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
   });
 
   // POST /api/auto-build/preview - Generate auto-build suggestions for next week
+  // Supports optional filters: soloTypeFilter (solo1/solo2/team), driverId (single driver mode)
   app.post("/api/auto-build/preview", requireAuth, async (req: Request, res: Response) => {
     try {
       const tenantId = req.session.tenantId!;
       const userId = req.session.userId!;
-      
-      const { targetWeekStart } = req.body;
+
+      const { targetWeekStart, soloTypeFilter, driverId } = req.body;
       if (!targetWeekStart) {
         return res.status(400).json({ message: "Missing required field: targetWeekStart" });
+      }
+
+      // Build options object for filtering
+      const options: { soloTypeFilter?: string; driverId?: string } = {};
+      if (soloTypeFilter && ["solo1", "solo2", "team"].includes(soloTypeFilter)) {
+        options.soloTypeFilter = soloTypeFilter;
+      }
+      if (driverId) {
+        options.driverId = driverId;
       }
 
       const { generateAutoBuildPreview, saveAutoBuildRun } = await import("./auto-build-engine");
       const preview = await generateAutoBuildPreview(
         tenantId,
         new Date(targetWeekStart),
-        userId
+        userId,
+        Object.keys(options).length > 0 ? options : undefined
       );
 
       // Save the run to database for review workflow
       const run = await saveAutoBuildRun(tenantId, preview, userId);
-      
+
       res.json({
         success: true,
         runId: run.id,
@@ -3969,7 +4213,7 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
   app.post("/api/auto-build/commit", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
-      
+
       const { runId, approvedBlockIds } = req.body;
       if (!runId || !approvedBlockIds || !Array.isArray(approvedBlockIds)) {
         return res.status(400).json({ message: "Missing required fields: runId, approvedBlockIds" });
@@ -3977,7 +4221,7 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
 
       const { commitAutoBuildRun } = await import("./auto-build-engine");
       const result = await commitAutoBuildRun(runId, approvedBlockIds, userId);
-      
+
       res.json({
         success: true,
         message: `Successfully created ${result.created} assignments${result.failed > 0 ? `, ${result.failed} failed` : ""}`,
@@ -3986,6 +4230,83 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
     } catch (error: any) {
       console.error("Auto-build commit error:", error);
       res.status(500).json({ message: "Failed to commit auto-build", error: error.message });
+    }
+  });
+
+  // GET /api/auto-build/driver-suggestions/:driverId - Get block suggestions for a specific driver
+  // Used for driver-by-driver build mode
+  app.get("/api/auto-build/driver-suggestions/:driverId", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const userId = req.session.userId!;
+      const { driverId } = req.params;
+      const { weekStart } = req.query;
+
+      if (!weekStart) {
+        return res.status(400).json({ message: "Missing required query parameter: weekStart" });
+      }
+
+      // Generate preview with driverId filter (only find blocks suitable for this driver)
+      const { generateAutoBuildPreview } = await import("./auto-build-engine");
+      const preview = await generateAutoBuildPreview(
+        tenantId,
+        new Date(weekStart as string),
+        userId,
+        { driverId }
+      );
+
+      // Get driver details and DNA profile
+      const driver = await db
+        .select()
+        .from(drivers)
+        .where(and(eq(drivers.tenantId, tenantId), eq(drivers.id, driverId)))
+        .limit(1);
+
+      if (driver.length === 0) {
+        return res.status(404).json({ message: "Driver not found" });
+      }
+
+      const dnaProfile = await db
+        .select()
+        .from(driverDnaProfiles)
+        .where(and(eq(driverDnaProfiles.tenantId, tenantId), eq(driverDnaProfiles.driverId, driverId)))
+        .limit(1);
+
+      // Calculate current workload (blocks already assigned this week)
+      const weekStartDate = startOfWeek(new Date(weekStart as string), { weekStartsOn: 0 });
+      const weekEndDate = endOfWeek(new Date(weekStart as string), { weekStartsOn: 0 });
+
+      const assignedBlocks = await db
+        .select()
+        .from(blockAssignments)
+        .innerJoin(blocks, eq(blockAssignments.blockId, blocks.id))
+        .where(
+          and(
+            eq(blockAssignments.tenantId, tenantId),
+            eq(blockAssignments.driverId, driverId),
+            gte(blocks.startTimestamp, weekStartDate),
+            lt(blocks.startTimestamp, weekEndDate)
+          )
+        );
+
+      res.json({
+        weekStart: weekStart,
+        suggestions: preview.suggestions,
+        driverProfile: {
+          id: driver[0].id,
+          name: `${driver[0].firstName} ${driver[0].lastName}`,
+          firstName: driver[0].firstName,
+          lastName: driver[0].lastName,
+          dnaProfile: dnaProfile[0] || null,
+          currentWorkload: assignedBlocks.length,
+          maxCapacity: 6, // Max 6 days per week
+        },
+        unassignable: preview.unassignable,
+        warnings: preview.warnings,
+      });
+    } catch (error: any) {
+      console.error("Get driver suggestions error:", error);
+      res.status(500).json({ message: "Failed to get driver suggestions", error: error.message });
     }
   });
 
@@ -5269,6 +5590,32 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
       res.status(500).json({
         success: false,
         message: "Gemini chat failed",
+        error: error.message,
+      });
+    }
+  });
+
+  // POST /api/milo/chat - Milo AI agent with action execution (uses Gemini)
+  app.post("/api/milo/chat", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { message, history } = req.body;
+
+      if (!message) {
+        return res.status(400).json({ message: "Missing required field: message" });
+      }
+
+      const { getMiloAgent } = await import("./ai/agents/milo-agent");
+      const milo = await getMiloAgent();
+
+      const result = await milo.processMessage(tenantId, message, history || []);
+
+      res.json(result);
+    } catch (error: any) {
+      console.error("[Milo Chat] Error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Milo encountered an error. Please try again.",
         error: error.message,
       });
     }

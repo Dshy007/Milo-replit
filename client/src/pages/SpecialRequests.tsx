@@ -25,6 +25,7 @@ import { CalendarIcon, CheckCircle2, XCircle, Clock, AlertCircle, User, Calendar
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
+import { MiloInline } from "@/components/MiloInline";
 import type { z } from "zod";
 import type { SpecialRequest, Driver, Block, Contract } from "@shared/schema";
 
@@ -396,6 +397,9 @@ export default function SpecialRequests() {
           </Button>
         </div>
       </div>
+
+      {/* Milo AI Assistant */}
+      <MiloInline placeholder="Ask Milo: 'Add time off for John tomorrow' or 'Isaac only works Fridays'..." />
 
       <Tabs defaultValue="pending" className="w-full">
         <TabsList>

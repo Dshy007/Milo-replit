@@ -397,7 +397,7 @@ export default function Chat() {
           <ScrollArea className="h-full">
             <div className="px-6 py-6 space-y-6">
               {messages.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-8 gap-6" data-testid="empty-state">
+                <div className="flex flex-col items-center justify-center min-h-[calc(100vh-200px)] gap-6" data-testid="empty-state">
                   {/* Milo greeting */}
                   <div className="flex items-center gap-4">
                     <div className="flex items-center justify-center w-16 h-16 rounded-full bg-primary/10 ring-4 ring-primary/5">

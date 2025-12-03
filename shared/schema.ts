@@ -1335,3 +1335,63 @@ export const insertNeuralRoutingSchema = createInsertSchema(neuralRouting).omit(
 });
 export type InsertNeuralRouting = z.infer<typeof insertNeuralRoutingSchema>;
 export type NeuralRouting = typeof neuralRouting.$inferSelect;
+
+// ══════════════════════════════════════════════════════════════════════════════
+//                         DRIVER DNA PROFILES
+//                    "Where Patterns Become Intelligence"
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Driver DNA Profiles - AI-inferred driver scheduling preferences
+// Built from historical pattern analysis using Gemini
+export const driverDnaProfiles = pgTable("driver_dna_profiles", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+  driverId: varchar("driver_id").notNull().references(() => drivers.id),
+
+  // Structured preferences (inferred from AI)
+  preferredDays: text("preferred_days").array(), // ['sunday', 'monday', 'tuesday', 'wednesday']
+  preferredStartTimes: text("preferred_start_times").array(), // ['04:00', '04:30']
+  preferredTractors: text("preferred_tractors").array(), // ['Tractor_3', 'Tractor_5']
+  preferredContractType: text("preferred_contract_type"), // 'solo1', 'solo2', 'team'
+  homeBlocks: text("home_blocks").array(), // Block IDs driver consistently runs
+
+  // Pattern metrics
+  consistencyScore: decimal("consistency_score", { precision: 5, scale: 4 }), // 0.0 to 1.0
+  patternGroup: text("pattern_group"), // 'sunWed', 'wedSat', 'mixed'
+  weeksAnalyzed: integer("weeks_analyzed"),
+  assignmentsAnalyzed: integer("assignments_analyzed"),
+
+  // AI-generated content
+  aiSummary: text("ai_summary"), // Natural language summary from Gemini
+  insights: jsonb("insights"), // Array of insight strings
+
+  // Metadata
+  analysisStartDate: timestamp("analysis_start_date"),
+  analysisEndDate: timestamp("analysis_end_date"),
+  lastAnalyzedAt: timestamp("last_analyzed_at"),
+  analysisVersion: integer("analysis_version").default(1),
+
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  // Unique constraint: one DNA profile per driver per tenant
+  uniqueDriverDna: uniqueIndex("driver_dna_profiles_tenant_driver_idx").on(table.tenantId, table.driverId),
+  // Index for pattern group queries
+  patternGroupIdx: index("driver_dna_profiles_pattern_group_idx").on(table.patternGroup),
+  // Index for consistency score ranking
+  consistencyIdx: index("driver_dna_profiles_consistency_idx").on(table.consistencyScore),
+}));
+
+export const insertDriverDnaProfileSchema = createInsertSchema(driverDnaProfiles, {
+  analysisStartDate: z.coerce.date().optional().nullable(),
+  analysisEndDate: z.coerce.date().optional().nullable(),
+  lastAnalyzedAt: z.coerce.date().optional().nullable(),
+}).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export const updateDriverDnaProfileSchema = insertDriverDnaProfileSchema.omit({ tenantId: true }).partial();
+export type InsertDriverDnaProfile = z.infer<typeof insertDriverDnaProfileSchema>;
+export type UpdateDriverDnaProfile = z.infer<typeof updateDriverDnaProfileSchema>;
+export type DriverDnaProfile = typeof driverDnaProfiles.$inferSelect;

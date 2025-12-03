@@ -77,6 +77,7 @@ export interface AnalysisOptions {
   driverId?: string; // Optional: analyze specific driver, or all if omitted
   startDate?: Date; // Default: 12 weeks ago
   endDate?: Date; // Default: now
+  dayThreshold?: number; // 0.0 to 1.0, default 0.5 (50%) - lower = more days detected
 }
 
 export interface AnalysisResult {
@@ -107,7 +108,7 @@ export interface FleetDNAStats {
  * Analyze driver assignment history and generate DNA profiles
  */
 export async function analyzeDriverDNA(options: AnalysisOptions): Promise<AnalysisResult> {
-  const { tenantId, driverId } = options;
+  const { tenantId, driverId, dayThreshold } = options;
   const now = new Date();
   const startDate = options.startDate || subWeeks(startOfWeek(now, { weekStartsOn: 0 }), 12);
   const endDate = options.endDate || now;
@@ -146,6 +147,7 @@ export async function analyzeDriverDNA(options: AnalysisOptions): Promise<Analys
       assignments: driverAssignments,
       analysisStartDate: startDate,
       analysisEndDate: endDate,
+      dayThreshold, // Pass threshold to profiler (undefined = use default 0.5)
     });
   }
 
