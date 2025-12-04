@@ -143,7 +143,7 @@ $[Cost] • [Duration] • [N] loads`,
     id: "scout",
     displayName: "Gemini - The Scout",
     provider: "google",
-    model: "gemini-1.5-pro",
+    model: "gemini-2.5-flash",
     capabilities: ["real_time", "weather", "traffic", "location", "perception"],
     systemPrompt: `You are the SCOUT - the eyes of the Milo Neural Intelligence System.
 

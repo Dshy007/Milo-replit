@@ -59,7 +59,7 @@ export class GeminiScout extends BaseAgent {
   async initialize(): Promise<void> {
     await super.initialize();
     this.geminiModel = this.client.getGenerativeModel({
-      model: "gemini-1.5-flash" // Using flash for faster responses
+      model: "gemini-2.5-flash" // Latest stable model (Dec 2025)
     });
   }
 
@@ -96,7 +96,7 @@ export class GeminiScout extends BaseAgent {
           sessionId: request.context.sessionId,
           evidence: safetyAlerts.length > 0 ? { safetyAlerts } : undefined,
           metadata: {
-            model: "gemini-1.5-pro",
+            model: "gemini-2.5-flash",
             responseTimeMs: Date.now() - startTime
           }
         }
@@ -122,7 +122,7 @@ export class GeminiScout extends BaseAgent {
         suggestedNextAgent: "architect", // Always return to Architect after scouting
         shouldConverge: false, // Scout never converges - just reports
         metadata: {
-          model: "gemini-1.5-pro",
+          model: "gemini-2.5-flash",
           responseTimeMs: Date.now() - startTime,
           safetyAlerts
         }

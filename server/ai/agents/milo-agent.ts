@@ -50,8 +50,8 @@ export class MiloAgent {
       console.warn("[MiloAgent] No Gemini API key found (GEMINI_API_KEY or GOOGLE_AI_API_KEY)");
     }
     this.client = new GoogleGenerativeAI(apiKey);
-    // Use gemini-2.0-flash which is the current stable model
-    this.model = this.client.getGenerativeModel({ model: "gemini-2.0-flash" });
+    // Use gemini-2.5-flash which is the latest stable model (Dec 2025)
+    this.model = this.client.getGenerativeModel({ model: "gemini-2.5-flash" });
   }
 
   async initialize(): Promise<void> {

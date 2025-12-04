@@ -26,6 +26,8 @@ export interface ValidationResult {
     proposedBlockHours?: number;
     limitHours?: number;
     lookbackPeriodHours?: number;
+    restHoursSinceLast?: number;
+    minRestRequired?: number;
   };
 }
 
@@ -126,6 +128,106 @@ export async function calculateDutyHours(
 
   // Round to 4 decimal places to eliminate floating-point precision errors
   return Number(totalHours.toFixed(4));
+}
+
+/**
+ * Validate DOT 10-hour rest rule between shifts
+ * Drivers must have minimum 10 hours off-duty between the end of one shift
+ * and the start of their next shift.
+ */
+export function validate10HourRestRule(
+  proposedStart: Date,
+  existingAssignments: Array<BlockAssignment & { block: Block }>,
+  driverName: string,
+): ValidationResult {
+  const MIN_REST_HOURS = 10;
+
+  if (existingAssignments.length === 0) {
+    return {
+      isValid: true,
+      validationStatus: "valid",
+      messages: ["✓ 10-hour rest rule: No previous assignments to check"],
+      metrics: { minRestRequired: MIN_REST_HOURS },
+    };
+  }
+
+  // Find the most recent assignment that ends BEFORE the proposed start
+  let mostRecentEndTime: Date | null = null;
+
+  for (const assignment of existingAssignments) {
+    const blockEnd = new Date(assignment.block.endTimestamp);
+
+    // Only consider assignments that end before the proposed start
+    if (blockEnd <= proposedStart) {
+      if (!mostRecentEndTime || blockEnd > mostRecentEndTime) {
+        mostRecentEndTime = blockEnd;
+      }
+    }
+  }
+
+  // If no previous assignment ends before proposed start, check is passed
+  if (!mostRecentEndTime) {
+    return {
+      isValid: true,
+      validationStatus: "valid",
+      messages: ["✓ 10-hour rest rule: No applicable previous assignments"],
+      metrics: { minRestRequired: MIN_REST_HOURS },
+    };
+  }
+
+  // Calculate rest hours between most recent end and proposed start
+  const restMilliseconds = proposedStart.getTime() - mostRecentEndTime.getTime();
+  const restHours = restMilliseconds / (1000 * 60 * 60);
+  const restHoursRounded = Number(restHours.toFixed(2));
+
+  if (restHours < MIN_REST_HOURS) {
+    return {
+      isValid: false,
+      validationStatus: "violation",
+      messages: [
+        `DOT 10-HOUR REST VIOLATION: ${driverName} would have only ${restHoursRounded}h rest`,
+        `Last shift ended: ${format(mostRecentEndTime, "MMM d 'at' h:mm a")}`,
+        `Proposed start: ${format(proposedStart, "MMM d 'at' h:mm a")}`,
+        `Rest period: ${restHoursRounded}h (minimum required: ${MIN_REST_HOURS}h)`,
+        `Violation: ${(MIN_REST_HOURS - restHoursRounded).toFixed(2)}h short of required rest`,
+      ],
+      metrics: {
+        restHoursSinceLast: restHoursRounded,
+        minRestRequired: MIN_REST_HOURS,
+      },
+    };
+  }
+
+  // Warning if close to minimum (within 1 hour of limit)
+  if (restHours < MIN_REST_HOURS + 1) {
+    return {
+      isValid: true,
+      validationStatus: "warning",
+      messages: [
+        `WARNING: ${driverName} has minimal rest (${restHoursRounded}h)`,
+        `Last shift ended: ${format(mostRecentEndTime, "MMM d 'at' h:mm a")}`,
+        `Proposed start: ${format(proposedStart, "MMM d 'at' h:mm a")}`,
+        `Rest period: ${restHoursRounded}h (minimum required: ${MIN_REST_HOURS}h)`,
+      ],
+      metrics: {
+        restHoursSinceLast: restHoursRounded,
+        minRestRequired: MIN_REST_HOURS,
+      },
+    };
+  }
+
+  return {
+    isValid: true,
+    validationStatus: "valid",
+    messages: [
+      `✓ 10-hour rest rule compliant`,
+      `Rest since last shift: ${restHoursRounded}h (minimum: ${MIN_REST_HOURS}h)`,
+    ],
+    metrics: {
+      restHoursSinceLast: restHoursRounded,
+      minRestRequired: MIN_REST_HOURS,
+    },
+  };
 }
 
 /**
@@ -449,12 +551,47 @@ export async function validateBlockAssignment(
     };
   }
 
-  // 3. Check rolling-6 compliance
+  // 3. Check 10-hour rest rule (DOT minimum rest between shifts)
+  const driverName = `${driver.firstName} ${driver.lastName}`;
+  const restRuleResult = validate10HourRestRule(
+    new Date(proposedSubject.startTimestamp),
+    existingAssignments,
+    driverName,
+  );
+
+  if (!restRuleResult.isValid) {
+    return {
+      canAssign: false,
+      validationResult: restRuleResult,
+      protectedRuleViolations: [],
+      conflictingAssignments: [],
+    };
+  }
+
+  // 4. Check rolling-6 compliance (max hours in rolling window)
   const rolling6Result = await validateRolling6Compliance(
     driver,
     proposedSubject,
     existingAssignments,
   );
+
+  // If rolling-6 passes but rest rule had a warning, include the warning
+  if (rolling6Result.isValid && restRuleResult.validationStatus === "warning") {
+    return {
+      canAssign: true,
+      validationResult: {
+        ...rolling6Result,
+        validationStatus: "warning",
+        messages: [...restRuleResult.messages, ...rolling6Result.messages],
+        metrics: {
+          ...rolling6Result.metrics,
+          ...restRuleResult.metrics,
+        },
+      },
+      protectedRuleViolations: [],
+      conflictingAssignments: [],
+    };
+  }
 
   return {
     canAssign: rolling6Result.isValid,

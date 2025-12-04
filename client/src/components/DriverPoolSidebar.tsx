@@ -516,8 +516,6 @@ export function DriverPoolSidebar({
       });
 
     // ONE block per day - pick the best match for each unique date
-    // Driver can only work one block per day, but we show ALL valid days
-    // The rolling 6-day rule and 38hr reset logic will determine which are actually feasible
     const seenDates = new Set<string>();
     const onePerDay: MatchingBlock[] = [];
 
@@ -529,10 +527,20 @@ export function DriverPoolSidebar({
       }
     }
 
-    // Return all valid matches (one per day) - no artificial cap
-    // The scheduling rules (rolling 6, 38hr reset) determine actual feasibility
-    // This gives the scheduler visibility into ALL options for this driver
-    return onePerDay;
+    // Apply contract-type specific caps based on scheduling rules:
+    // - Solo2: MAX 3 blocks per week (38hr reset rule within rolling 6-day period)
+    // - Solo1: More flexible, but typically 4-5 per week
+    // - Team: 3 per week
+    const contractType = profile.preferredContractType?.toLowerCase();
+    let maxBlocksPerWeek = 5; // Default for Solo1
+
+    if (contractType === 'solo2') {
+      maxBlocksPerWeek = 3; // Solo2 drivers: 38hr reset rule limits to 3 per week
+    } else if (contractType === 'team') {
+      maxBlocksPerWeek = 3;
+    }
+
+    return onePerDay.slice(0, maxBlocksPerWeek);
   };
 
   return (

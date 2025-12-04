@@ -487,3 +487,411 @@ export async function deleteDNAProfile(tenantId: string, driverId: string): Prom
 export async function refreshAllDNAProfiles(tenantId: string): Promise<AnalysisResult> {
   return analyzeDriverDNA({ tenantId });
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                    REGENERATE FROM BLOCK_ASSIGNMENTS (IMPROVED)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const DAY_NAMES_LOWER = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+interface ComputedDNA {
+  preferredDays: string[];
+  preferredStartTimes: string[];
+  preferredTractors: string[];
+  preferredContractType: string;
+  patternGroup: 'sunWed' | 'wedSat' | 'mixed';
+  consistencyScore: number;
+  assignmentsAnalyzed: number;
+  weeksAnalyzed: number;
+}
+
+function getTopNFromMap<T>(map: Map<T, number>, n: number): T[] {
+  return Array.from(map.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, n)
+    .map(([item]) => item);
+}
+
+function computeDNAFromBlockAssignments(assignments: {
+  serviceDate: Date;
+  dayOfWeek: number;
+  dayName: string;
+  startTime: string;
+  soloType: string;
+  tractorId: string;
+}[]): ComputedDNA {
+  if (assignments.length === 0) {
+    return {
+      preferredDays: [],
+      preferredStartTimes: [],
+      preferredTractors: [],
+      preferredContractType: 'solo1',
+      patternGroup: 'mixed',
+      consistencyScore: 0,
+      assignmentsAnalyzed: 0,
+      weeksAnalyzed: 0,
+    };
+  }
+
+  const dayFrequency = new Map<string, number>();
+  const timeFrequency = new Map<string, number>();
+  const tractorFrequency = new Map<string, number>();
+  const contractFrequency = new Map<string, number>();
+  const weekSet = new Set<string>();
+  const weekDayMap = new Map<string, Set<string>>();
+
+  for (const a of assignments) {
+    const weekStart = new Date(a.serviceDate);
+    weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+    const weekKey = weekStart.toISOString().split('T')[0];
+    weekSet.add(weekKey);
+
+    if (!weekDayMap.has(weekKey)) {
+      weekDayMap.set(weekKey, new Set());
+    }
+    weekDayMap.get(weekKey)!.add(a.dayName);
+
+    dayFrequency.set(a.dayName, (dayFrequency.get(a.dayName) || 0) + 1);
+
+    // Use canonical time from lookup
+    const canonicalTime = CANONICAL_START_TIMES[`${a.soloType?.toLowerCase()}_${a.tractorId}`] || a.startTime;
+    timeFrequency.set(canonicalTime, (timeFrequency.get(canonicalTime) || 0) + 1);
+
+    if (a.tractorId) {
+      tractorFrequency.set(a.tractorId, (tractorFrequency.get(a.tractorId) || 0) + 1);
+    }
+
+    if (a.soloType) {
+      contractFrequency.set(a.soloType, (contractFrequency.get(a.soloType) || 0) + 1);
+    }
+  }
+
+  const totalWeeks = weekSet.size;
+
+  // Calculate per-week day consistency (50%+ threshold)
+  const dayWeekCount = new Map<string, number>();
+  for (const daysInWeek of weekDayMap.values()) {
+    for (const day of daysInWeek) {
+      dayWeekCount.set(day, (dayWeekCount.get(day) || 0) + 1);
+    }
+  }
+
+  const preferredDays = Array.from(dayWeekCount.entries())
+    .filter(([_, weekCount]) => weekCount >= totalWeeks * 0.5)
+    .sort((a, b) => {
+      const diff = b[1] - a[1];
+      if (diff !== 0) return diff;
+      return DAY_NAMES_LOWER.indexOf(a[0]) - DAY_NAMES_LOWER.indexOf(b[0]);
+    })
+    .map(([day]) => day);
+
+  const finalPreferredDays = preferredDays.length > 0
+    ? preferredDays
+    : getTopNFromMap(dayFrequency, 4);
+
+  const preferredStartTimes = getTopNFromMap(timeFrequency, 2).sort();
+  const preferredTractors = getTopNFromMap(tractorFrequency, 3);
+  const preferredContractType = getTopNFromMap(contractFrequency, 1)[0] || 'solo1';
+
+  // Determine pattern group
+  const sunWedDays = ['sunday', 'monday', 'tuesday', 'wednesday'];
+  const wedSatDays = ['wednesday', 'thursday', 'friday', 'saturday'];
+  let sunWedCount = 0;
+  let wedSatCount = 0;
+  let totalCount = 0;
+
+  for (const [day, count] of dayFrequency) {
+    totalCount += count;
+    if (sunWedDays.includes(day)) sunWedCount += count;
+    if (wedSatDays.includes(day)) wedSatCount += count;
+  }
+
+  const wedCount = dayFrequency.get('wednesday') || 0;
+  sunWedCount -= wedCount / 2;
+  wedSatCount -= wedCount / 2;
+
+  let patternGroup: 'sunWed' | 'wedSat' | 'mixed' = 'mixed';
+  if (totalCount > 0) {
+    if (sunWedCount / totalCount >= 0.7) patternGroup = 'sunWed';
+    else if (wedSatCount / totalCount >= 0.7) patternGroup = 'wedSat';
+  }
+
+  // Calculate consistency score
+  let consistencyScore = 0;
+  if (finalPreferredDays.length > 0 && totalWeeks > 0) {
+    let perfectWeeks = 0;
+    for (const daysWorked of weekDayMap.values()) {
+      if (finalPreferredDays.every(day => daysWorked.has(day))) perfectWeeks++;
+    }
+    consistencyScore = Math.round((perfectWeeks / totalWeeks) * 100) / 100;
+  }
+
+  return {
+    preferredDays: finalPreferredDays,
+    preferredStartTimes,
+    preferredTractors,
+    preferredContractType,
+    patternGroup,
+    consistencyScore,
+    assignmentsAnalyzed: assignments.length,
+    weeksAnalyzed: totalWeeks,
+  };
+}
+
+/**
+ * Regenerate DNA profiles from block_assignments data
+ * Uses improved algorithm that looks at actual assignment patterns
+ */
+export async function regenerateDNAFromBlockAssignments(tenantId: string): Promise<{
+  processed: number;
+  updated: number;
+  skipped: number;
+  details: { name: string; changed: boolean; before: string; after: string }[];
+}> {
+  console.log(`[DNA Regenerate] Starting for tenant ${tenantId}`);
+
+  // Get all drivers with block assignments
+  const driversResult = await db.execute(sql`
+    SELECT DISTINCT
+      d.id as driver_id,
+      d.first_name,
+      d.last_name,
+      d.tenant_id
+    FROM drivers d
+    INNER JOIN block_assignments ba ON ba.driver_id = d.id
+    WHERE ba.is_active = true AND d.tenant_id = ${tenantId}
+    ORDER BY d.first_name, d.last_name
+  `);
+
+  const details: { name: string; changed: boolean; before: string; after: string }[] = [];
+  let updated = 0;
+  let skipped = 0;
+
+  for (const row of driversResult.rows) {
+    const driver = row as any;
+    const driverName = `${driver.first_name} ${driver.last_name}`;
+
+    // Get assignments
+    const assignmentsResult = await db.execute(sql`
+      SELECT
+        b.service_date,
+        b.start_timestamp,
+        b.solo_type,
+        b.tractor_id
+      FROM block_assignments ba
+      JOIN blocks b ON ba.block_id = b.id
+      WHERE ba.driver_id = ${driver.driver_id}
+      AND ba.is_active = true
+      ORDER BY b.service_date DESC
+      LIMIT 100
+    `);
+
+    const assignments = (assignmentsResult.rows as any[]).map(r => {
+      const serviceDate = r.service_date instanceof Date ? r.service_date : new Date(r.service_date);
+      const dayOfWeek = serviceDate.getDay();
+      let startTime = '00:00';
+      if (r.start_timestamp) {
+        const ts = r.start_timestamp instanceof Date ? r.start_timestamp : new Date(r.start_timestamp);
+        startTime = ts.toISOString().split('T')[1].slice(0, 5);
+      }
+      return {
+        serviceDate,
+        dayOfWeek,
+        dayName: DAY_NAMES_LOWER[dayOfWeek],
+        startTime,
+        soloType: r.solo_type || 'solo1',
+        tractorId: r.tractor_id || '',
+      };
+    });
+
+    if (assignments.length < 3) {
+      skipped++;
+      continue;
+    }
+
+    const newDNA = computeDNAFromBlockAssignments(assignments);
+
+    // Get existing profile
+    const existingResult = await db.execute(sql`
+      SELECT preferred_days, preferred_start_times, preferred_contract_type
+      FROM driver_dna_profiles
+      WHERE driver_id = ${driver.driver_id}
+    `);
+
+    const existing = existingResult.rows[0] as any;
+    const beforeDays = existing?.preferred_days?.join(',') || 'none';
+    const beforeTimes = existing?.preferred_start_times?.join(',') || 'none';
+    const afterDays = newDNA.preferredDays.join(',');
+    const afterTimes = newDNA.preferredStartTimes.join(',');
+    const changed = beforeDays !== afterDays || beforeTimes !== afterTimes;
+
+    const daysArrayLiteral = `{${newDNA.preferredDays.join(',')}}`;
+    const timesArrayLiteral = `{${newDNA.preferredStartTimes.join(',')}}`;
+    const tractorsArrayLiteral = `{${newDNA.preferredTractors.join(',')}}`;
+
+    if (existing) {
+      await db.execute(sql`
+        UPDATE driver_dna_profiles SET
+          preferred_days = ${daysArrayLiteral}::text[],
+          preferred_start_times = ${timesArrayLiteral}::text[],
+          preferred_tractors = ${tractorsArrayLiteral}::text[],
+          preferred_contract_type = ${newDNA.preferredContractType},
+          pattern_group = ${newDNA.patternGroup},
+          consistency_score = ${newDNA.consistencyScore.toFixed(4)},
+          assignments_analyzed = ${newDNA.assignmentsAnalyzed},
+          weeks_analyzed = ${newDNA.weeksAnalyzed},
+          last_analyzed_at = NOW(),
+          updated_at = NOW()
+        WHERE driver_id = ${driver.driver_id}
+      `);
+    } else {
+      await db.execute(sql`
+        INSERT INTO driver_dna_profiles (
+          tenant_id, driver_id, preferred_days, preferred_start_times,
+          preferred_tractors, preferred_contract_type, pattern_group,
+          consistency_score, assignments_analyzed, weeks_analyzed,
+          last_analyzed_at, analysis_version
+        ) VALUES (
+          ${tenantId}, ${driver.driver_id}, ${daysArrayLiteral}::text[],
+          ${timesArrayLiteral}::text[], ${tractorsArrayLiteral}::text[],
+          ${newDNA.preferredContractType}, ${newDNA.patternGroup},
+          ${newDNA.consistencyScore.toFixed(4)}, ${newDNA.assignmentsAnalyzed},
+          ${newDNA.weeksAnalyzed}, NOW(), 1
+        )
+      `);
+    }
+
+    updated++;
+    details.push({
+      name: driverName,
+      changed,
+      before: `${existing?.preferred_contract_type || 'none'} | ${beforeDays} @ ${beforeTimes}`,
+      after: `${newDNA.preferredContractType} | ${afterDays} @ ${afterTimes}`,
+    });
+  }
+
+  console.log(`[DNA Regenerate] Complete: ${updated} updated, ${skipped} skipped`);
+
+  return {
+    processed: driversResult.rows.length,
+    updated,
+    skipped,
+    details,
+  };
+}
+
+/**
+ * Update DNA profile for a single driver based on their block_assignments
+ * Automatically called after new assignments to keep profiles current
+ * Only updates if driver has at least MIN_ASSIGNMENTS assignments
+ */
+const MIN_ASSIGNMENTS_FOR_DNA = 3;
+
+export async function updateSingleDriverDNA(tenantId: string, driverId: string): Promise<{
+  updated: boolean;
+  reason: string;
+  profile?: ComputedDNA;
+}> {
+  // Get driver info
+  const driverResult = await db.execute(sql`
+    SELECT id, first_name, last_name FROM drivers
+    WHERE id = ${driverId} AND tenant_id = ${tenantId}
+  `);
+
+  if (driverResult.rows.length === 0) {
+    return { updated: false, reason: 'Driver not found' };
+  }
+
+  const driver = driverResult.rows[0] as any;
+
+  // Get assignments
+  const assignmentsResult = await db.execute(sql`
+    SELECT
+      b.service_date,
+      b.start_timestamp,
+      b.solo_type,
+      b.tractor_id
+    FROM block_assignments ba
+    JOIN blocks b ON ba.block_id = b.id
+    WHERE ba.driver_id = ${driverId}
+    AND ba.is_active = true
+    ORDER BY b.service_date DESC
+    LIMIT 100
+  `);
+
+  if (assignmentsResult.rows.length < MIN_ASSIGNMENTS_FOR_DNA) {
+    return {
+      updated: false,
+      reason: `Only ${assignmentsResult.rows.length} assignments, need ${MIN_ASSIGNMENTS_FOR_DNA}`
+    };
+  }
+
+  const assignments = (assignmentsResult.rows as any[]).map(r => {
+    const serviceDate = r.service_date instanceof Date ? r.service_date : new Date(r.service_date);
+    const dayOfWeek = serviceDate.getDay();
+    let startTime = '00:00';
+    if (r.start_timestamp) {
+      const ts = r.start_timestamp instanceof Date ? r.start_timestamp : new Date(r.start_timestamp);
+      startTime = ts.toISOString().split('T')[1].slice(0, 5);
+    }
+    return {
+      serviceDate,
+      dayOfWeek,
+      dayName: DAY_NAMES_LOWER[dayOfWeek],
+      startTime,
+      soloType: r.solo_type || 'solo1',
+      tractorId: r.tractor_id || '',
+    };
+  });
+
+  const newDNA = computeDNAFromBlockAssignments(assignments);
+
+  const daysArrayLiteral = `{${newDNA.preferredDays.join(',')}}`;
+  const timesArrayLiteral = `{${newDNA.preferredStartTimes.join(',')}}`;
+  const tractorsArrayLiteral = `{${newDNA.preferredTractors.join(',')}}`;
+
+  // Check if profile exists
+  const existingResult = await db.execute(sql`
+    SELECT id FROM driver_dna_profiles WHERE driver_id = ${driverId}
+  `);
+
+  if (existingResult.rows.length > 0) {
+    await db.execute(sql`
+      UPDATE driver_dna_profiles SET
+        preferred_days = ${daysArrayLiteral}::text[],
+        preferred_start_times = ${timesArrayLiteral}::text[],
+        preferred_tractors = ${tractorsArrayLiteral}::text[],
+        preferred_contract_type = ${newDNA.preferredContractType},
+        pattern_group = ${newDNA.patternGroup},
+        consistency_score = ${newDNA.consistencyScore.toFixed(4)},
+        assignments_analyzed = ${newDNA.assignmentsAnalyzed},
+        weeks_analyzed = ${newDNA.weeksAnalyzed},
+        last_analyzed_at = NOW(),
+        updated_at = NOW()
+      WHERE driver_id = ${driverId}
+    `);
+  } else {
+    await db.execute(sql`
+      INSERT INTO driver_dna_profiles (
+        tenant_id, driver_id, preferred_days, preferred_start_times,
+        preferred_tractors, preferred_contract_type, pattern_group,
+        consistency_score, assignments_analyzed, weeks_analyzed,
+        last_analyzed_at, analysis_version
+      ) VALUES (
+        ${tenantId}, ${driverId}, ${daysArrayLiteral}::text[],
+        ${timesArrayLiteral}::text[], ${tractorsArrayLiteral}::text[],
+        ${newDNA.preferredContractType}, ${newDNA.patternGroup},
+        ${newDNA.consistencyScore.toFixed(4)}, ${newDNA.assignmentsAnalyzed},
+        ${newDNA.weeksAnalyzed}, NOW(), 1
+      )
+    `);
+  }
+
+  console.log(`[DNA] Updated profile for ${driver.first_name} ${driver.last_name}: ${newDNA.preferredDays.join(',')} @ ${newDNA.preferredStartTimes.join(',')}`);
+
+  return {
+    updated: true,
+    reason: 'Profile updated successfully',
+    profile: newDNA,
+  };
+}

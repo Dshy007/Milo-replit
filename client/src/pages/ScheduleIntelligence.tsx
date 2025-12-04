@@ -21,6 +21,7 @@ import {
   CheckCircle2,
   Loader2,
   Settings2,
+  Filter,
 } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
 import {
@@ -29,7 +30,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { cn } from "@/lib/utils";
+import { cn, getMatchColor } from "@/lib/utils";
 import { MiloInline } from "@/components/MiloInline";
 import { ContractTypeBadge } from "@/components/ContractTypeBadge";
 
@@ -251,7 +252,7 @@ function DriverCard({
                 </div>
               </div>
               <div className="text-right">
-                <div className={`text-xl font-bold ${hasData ? 'text-emerald-600' : 'text-slate-400'}`}>
+                <div className={`text-xl font-bold ${hasData ? getMatchColor(consistency) : 'text-slate-400'}`}>
                   {hasData ? `${consistency}%` : '—'}
                 </div>
                 <div className="text-xs text-muted-foreground">{hasData ? 'match' : 'no data'}</div>
@@ -439,6 +440,7 @@ function getAccuracyColor(accuracy: number): string {
 export default function ScheduleIntelligence() {
   const [searchQuery, setSearchQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "sunWed" | "wedSat" | "mixed">("all");
+  const [contractFilter, setContractFilter] = useState<'all' | 'solo1' | 'solo2'>('all');
   const [applyingDriverId, setApplyingDriverId] = useState<string | null>(null);
   const [analysisAccuracy, setAnalysisAccuracy] = useState(75); // 0-100%, default 75% (confident)
   const { toast } = useToast();
@@ -497,7 +499,8 @@ export default function ScheduleIntelligence() {
   const profiles = data?.profiles?.filter((p) => {
     const matchesSearch = p.driverName.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesFilter = filter === "all" || p.patternGroup === filter;
-    return matchesSearch && matchesFilter;
+    const matchesContract = contractFilter === 'all' || p.preferredContractType?.toLowerCase() === contractFilter;
+    return matchesSearch && matchesFilter && matchesContract;
   }) || [];
 
   const stats = data?.stats;
@@ -623,7 +626,7 @@ export default function ScheduleIntelligence() {
           </Card>
           <Card>
             <CardContent className="p-4 text-center">
-              <div className="text-2xl font-bold text-emerald-600">{Math.round(stats.avgConsistency * 100)}%</div>
+              <div className={`text-2xl font-bold ${getMatchColor(Math.round(stats.avgConsistency * 100))}`}>{Math.round(stats.avgConsistency * 100)}%</div>
               <div className="text-xs text-muted-foreground">Avg Match</div>
             </CardContent>
           </Card>
@@ -721,33 +724,68 @@ export default function ScheduleIntelligence() {
 
       {/* Search & Filter */}
       {hasProfiles && (
-        <div className="flex flex-col sm:flex-row gap-3 mb-6">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <Input
-              placeholder="Search drivers..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-9"
-            />
+        <div className="flex flex-col gap-3 mb-6">
+          <div className="flex flex-col sm:flex-row gap-3">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input
+                placeholder="Search drivers..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-9"
+              />
+            </div>
+            <div className="flex gap-2">
+              {[
+                { key: "all", label: "All" },
+                { key: "sunWed", label: "Sun-Wed" },
+                { key: "wedSat", label: "Wed-Sat" },
+                { key: "mixed", label: "Flexible" },
+              ].map((f) => (
+                <Button
+                  key={f.key}
+                  variant={filter === f.key ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setFilter(f.key as any)}
+                  className={filter === f.key ? "bg-blue-600 hover:bg-blue-700" : ""}
+                >
+                  {f.label}
+                </Button>
+              ))}
+            </div>
           </div>
-          <div className="flex gap-2">
-            {[
-              { key: "all", label: "All" },
-              { key: "sunWed", label: "Sun-Wed" },
-              { key: "wedSat", label: "Wed-Sat" },
-              { key: "mixed", label: "Flexible" },
-            ].map((f) => (
+          {/* Contract Type Filter */}
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <Filter className="w-4 h-4 text-muted-foreground" />
+              <span className="text-sm text-muted-foreground">Contract:</span>
+            </div>
+            <div className="flex gap-2">
               <Button
-                key={f.key}
-                variant={filter === f.key ? "default" : "outline"}
+                variant={contractFilter === 'all' ? 'default' : 'outline'}
                 size="sm"
-                onClick={() => setFilter(f.key as any)}
-                className={filter === f.key ? "bg-blue-600 hover:bg-blue-700" : ""}
+                onClick={() => setContractFilter('all')}
+                className={contractFilter === 'all' ? '' : ''}
               >
-                {f.label}
+                All
               </Button>
-            ))}
+              <Button
+                variant={contractFilter === 'solo1' ? 'default' : 'outline'}
+                size="sm"
+                className={contractFilter === 'solo1' ? 'bg-blue-600 hover:bg-blue-700' : ''}
+                onClick={() => setContractFilter('solo1')}
+              >
+                Solo1
+              </Button>
+              <Button
+                variant={contractFilter === 'solo2' ? 'default' : 'outline'}
+                size="sm"
+                className={contractFilter === 'solo2' ? 'bg-emerald-600 hover:bg-emerald-700' : ''}
+                onClick={() => setContractFilter('solo2')}
+              >
+                Solo2
+              </Button>
+            </div>
           </div>
         </div>
       )}

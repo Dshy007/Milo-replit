@@ -495,9 +495,9 @@ export default function Schedules() {
     if (element) {
       element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
       // Add a brief highlight effect
-      element.classList.add('ring-4', 'ring-purple-500', 'ring-offset-2');
+      element.classList.add('ring-4', 'ring-green-500', 'ring-offset-2');
       setTimeout(() => {
-        element.classList.remove('ring-4', 'ring-purple-500', 'ring-offset-2');
+        element.classList.remove('ring-4', 'ring-green-500', 'ring-offset-2');
       }, 2000);
     }
   }, []);
@@ -1478,7 +1478,7 @@ export default function Schedules() {
   }, [calendarData]);
 
   // Compute highlighted occurrence IDs for calendar (same logic as sidebar flip card)
-  // Holy Grail: Day + Time + Contract must match, ONE block per day, no artificial cap
+  // Holy Grail: Day + Time + Contract must match, ONE block per day, capped by contract rules
   const highlightedOccurrenceIds = useMemo(() => {
     if (!activeDriverProfile || !unassignedOccurrences.length) {
       return new Set<string>();
@@ -1506,7 +1506,6 @@ export default function Schedules() {
       });
 
     // ONE block per day - pick the best match for each unique date
-    // No artificial cap - let rolling 6-day and 38hr reset rules determine feasibility
     const seenDates = new Set<string>();
     const onePerDay: string[] = [];
 
@@ -1518,8 +1517,40 @@ export default function Schedules() {
       }
     }
 
-    return new Set(onePerDay);
+    // Apply contract-type specific caps based on scheduling rules:
+    // - Solo2: MAX 3 blocks per week (38hr reset rule within rolling 6-day period)
+    // - Solo1: More flexible, typically 4-5 per week
+    // - Team: 3 per week
+    const contractType = profile.preferredContractType?.toLowerCase();
+    let maxBlocksPerWeek = 5; // Default for Solo1
+
+    if (contractType === 'solo2') {
+      maxBlocksPerWeek = 3; // Solo2 drivers: 38hr reset rule limits to 3 per week
+    } else if (contractType === 'team') {
+      maxBlocksPerWeek = 3;
+    }
+
+    return new Set(onePerDay.slice(0, maxBlocksPerWeek));
   }, [activeDriverProfile, unassignedOccurrences]);
+
+  // Auto-scroll to first matching block when a driver is SELECTED (clicked, not hovered)
+  useEffect(() => {
+    if (!selectedDriverId || highlightedOccurrenceIds.size === 0) return;
+
+    // Get the first highlighted occurrence ID
+    const firstMatchId = highlightedOccurrenceIds.values().next().value;
+    if (!firstMatchId) return;
+
+    // Small delay to ensure DOM is updated with highlighting
+    const scrollTimeout = setTimeout(() => {
+      const element = document.querySelector(`[data-occurrence-id="${firstMatchId}"]`);
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+      }
+    }, 100);
+
+    return () => clearTimeout(scrollTimeout);
+  }, [selectedDriverId, highlightedOccurrenceIds]);
 
   // Note: topMatchingBlocks moved to DriverPoolSidebar flip cards
 
@@ -1726,7 +1757,7 @@ export default function Schedules() {
               {activeDriverId && (
                 <div className={`px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-2 ${
                   hoveredDriverProfile
-                    ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/30'
+                    ? 'bg-green-600 text-white shadow-lg shadow-green-500/30'
                     : 'bg-red-600 text-white'
                 }`}>
                   <span className="text-lg">🧬</span>
@@ -2112,27 +2143,27 @@ export default function Schedules() {
                                       ${hasAnyMatch ? 'transform scale-[1.02]' : ''}
                                     `}
                                     style={{
-                                      // AI purple glow theme for DNA matching - ENHANCED visibility
+                                      // Green glow theme for DNA matching - ENHANCED visibility
                                       backgroundColor: isHighMatch
-                                        ? 'rgba(147, 51, 234, 0.15)'
+                                        ? 'rgba(34, 197, 94, 0.15)'  // green-500
                                         : isMedMatch
-                                        ? 'rgba(139, 92, 246, 0.1)'
+                                        ? 'rgba(74, 222, 128, 0.1)'  // green-400
                                         : isLowMatch
-                                        ? 'rgba(167, 139, 250, 0.08)'
+                                        ? 'rgba(134, 239, 172, 0.08)'  // green-300
                                         : undefined,
                                       boxShadow: isHighMatch
-                                        ? '0 0 25px rgba(147, 51, 234, 0.8), 0 0 50px rgba(147, 51, 234, 0.4), inset 0 0 20px rgba(147, 51, 234, 0.2)'
+                                        ? '0 0 25px rgba(34, 197, 94, 0.8), 0 0 50px rgba(34, 197, 94, 0.4), inset 0 0 20px rgba(34, 197, 94, 0.2)'
                                         : isMedMatch
-                                        ? '0 0 20px rgba(139, 92, 246, 0.6), 0 0 35px rgba(139, 92, 246, 0.3), inset 0 0 12px rgba(139, 92, 246, 0.15)'
+                                        ? '0 0 20px rgba(74, 222, 128, 0.6), 0 0 35px rgba(74, 222, 128, 0.3), inset 0 0 12px rgba(74, 222, 128, 0.15)'
                                         : isLowMatch
-                                        ? '0 0 12px rgba(167, 139, 250, 0.5), inset 0 0 8px rgba(167, 139, 250, 0.1)'
+                                        ? '0 0 12px rgba(134, 239, 172, 0.5), inset 0 0 8px rgba(134, 239, 172, 0.1)'
                                         : undefined,
                                       outline: isHighMatch
-                                        ? '3px solid rgba(147, 51, 234, 0.9)'
+                                        ? '3px solid rgba(34, 197, 94, 0.9)'  // green-500
                                         : isMedMatch
-                                        ? '2px solid rgba(139, 92, 246, 0.8)'
+                                        ? '2px solid rgba(74, 222, 128, 0.8)'  // green-400
                                         : isLowMatch
-                                        ? '2px solid rgba(167, 139, 250, 0.6)'
+                                        ? '2px solid rgba(134, 239, 172, 0.6)'  // green-300
                                         : undefined,
                                       outlineOffset: hasAnyMatch ? '2px' : undefined,
                                     }}
@@ -2154,7 +2185,7 @@ export default function Schedules() {
                                           {occ.blockId}
                                           {/* Show 100% badge for highlighted matches */}
                                           {isHighlighted && (
-                                            <span className="text-[10px] font-bold px-1 rounded bg-purple-600 text-white">
+                                            <span className="text-[10px] font-bold px-1 rounded bg-green-600 text-white">
                                               100%
                                             </span>
                                           )}
@@ -2324,14 +2355,14 @@ export default function Schedules() {
                                       <div
                                         className="w-full p-2 rounded-b-md border border-t-0 border-dashed text-xs text-center transition-all cursor-pointer"
                                         style={{
-                                          // DNA match highlighting with AI purple glow theme
+                                          // DNA match highlighting with green glow theme
                                           backgroundColor: isButtonHighlighted
-                                            ? 'rgba(147, 51, 234, 0.15)'  // purple-600
+                                            ? 'rgba(34, 197, 94, 0.15)'  // green-500
                                             : themeMode === 'day'
                                             ? (occ.isRejectedLoad ? 'rgba(239, 68, 68, 0.1)' : 'rgba(245, 158, 11, 0.1)')
                                             : (occ.isRejectedLoad ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)'),
                                           borderColor: isButtonHighlighted
-                                            ? 'rgba(147, 51, 234, 0.5)'   // purple-600
+                                            ? 'rgba(34, 197, 94, 0.5)'   // green-500
                                             : themeMode === 'day'
                                             ? (occ.isRejectedLoad ? 'rgba(239, 68, 68, 0.3)' : 'rgba(245, 158, 11, 0.3)')
                                             : (occ.isRejectedLoad ? 'rgba(239, 68, 68, 0.3)' : 'rgba(245, 158, 11, 0.3)'),
@@ -2339,7 +2370,7 @@ export default function Schedules() {
                                             ? (occ.isRejectedLoad ? '#dc2626' : '#d97706')
                                             : (occ.isRejectedLoad ? '#ff6b6b' : '#fbbf24'),
                                           boxShadow: isButtonHighlighted
-                                            ? '0 0 20px rgba(147, 51, 234, 0.6), inset 0 0 10px rgba(147, 51, 234, 0.2)'
+                                            ? '0 0 20px rgba(34, 197, 94, 0.6), inset 0 0 10px rgba(34, 197, 94, 0.2)'
                                             : undefined,
                                         }}
                                         onContextMenu={(e) => handleRightClickUnassigned(e, occ)}

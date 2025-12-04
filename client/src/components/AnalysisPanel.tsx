@@ -193,6 +193,14 @@ interface StagedAssignment {
   score: number;
   reasons: string[];
   status: "pending" | "accepted" | "rejected";
+  matchType?: string; // 'holy_grail', 'strong', 'contract', 'weak'
+}
+
+// Stats from the API
+interface PredictionStats {
+  perfectMatches: number;
+  strongMatches: number;
+  totalBlocks: number;
 }
 
 // Assignment Suggestions Component with Staging Area
@@ -209,9 +217,11 @@ function AssignmentSuggestions({
   const [isCommitting, setIsCommitting] = useState(false);
   const [isUnassigning, setIsUnassigning] = useState(false);
   const [stagedAssignments, setStagedAssignments] = useState<StagedAssignment[]>([]);
+  const [predictionStats, setPredictionStats] = useState<PredictionStats | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [contractTab, setContractTab] = useState<"solo1" | "solo2" | "all">("all");
   const [showUnassignConfirm, setShowUnassignConfirm] = useState(false);
+  const [autoAcceptPerfect, setAutoAcceptPerfect] = useState(true);
 
   const unassignedBlocks = blocks.filter((b) => !b.driverId && !b.isRejectedLoad);
   const assignedBlocks = blocks.filter((b) => b.driverId && !b.isRejectedLoad);
@@ -224,11 +234,13 @@ function AssignmentSuggestions({
     );
   }, [stagedAssignments, contractTab]);
 
-  // Count by contract type
+  // Count by contract type and match type
   const solo1Count = stagedAssignments.filter(s => s.blockData.contractType?.toLowerCase() === "solo1").length;
   const solo2Count = stagedAssignments.filter(s => s.blockData.contractType?.toLowerCase() === "solo2").length;
   const acceptedCount = stagedAssignments.filter(s => s.status === "accepted").length;
   const pendingCount = stagedAssignments.filter(s => s.status === "pending").length;
+  const perfectMatchCount = stagedAssignments.filter(s => s.score >= 1.0).length;
+  const strongMatchCount = stagedAssignments.filter(s => s.score >= 0.70 && s.score < 1.0).length;
 
   const handleGetSuggestions = async () => {
     if (unassignedBlocks.length === 0) return;
@@ -236,6 +248,7 @@ function AssignmentSuggestions({
     setIsLoading(true);
     setError(null);
     setStagedAssignments([]); // Clear previous staging
+    setPredictionStats(null);
 
     try {
       const response = await fetch("/api/analysis/predict-assignments", {
@@ -266,6 +279,11 @@ function AssignmentSuggestions({
 
       const data = await response.json();
 
+      // Save stats from API
+      if (data.stats) {
+        setPredictionStats(data.stats);
+      }
+
       // Convert to staged assignments (top recommendation only)
       const staged: StagedAssignment[] = [];
       for (const rec of data.recommendations || []) {
@@ -273,6 +291,8 @@ function AssignmentSuggestions({
           const topRec = rec.recommendations[0];
           const blockData = unassignedBlocks.find(b => b.blockId === rec.block_id);
           if (blockData) {
+            // Auto-accept 100% matches if enabled
+            const isPerfect = topRec.score >= 1.0;
             staged.push({
               blockId: rec.block_id,
               blockData,
@@ -280,7 +300,8 @@ function AssignmentSuggestions({
               driverName: topRec.driver_name,
               score: topRec.score,
               reasons: topRec.reasons || [],
-              status: "pending",
+              matchType: topRec.matchType || 'unknown',
+              status: autoAcceptPerfect && isPerfect ? "accepted" : "pending",
             });
           }
         }
@@ -425,17 +446,37 @@ function AssignmentSuggestions({
       {/* Initial State - No staging yet */}
       {stagedAssignments.length === 0 && !isLoading && (
         <div className="space-y-4">
-          <div className="text-center py-6">
-            <Users className="w-12 h-12 mx-auto text-amber-500 mb-4" />
-            <p className="text-gray-600 mb-2">
-              {unassignedBlocks.length} unassigned block{unassignedBlocks.length !== 1 ? "s" : ""}
-            </p>
+          <div className="text-center py-4">
+            <div className="flex items-center justify-center gap-2 mb-3">
+              <span className="text-4xl font-bold text-amber-600">{unassignedBlocks.length}</span>
+              <span className="text-lg text-gray-500">unassigned blocks</span>
+            </div>
             <p className="text-xs text-gray-500 mb-4">
-              Get AI suggestions, review them, then commit changes.
+              DNA-based matching uses driver preferences (day + time + contract type)
             </p>
-            <Button onClick={handleGetSuggestions} disabled={unassignedBlocks.length === 0}>
-              <Users className="w-4 h-4 mr-2" />
-              Get AI Suggestions
+
+            {/* Auto-accept toggle */}
+            <div className="flex items-center justify-center gap-2 mb-4">
+              <input
+                type="checkbox"
+                id="autoAccept"
+                checked={autoAcceptPerfect}
+                onChange={(e) => setAutoAcceptPerfect(e.target.checked)}
+                className="w-4 h-4 rounded border-gray-300"
+              />
+              <label htmlFor="autoAccept" className="text-sm text-gray-600">
+                Auto-accept 100% matches
+              </label>
+            </div>
+
+            <Button
+              onClick={handleGetSuggestions}
+              disabled={unassignedBlocks.length === 0}
+              className="bg-green-600 hover:bg-green-700"
+              size="lg"
+            >
+              <Users className="w-5 h-5 mr-2" />
+              Find Driver Matches
             </Button>
           </div>
 
@@ -472,11 +513,27 @@ function AssignmentSuggestions({
       {/* Staging Area */}
       {stagedAssignments.length > 0 && !isLoading && (
         <div className="space-y-3">
+          {/* Match Quality Stats */}
+          <div className="grid grid-cols-3 gap-2">
+            <div className="bg-green-50 border border-green-200 rounded-lg p-2 text-center">
+              <div className="text-2xl font-bold text-green-600">{perfectMatchCount}</div>
+              <div className="text-[10px] text-green-700 uppercase font-medium">100% Match</div>
+            </div>
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 text-center">
+              <div className="text-2xl font-bold text-amber-600">{strongMatchCount}</div>
+              <div className="text-[10px] text-amber-700 uppercase font-medium">70%+ Match</div>
+            </div>
+            <div className="bg-gray-50 border border-gray-200 rounded-lg p-2 text-center">
+              <div className="text-2xl font-bold text-gray-600">{stagedAssignments.length - perfectMatchCount - strongMatchCount}</div>
+              <div className="text-[10px] text-gray-500 uppercase font-medium">Other</div>
+            </div>
+          </div>
+
           {/* Staging Header */}
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm font-medium text-blue-800">
-                📋 Staging Area
+                📋 Review & Apply
               </span>
               <Button size="sm" variant="ghost" onClick={handleClearStaging}>
                 <X className="w-4 h-4 mr-1" />
@@ -484,8 +541,8 @@ function AssignmentSuggestions({
               </Button>
             </div>
             <div className="flex gap-4 text-xs">
-              <span className="text-green-600">✓ {acceptedCount} accepted</span>
-              <span className="text-amber-600">○ {pendingCount} pending</span>
+              <span className="text-green-600 font-medium">✓ {acceptedCount} ready to apply</span>
+              <span className="text-amber-600">○ {pendingCount} pending review</span>
               <span className="text-gray-500">✗ {stagedAssignments.filter(s => s.status === "rejected").length} rejected</span>
             </div>
           </div>
@@ -589,17 +646,23 @@ function AssignmentSuggestions({
 
                       {/* Score */}
                       <td className="py-2 px-2 text-center">
-                        <span
-                          className={`inline-block px-2 py-0.5 rounded font-bold ${
-                            staged.score >= 0.9
-                              ? "bg-green-100 text-green-700"
-                              : staged.score >= 0.5
-                              ? "bg-amber-100 text-amber-700"
-                              : "bg-gray-100 text-gray-600"
-                          }`}
-                        >
-                          {(staged.score * 100).toFixed(0)}%
-                        </span>
+                        {staged.score >= 1.0 ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-bold bg-green-500 text-white text-xs shadow-sm">
+                            ★ 100%
+                          </span>
+                        ) : (
+                          <span
+                            className={`inline-block px-2 py-0.5 rounded font-bold text-xs ${
+                              staged.score >= 0.70
+                                ? "bg-amber-100 text-amber-700"
+                                : staged.score >= 0.50
+                                ? "bg-gray-100 text-gray-600"
+                                : "bg-red-50 text-red-600"
+                            }`}
+                          >
+                            {(staged.score * 100).toFixed(0)}%
+                          </span>
+                        )}
                       </td>
 
                       {/* Actions */}
@@ -638,27 +701,47 @@ function AssignmentSuggestions({
 
           {/* Commit Button */}
           <div className="border-t pt-3 space-y-2">
+            {acceptedCount > 0 && (
+              <div className="text-center text-sm text-gray-600 mb-1">
+                Remaining after apply: <strong className="text-amber-600">{unassignedBlocks.length - acceptedCount}</strong> blocks
+              </div>
+            )}
             <Button
-              className="w-full bg-green-600 hover:bg-green-700"
+              className="w-full bg-green-600 hover:bg-green-700 h-12 text-lg"
               onClick={handleCommitChanges}
               disabled={acceptedCount === 0 || isCommitting}
             >
               {isCommitting ? (
                 <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Committing...
+                  <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                  Applying Assignments...
                 </>
               ) : (
                 <>
-                  <Check className="w-4 h-4 mr-2" />
-                  Commit {acceptedCount} Assignment{acceptedCount !== 1 ? "s" : ""}
+                  <Check className="w-5 h-5 mr-2" />
+                  Apply {acceptedCount} Assignment{acceptedCount !== 1 ? "s" : ""}
                 </>
               )}
             </Button>
 
-            <Button variant="outline" onClick={handleGetSuggestions} className="w-full">
-              Refresh Suggestions
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={handleGetSuggestions} className="flex-1">
+                Refresh
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  // Accept all remaining pending
+                  setStagedAssignments((prev) =>
+                    prev.map((s) => s.status === "pending" ? { ...s, status: "accepted" } : s)
+                  );
+                }}
+                className="flex-1"
+                disabled={pendingCount === 0}
+              >
+                Accept All ({pendingCount})
+              </Button>
+            </div>
           </div>
         </div>
       )}

@@ -87,10 +87,10 @@ export class GeminiProfiler {
 
     try {
       this.model = this.client.getGenerativeModel({
-        model: "gemini-2.0-flash" // Current stable model
+        model: "gemini-2.5-flash" // Latest stable model (Dec 2025)
       });
       this.initialized = true;
-      console.log("[GeminiProfiler] Initialized with gemini-2.0-flash");
+      console.log("[GeminiProfiler] Initialized with gemini-2.5-flash");
     } catch (error) {
       console.error("[GeminiProfiler] Failed to initialize:", error);
       throw error;
@@ -266,9 +266,12 @@ export class GeminiProfiler {
           .sort((a, b) => (a as number) - (b as number))
           .map(d => DAY_NAMES[d as number]);
 
-    const preferredStartTimes = this.getTopN(timeFrequency, 3)
+    // Capture more times and tractors to avoid missing occasional shifts
+    // Top 4 times (was 3) to include bump/late shift times
+    // Top 4 tractors (was 2) for drivers who use multiple tractors
+    const preferredStartTimes = this.getTopN(timeFrequency, 4)
       .sort(); // Sort chronologically (HH:MM format sorts correctly as strings)
-    const preferredTractors = this.getTopN(tractorFrequency, 2);
+    const preferredTractors = this.getTopN(tractorFrequency, 4);
 
     // Get most common contract type
     const preferredContractType = this.getTopN(contractFrequency, 1)[0] || 'solo1';

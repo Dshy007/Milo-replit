@@ -36,6 +36,8 @@ import {
   getFleetDNAStats,
   deleteDNAProfile,
   refreshAllDNAProfiles,
+  regenerateDNAFromBlockAssignments,
+  updateSingleDriverDNA,
 } from "./dna-analyzer";
 
 // Require SESSION_SECRET
@@ -3892,6 +3894,27 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
     }
   });
 
+  // POST /api/driver-dna/regenerate - Regenerate DNA profiles from block_assignments data
+  // Uses improved algorithm that analyzes actual assignment patterns
+  app.post("/api/driver-dna/regenerate", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+
+      console.log(`[Driver DNA] Regenerate from block_assignments requested for tenant ${tenantId}`);
+
+      const result = await regenerateDNAFromBlockAssignments(tenantId);
+
+      res.json({
+        success: true,
+        message: `Regenerated ${result.updated} profiles from block_assignments data`,
+        ...result,
+      });
+    } catch (error: any) {
+      console.error("Regenerate DNA profiles error:", error);
+      res.status(500).json({ message: "Failed to regenerate DNA profiles", error: error.message });
+    }
+  });
+
   // DELETE /api/driver-dna/:driverId - Delete a DNA profile
   app.delete("/api/driver-dna/:driverId", requireAuth, async (req, res) => {
     try {
@@ -5067,6 +5090,12 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
         }
       }
 
+      // Auto-update DNA profile after successful assignment
+      // Runs in background to not block response
+      updateSingleDriverDNA(tenantId, driverId).catch(err => {
+        console.error(`[DNA] Failed to update DNA for driver ${driverId}:`, err);
+      });
+
       res.json({
         success: true,
         message: `Successfully assigned ${targetDriver.firstName} ${targetDriver.lastName} to block ${targetBlock.blockId}`,
@@ -5184,81 +5213,206 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
   });
 
   // POST /api/analysis/predict-assignments - Get AI-powered driver assignment recommendations
+  // Uses DNA profiles for Holy Grail matching: Contract Type + Day + Time
   app.post("/api/analysis/predict-assignments", requireAuth, async (req: Request, res: Response) => {
     try {
       const tenantId = req.session.tenantId!;
       const userId = req.session.userId!;
-      
+
       const { blocks: inputBlocks, constraints } = req.body;
 
       if (!inputBlocks || !Array.isArray(inputBlocks)) {
         return res.status(400).json({ message: "Missing required field: blocks (array)" });
       }
 
-      // Get all drivers for matching
+      const startTime = Date.now();
+
+      // Get all drivers with their DNA profiles for Holy Grail matching
       const allDriversRaw = await db
         .select()
         .from(drivers)
         .where(eq(drivers.tenantId, tenantId));
 
-      // Format drivers for Python: id, name, type
-      const formattedDrivers = allDriversRaw.map(d => ({
-        id: d.id,
-        name: `${d.firstName} ${d.lastName}`.trim(),
-        type: d.soloType || 'solo1',
-      }));
+      // Get DNA profiles for all drivers
+      const dnaProfiles = await db
+        .select()
+        .from(driverDnaProfiles)
+        .where(eq(driverDnaProfiles.tenantId, tenantId));
 
-      // Get historical assignments from IMPORTED BLOCKS (the actual data source)
-      // Join blocks table with blockAssignments to find past driver-block assignments
-      const historicalAssignments = await db
-        .select({
-          driverId: blockAssignments.driverId,
-          blockId: blocks.blockId,
-          serviceDate: blocks.serviceDate,
-          dayOfWeek: sql<number>`EXTRACT(DOW FROM ${blocks.serviceDate}::date)`,
-          startTime: sql<string>`TO_CHAR(${blocks.startTimestamp}, 'HH24:MI')`,
-          durationHours: blocks.duration,
-          contractType: blocks.soloType,
-          completed: sql<boolean>`true`,
-        })
-        .from(blocks)
-        .innerJoin(blockAssignments, and(
-          eq(blockAssignments.blockId, blocks.id),
-          eq(blockAssignments.isActive, true)
-        ))
-        .where(eq(blocks.tenantId, tenantId))
-        .limit(2000);
+      // Create DNA lookup by driver ID
+      const dnaByDriverId = new Map(dnaProfiles.map(p => [p.driverId, p]));
 
-      console.log(`[Predict] ${inputBlocks.length} blocks, ${formattedDrivers.length} drivers, ${historicalAssignments.length} historical records`);
-      if (historicalAssignments.length > 0) {
-        console.log(`[Predict] Sample historical:`, JSON.stringify(historicalAssignments[0]));
+      // Day name lookup
+      const DAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+      // Time conversion helper
+      function timeToMinutes(time: string): number {
+        const [h, m] = time.split(':').map(Number);
+        return h * 60 + (m || 0);
       }
 
-      const startTime = Date.now();
-      const { predictAssignments } = await import("./python-bridge");
-      const pythonResult = await predictAssignments({
-        action: 'predict',
-        blocks: inputBlocks,
-        drivers: formattedDrivers,
-        constraints: constraints || {},
-        historical: historicalAssignments,
+      // Track assignments in this batch to prevent double-booking
+      const assignedDrivers = new Map<string, string[]>(); // driverId -> [blockIds]
+
+      // Process each block and find best driver match using DNA profiles
+      const recommendations = inputBlocks.map((block: any) => {
+        const blockId = block.blockId;
+        const contractType = (block.contractType || '').toLowerCase();
+        const blockDate = new Date(block.serviceDate + 'T12:00:00');
+        const dayOfWeek = blockDate.getDay();
+        const dayName = DAY_NAMES[dayOfWeek];
+        const startTimeStr = block.startTime || '00:00';
+        const blockMinutes = timeToMinutes(startTimeStr);
+
+        // Score each driver based on DNA profile
+        const driverScores = allDriversRaw.map(driver => {
+          const dna = dnaByDriverId.get(driver.id);
+          const driverType = (driver.soloType || 'solo1').toLowerCase();
+          const driverName = `${driver.firstName} ${driver.lastName}`.trim();
+
+          // Base score and reasons
+          let score = 0;
+          const reasons: string[] = [];
+
+          // Check if driver already assigned too many blocks in this batch
+          const alreadyAssigned = assignedDrivers.get(driver.id)?.length || 0;
+          const maxAssignments = driverType === 'solo2' ? 3 : 6; // Solo2 limited to 3 blocks
+          if (alreadyAssigned >= maxAssignments) {
+            return {
+              driver_id: driver.id,
+              driver_name: driverName,
+              score: 0,
+              reasons: [`⚠ Already at max blocks (${alreadyAssigned})`],
+              matchType: 'blocked',
+            };
+          }
+
+          // HOLY GRAIL MATCHING: Contract + Day + Time
+          if (!dna) {
+            // No DNA profile - just contract type match
+            if (driverType === contractType) {
+              score = 0.30;
+              reasons.push('○ Contract type match (no DNA profile)');
+            } else {
+              score = 0.10;
+              reasons.push('△ No DNA profile, type mismatch');
+            }
+            return {
+              driver_id: driver.id,
+              driver_name: driverName,
+              score,
+              reasons,
+              matchType: 'fallback',
+            };
+          }
+
+          // 1. CONTRACT TYPE MATCH (required for high score)
+          const dnaContractType = (dna.preferredContractType || 'solo1').toLowerCase();
+          const contractMatch = driverType === contractType && dnaContractType === contractType;
+
+          // 2. DAY MATCH
+          const preferredDays = dna.preferredDays || [];
+          const dayMatch = preferredDays.includes(dayName);
+
+          // 3. TIME MATCH (within 2 hours)
+          const preferredTimes = dna.preferredStartTimes || [];
+          let bestTimeDiff = Infinity;
+          for (const prefTime of preferredTimes) {
+            const prefMinutes = timeToMinutes(prefTime);
+            const diff = Math.abs(blockMinutes - prefMinutes);
+            const wrapDiff = Math.min(diff, 1440 - diff);
+            bestTimeDiff = Math.min(bestTimeDiff, wrapDiff);
+          }
+          const timeMatch = bestTimeDiff <= 120; // Within 2 hours
+          const exactTimeMatch = bestTimeDiff <= 30; // Within 30 minutes
+
+          // SCORING LOGIC
+          if (contractMatch && dayMatch && exactTimeMatch) {
+            // PERFECT HOLY GRAIL - 100%
+            score = 1.0;
+            reasons.push(`★ Perfect Match: ${contractType.toUpperCase()} + ${dayName} + ${startTimeStr}`);
+          } else if (contractMatch && dayMatch && timeMatch) {
+            // Near-perfect - 95%
+            score = 0.95;
+            reasons.push(`✓ Strong Match: ${contractType.toUpperCase()} + ${dayName} (time within 2hr)`);
+          } else if (contractMatch && dayMatch) {
+            // Contract + Day but not time - 80%
+            score = 0.80;
+            reasons.push(`✓ Day Match: ${contractType.toUpperCase()} + ${dayName}`);
+          } else if (contractMatch && timeMatch) {
+            // Contract + Time but not day - 70%
+            score = 0.70;
+            reasons.push(`○ Time Match: ${contractType.toUpperCase()} @ ${startTimeStr}`);
+          } else if (contractMatch) {
+            // Just contract type - 50%
+            score = 0.50;
+            reasons.push(`○ Contract Match: ${contractType.toUpperCase()} only`);
+          } else if (dayMatch && timeMatch) {
+            // Day + Time but wrong contract - 40%
+            score = 0.40;
+            reasons.push(`○ Schedule Match but wrong contract type`);
+          } else {
+            // No significant match
+            score = 0.20;
+            reasons.push('△ No pattern match in DNA profile');
+          }
+
+          // Penalty for over-assignment in batch
+          if (alreadyAssigned > 2) {
+            score = Math.max(0.1, score - 0.10);
+            reasons.push(`↓ Already assigned ${alreadyAssigned} blocks`);
+          }
+
+          return {
+            driver_id: driver.id,
+            driver_name: driverName,
+            score: Math.round(score * 100) / 100,
+            reasons,
+            matchType: score >= 0.95 ? 'holy_grail' : score >= 0.70 ? 'strong' : score >= 0.50 ? 'contract' : 'weak',
+          };
+        });
+
+        // Sort by score descending
+        driverScores.sort((a, b) => b.score - a.score);
+
+        // Track top recommendation for workload balance
+        if (driverScores.length > 0 && driverScores[0].score > 0.2) {
+          const topDriverId = driverScores[0].driver_id;
+          if (!assignedDrivers.has(topDriverId)) {
+            assignedDrivers.set(topDriverId, []);
+          }
+          assignedDrivers.get(topDriverId)!.push(blockId);
+        }
+
+        return {
+          block_id: blockId,
+          contract_type: contractType,
+          service_date: block.serviceDate,
+          start_time: startTimeStr,
+          day_of_week: dayName,
+          recommendations: driverScores.slice(0, 5), // Top 5 candidates
+        };
       });
+
       const executionTime = Date.now() - startTime;
 
-      if (!pythonResult.success || !pythonResult.data) {
-        return res.status(400).json({
-          message: "Failed to generate predictions",
-          error: pythonResult.error
-        });
-      }
+      // Count perfect matches
+      const perfectMatches = recommendations.filter(
+        (r: any) => r.recommendations.length > 0 && r.recommendations[0].score >= 1.0
+      ).length;
+      const strongMatches = recommendations.filter(
+        (r: any) => r.recommendations.length > 0 && r.recommendations[0].score >= 0.70 && r.recommendations[0].score < 1.0
+      ).length;
+
+      console.log(`[DNA-Predict] ${inputBlocks.length} blocks → ${perfectMatches} perfect (100%), ${strongMatches} strong (70%+)`);
 
       // Store analysis result
       const { analysisResults } = await import("@shared/schema");
       await db.insert(analysisResults).values({
         tenantId,
-        analysisType: 'assignment_prediction',
-        inputData: { blocksCount: inputBlocks.length, driversCount: formattedDrivers.length },
-        result: pythonResult.data as any,
+        analysisType: 'dna_assignment_prediction',
+        inputData: { blocksCount: inputBlocks.length, driversCount: allDriversRaw.length },
+        result: { recommendations, perfectMatches, strongMatches } as any,
         success: true,
         executionTimeMs: executionTime,
         createdBy: userId,
@@ -5266,11 +5420,16 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
 
       res.json({
         success: true,
-        recommendations: pythonResult.data.recommendations,
+        recommendations,
+        stats: {
+          perfectMatches,
+          strongMatches,
+          totalBlocks: inputBlocks.length,
+        },
         executionTimeMs: executionTime,
       });
     } catch (error: any) {
-      console.error("Python prediction error:", error);
+      console.error("DNA prediction error:", error);
       res.status(500).json({ message: "Failed to generate predictions", error: error.message });
     }
   });
@@ -5582,7 +5741,7 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
       const { GoogleGenerativeAI } = await import("@google/generative-ai");
       const genAI = new GoogleGenerativeAI(apiKey);
       const model = genAI.getGenerativeModel({
-        model: "gemini-2.0-flash",
+        model: "gemini-2.5-flash",
         generationConfig: {
           maxOutputTokens: 2048,
         }
@@ -6070,6 +6229,15 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
           console.log(`[IMPORT DEBUG]   Block ${item.blockId}: ${item.reason} | hasRejectedTrip=${item.hasRejectedTrip}`);
         }
         console.log(`[IMPORT DEBUG] ============================================================\n`);
+      }
+
+      // Trigger DNA profile regeneration in background after import
+      // This updates all drivers with new assignment patterns
+      if (results.assignments > 0) {
+        regenerateDNAFromBlockAssignments(tenantId).catch(err => {
+          console.error(`[DNA] Background regeneration failed after import:`, err);
+        });
+        console.log(`[IMPORT] Triggered DNA regeneration for ${results.assignments} new assignments`);
       }
 
       const totalProcessed = results.created;
