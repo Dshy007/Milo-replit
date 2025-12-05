@@ -1309,19 +1309,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const occurrences = await dbStorage.getShiftOccurrencesByDateRange(req.session.tenantId!, start, end);
 
       // ALSO fetch imported blocks from blocks table (new import system)
-      // Debug: fetch ALL blocks first to see what dates are actually stored
-      const allBlocksDebug = await db
-        .select({ blockId: blocks.blockId, serviceDate: blocks.serviceDate })
-        .from(blocks)
-        .where(eq(blocks.tenantId, req.session.tenantId!))
-        .limit(30);
-
-      console.log(`[CALENDAR DEBUG] All blocks in DB (first 30):`, allBlocksDebug.map(b => ({
-        blockId: b.blockId,
-        serviceDate: b.serviceDate instanceof Date ? b.serviceDate.toISOString() : String(b.serviceDate)
-      })));
-      console.log(`[CALENDAR DEBUG] Query range: start=${start.toISOString()}, end=${end.toISOString()}`);
-
       const importedBlocks = await db
         .select()
         .from(blocks)
@@ -1331,7 +1318,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
           lte(blocks.serviceDate, end)
         ));
 
-      console.log(`[CALENDAR] Fetched ${occurrences.length} shift occurrences and ${importedBlocks.length} imported blocks for date range ${startDate} - ${endDate}`);
 
       // Fetch all assignments for tenant
       const allAssignments = await dbStorage.getBlockAssignmentsByTenant(req.session.tenantId!);
@@ -1495,31 +1481,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Merge both sources - imported blocks take priority (they're newer data)
       const allOccurrences = [...simplifiedBlocks, ...simplifiedOccurrences];
 
-      // DEBUG: Log sample of blocks with their dates and tractorIds
-      console.log('[CALENDAR DEBUG] Sample blocks being returned:', simplifiedBlocks.slice(0, 10).map(b => ({
-        blockId: b.blockId,
-        serviceDate: b.serviceDate,
-        tractorId: b.tractorId,
-        startTime: b.startTime
-      })));
-
-      // DEBUG: Log blocks without drivers (rejected loads)
-      const blocksWithoutDrivers = simplifiedBlocks.filter(b => !b.driverName);
-      if (blocksWithoutDrivers.length > 0) {
-        console.log(`[CALENDAR DEBUG] Blocks WITHOUT drivers: ${blocksWithoutDrivers.length}`);
-        blocksWithoutDrivers.forEach(b => {
-          console.log(`[CALENDAR DEBUG] Block ${b.blockId}: isRejectedLoad=${b.isRejectedLoad}, tractorId="${b.tractorId}", serviceDate="${b.serviceDate}"`);
-        });
-      }
-
-      // Also log any blocks with isRejectedLoad=true
-      const rejectedLoadBlocks = simplifiedBlocks.filter(b => b.isRejectedLoad);
-      console.log(`[CALENDAR DEBUG] Total blocks with isRejectedLoad=true: ${rejectedLoadBlocks.length}`);
-      if (rejectedLoadBlocks.length > 0) {
-        rejectedLoadBlocks.forEach(b => {
-          console.log(`[CALENDAR DEBUG REJECTED] Block ${b.blockId}: isRejectedLoad=${b.isRejectedLoad}, driverName="${b.driverName || 'none'}"`);
-        });
-      }
+      // Summary log only - detailed debug removed
+      const unassignedCount = simplifiedBlocks.filter(b => !b.driverName).length;
+      console.log(`[CALENDAR] Returning ${simplifiedBlocks.length} blocks (${unassignedCount} unassigned)`)
 
       // Return simplified calendar data
       res.json({
@@ -3809,19 +3773,6 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
         getAllDNAProfiles(tenantId),
         getFleetDNAStats(tenantId),
       ]);
-
-      // Debug: log first 2 profiles to see their data structure
-      if (profiles.length > 0) {
-        console.log('[DNA API] Sample profiles:', profiles.slice(0, 2).map(p => ({
-          driverId: p.driverId,
-          driverName: p.driverName,
-          preferredDays: p.preferredDays,
-          preferredTimes: p.preferredStartTimes,
-          preferredTractors: p.preferredTractors,
-          contractType: p.preferredContractType,
-          patternGroup: p.patternGroup,
-        })));
-      }
 
       res.json({
         profiles,

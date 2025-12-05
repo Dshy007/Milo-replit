@@ -397,10 +397,6 @@ export default function Schedules() {
     })
   );
 
-  // Log setup on mount
-  useMemo(() => {
-    console.log('🎮 Drag-and-drop initialized with custom collision detection');
-  }, []);
 
   // Fetch contracts to get static start times
   const { data: contracts = [] } = useQuery<Contract[]>({
@@ -472,30 +468,6 @@ export default function Schedules() {
     return false;
   }, [activeDriverProfile]);
 
-  // DEBUG: Log when driver profile changes
-  useEffect(() => {
-    console.log('[DNA DEBUG STATE]', {
-      activeDriverId,
-      selectedDriverId,
-      hoveredDriverId,
-      hasActiveProfile: !!activeDriverProfile,
-      hasHoveredProfile: !!hoveredDriverProfile,
-      dnaProfileMapSize: dnaProfileMap.size,
-    });
-    if (activeDriverId) {
-      console.log('[DNA DEBUG] Active driver changed:', activeDriverId);
-      console.log('[DNA DEBUG] Profile found:', activeDriverProfile);
-      if (activeDriverProfile) {
-        console.log('[DNA DEBUG] Preferred days:', activeDriverProfile.preferredDays);
-        console.log('[DNA DEBUG] Preferred times:', activeDriverProfile.preferredStartTimes);
-        console.log('[DNA DEBUG] Preferred tractors:', activeDriverProfile.preferredTractors);
-        console.log('[DNA DEBUG] Contract type:', activeDriverProfile.preferredContractType);
-      } else {
-        console.log('[DNA DEBUG WARNING] Active driver has NO DNA profile in map!');
-        console.log('[DNA DEBUG] Available profile IDs:', Array.from(dnaProfileMap.keys()));
-      }
-    }
-  }, [activeDriverId, selectedDriverId, hoveredDriverId, activeDriverProfile, hoveredDriverProfile, dnaProfileMap]);
 
   const handleOccurrenceClick = (occurrence: ShiftOccurrence) => {
     setSelectedOccurrence(occurrence);
@@ -658,9 +630,6 @@ export default function Schedules() {
     },
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
-
-      // Log full result for debugging
-      console.log("Import result:", result);
 
       // Show result in overlay
       setImportResult({
@@ -1106,23 +1075,15 @@ export default function Schedules() {
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
 
-    console.log('🎯 DIAGNOSTIC: Drag ended', {
-      activeId: active.id,
-      overId: over?.id,
-      hasOver: !!over
-    });
-
     // Clear the active dragged items
     setActiveOccurrence(null);
     setActiveDriver(null);
 
     if (!over) {
-      console.log('❌ DIAGNOSTIC: No drop target detected');
       return;
     }
 
     const targetId = over.id as string;
-    console.log('🎯 DIAGNOSTIC: Drop target ID:', targetId);
 
     // SPECIAL CASE: Dropping on Available Drivers Pool to unassign
     if (targetId === 'available-drivers-pool') {
@@ -1166,10 +1127,8 @@ export default function Schedules() {
 
     // Parse target cell ID: cell-YYYY-MM-DD-TractorId-HH:MM
     const parts = targetId.split('-');
-    console.log('📋 DIAGNOSTIC: Parsing cell ID:', targetId, 'parts:', parts);
 
     if (parts.length < 6) {
-      console.log('❌ DIAGNOSTIC: Invalid cell ID format - too few parts');
       return;
     }
 
@@ -1177,26 +1136,12 @@ export default function Schedules() {
     const targetStartTime = parts[parts.length - 1];
     const targetContractId = parts.slice(4, parts.length - 1).join('-');
 
-    console.log('📋 DIAGNOSTIC: Parsed cell:', {
-      targetDate,
-      targetContractId,
-      targetStartTime
-    });
-
     // Find target occurrence in the target cell
     const targetCell = occurrencesByContract[targetContractId]?.[targetDate] || [];
-    console.log('📋 DIAGNOSTIC: Target cell occurrences:', targetCell);
-    console.log('📋 DIAGNOSTIC: Looking for startTime:', targetStartTime);
 
     const matchingOccurrences = targetCell.filter(occ => occ.startTime === targetStartTime);
-    console.log('📋 DIAGNOSTIC: Matching occurrences found:', matchingOccurrences.length, matchingOccurrences);
 
     if (matchingOccurrences.length === 0) {
-      console.log('❌ DIAGNOSTIC: NO MATCHING OCCURRENCES - Cannot drop');
-      console.log('📋 DIAGNOSTIC: Available startTimes in this cell:', targetCell.map(o => o.startTime));
-      console.log('📋 DIAGNOSTIC: occurrencesByContract keys:', Object.keys(occurrencesByContract));
-      console.log('📋 DIAGNOSTIC: dates for tractorId', targetContractId, ':', Object.keys(occurrencesByContract[targetContractId] || {}));
-
       toast({
         variant: "default",
         title: "Cannot Drop Here",
@@ -1204,8 +1149,6 @@ export default function Schedules() {
       });
       return;
     }
-
-    console.log('✅ DIAGNOSTIC: Found matching occurrence:', matchingOccurrences[0]);
 
     const targetOccurrence = matchingOccurrences[0];
 
@@ -1562,10 +1505,6 @@ export default function Schedules() {
       grouped[tractorId][date].push(occ);
     });
 
-    console.log('📊 DIAGNOSTIC: Occurrences loaded:', calendarData.occurrences.length);
-    console.log('📊 DIAGNOSTIC: Grouped by tractorId:', Object.keys(grouped));
-    console.log('📊 DIAGNOSTIC: Full grouped structure:', grouped);
-
     return grouped;
   }, [calendarData]);
 
@@ -1674,7 +1613,6 @@ export default function Schedules() {
   // Uses the same Holy Grail matching logic (Contract + Day + Time)
   const handleUnassignedBlockClick = useCallback((occurrence: ShiftOccurrence) => {
     if (!dnaProfileMap.size || !allDrivers.length) {
-      console.log('[Block→Driver] No DNA profiles or drivers loaded');
       return;
     }
 
@@ -1685,13 +1623,6 @@ export default function Schedules() {
     const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
     const blockDay = dayNames[blockDate.getDay()];
     const blockTime = occurrence.startTime;
-
-    console.log('[Block→Driver] Finding matching drivers for block:', {
-      blockId: occurrence.blockId,
-      contract: blockContract,
-      day: blockDay,
-      time: blockTime,
-    });
 
     // Find all drivers with matching DNA profiles
     const matchingDrivers: { driverId: string; driverName: string; score: number }[] = [];
@@ -1734,8 +1665,6 @@ export default function Schedules() {
     // Sort by score (highest first)
     matchingDrivers.sort((a, b) => b.score - a.score);
 
-    console.log('[Block→Driver] Found matching drivers:', matchingDrivers);
-
     if (matchingDrivers.length === 0) {
       toast({
         title: "No Matching Drivers",
@@ -1772,19 +1701,12 @@ export default function Schedules() {
   // Shows drivers whose DNA matches this contract type + time slot (EXACT time match only)
   const handleTimeSlotClick = useCallback((contractType: string, startTime: string) => {
     if (!dnaProfileMap.size || !allDrivers.length) {
-      console.log('[TimeSlot→Drivers] No DNA profiles or drivers loaded');
       return;
     }
 
     const slotContract = contractType.toLowerCase();
     const slotTime = startTime;
     const slotMinutes = timeToMinutes(slotTime);
-
-    console.log('[TimeSlot→Drivers] Finding matching drivers for time slot:', {
-      contract: slotContract,
-      time: slotTime,
-      minutes: slotMinutes,
-    });
 
     // Find all drivers with matching DNA profiles - EXACT time match (within 30 min)
     const matchingDrivers: { driverId: string; driverName: string; score: number }[] = [];
@@ -1821,8 +1743,6 @@ export default function Schedules() {
 
     // Sort by score (highest first)
     matchingDrivers.sort((a, b) => b.score - a.score);
-
-    console.log('[TimeSlot→Drivers] Found matching drivers:', matchingDrivers);
 
     if (matchingDrivers.length === 0) {
       toast({

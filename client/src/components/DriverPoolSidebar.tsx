@@ -433,8 +433,12 @@ function DroppableAvailableSection({ children }: { children: React.ReactNode }) 
 }
 
 // Helper to convert time string to minutes for comparison
-function timeToMinutes(time: string): number {
-  const [hours, minutes] = time.split(':').map(Number);
+function timeToMinutes(time: string | null | undefined): number {
+  if (!time || typeof time !== 'string') return 0;
+  const parts = time.split(':');
+  if (parts.length < 2) return 0;
+  const [hours, minutes] = parts.map(Number);
+  if (isNaN(hours) || isNaN(minutes)) return 0;
   return hours * 60 + minutes;
 }
 
@@ -465,14 +469,32 @@ function calculateBlockMatch(
   const driverContract = dnaProfile.preferredContractType?.toLowerCase();
   const blockContract = occurrence.contractType?.toLowerCase();
 
+  // Debug: Always log contract type info when debug is enabled
+  if (debug) {
+    console.log('[DNA MATCH] Contract check:', {
+      blockId: occurrence.blockId,
+      blockContract: blockContract || 'NULL/UNDEFINED',
+      driverContract: driverContract || 'NULL/UNDEFINED',
+      rawBlockContract: occurrence.contractType,
+      rawDriverContract: dnaProfile.preferredContractType,
+    });
+  }
+
+  // If driver has a contract preference and block has a contract type, they must match
   if (driverContract && blockContract && driverContract !== blockContract) {
     if (debug) {
-      console.log('[DNA MATCH] Contract mismatch - block rejected', {
-        blockId: occurrence.blockId,
-        blockContract,
-        driverContract,
-      });
+      console.log('[DNA MATCH] Contract mismatch - block rejected');
     }
+    return noMatch;
+  }
+
+  // ALSO reject if driver has a contract preference but block has NO contract type
+  // This prevents solo2 drivers from matching blocks with undefined contract types
+  if (driverContract && !blockContract) {
+    if (debug) {
+      console.log('[DNA MATCH] Block has no contract type, driver expects:', driverContract);
+    }
+    // Return noMatch to be strict about contract matching
     return noMatch;
   }
 
@@ -498,7 +520,23 @@ function calculateBlockMatch(
     bestTimeDiff = Math.min(bestTimeDiff, wrapDiff);
   }
 
-  const timeMatches = preferredTimes.length === 0 || bestTimeDiff <= 120; // Within 2 hours
+  const timeMatches = preferredTimes.length === 0 || bestTimeDiff === 0; // Exact time match only
+
+  // Debug: Log day/time matching details
+  if (debug) {
+    console.log('[DNA MATCH] Day/Time check:', {
+      blockId: occurrence.blockId,
+      blockDate: occurrence.serviceDate,
+      blockDayOfWeek: dayOfWeek,
+      blockTime: occurrence.startTime,
+      blockTimeMinutes,
+      preferredDays,
+      preferredTimes,
+      dayMatches,
+      timeMatches,
+      bestTimeDiff: bestTimeDiff === Infinity ? 'N/A (no preferred times)' : bestTimeDiff,
+    });
+  }
 
   // Apply strictness rules
   if (strictness === 'strict') {
@@ -723,6 +761,7 @@ export function DriverPoolSidebar({
       })
       .filter(item => item.matchScore > 0);
 
+
     // DOT Compliance: Track OCCUPIED DATES (driver can only work ONE block per calendar day)
     // This is the fundamental rule - regardless of time gaps, only one block per day
     const occupiedDates = new Set<string>(existingAssignments.map(a => a.date));
@@ -814,6 +853,7 @@ export function DriverPoolSidebar({
     const matchingBlocks = getMatchingBlocks(selectedDriverId);
     const matchingIds = matchingBlocks.map(m => m.occurrence.occurrenceId);
     onMatchingBlocksChange?.(matchingIds);
+
   }, [selectedDriverId, unassignedOccurrences, calendarData, dnaProfileMap, strictness]);
 
   // Calculate block coverage stats: how many blocks have X driver matches
