@@ -39,6 +39,7 @@ import {
   regenerateDNAFromBlockAssignments,
   updateSingleDriverDNA,
 } from "./dna-analyzer";
+import { optimizeWeekSchedule, applyOptimizedSchedule } from "./ortools-matcher";
 
 // Require SESSION_SECRET
 const SESSION_SECRET = process.env.SESSION_SECRET!;
@@ -3979,6 +3980,74 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
     } catch (error: any) {
       console.error("Update DNA profile error:", error);
       res.status(500).json({ message: "Failed to update DNA profile", error: error.message });
+    }
+  });
+
+  // POST /api/matching/calculate - Calculate driver-block matches using OR-Tools
+  // This replaces the client-side calculateBlockMatch() function
+  app.post("/api/matching/calculate", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { weekStart, contractType } = req.body;
+
+      // Default to current week if no weekStart provided
+      const weekStartDate = weekStart
+        ? parseISO(weekStart)
+        : startOfWeek(new Date(), { weekStartsOn: 0 }); // Sunday
+
+      console.log(`[OR-Tools API] Calculating matches for week starting ${format(weekStartDate, "yyyy-MM-dd")}, contract type: ${contractType || "all"}`);
+
+      const result = await optimizeWeekSchedule(
+        tenantId,
+        weekStartDate,
+        contractType as "solo1" | "solo2" | "team" | undefined
+      );
+
+      res.json({
+        success: true,
+        suggestions: result.suggestions,
+        unassigned: result.unassigned,
+        stats: result.stats,
+      });
+    } catch (error: any) {
+      console.error("OR-Tools matching error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to calculate matches",
+        error: error.message
+      });
+    }
+  });
+
+  // POST /api/matching/apply - Apply optimized assignments to database
+  app.post("/api/matching/apply", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { assignments } = req.body;
+
+      if (!Array.isArray(assignments) || assignments.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "No assignments provided"
+        });
+      }
+
+      console.log(`[OR-Tools API] Applying ${assignments.length} assignments`);
+
+      const result = await applyOptimizedSchedule(tenantId, assignments);
+
+      res.json({
+        success: true,
+        applied: result.applied,
+        errors: result.errors,
+      });
+    } catch (error: any) {
+      console.error("Apply assignments error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to apply assignments",
+        error: error.message
+      });
     }
   });
 

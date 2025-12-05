@@ -1,7 +1,9 @@
 import { useState, useEffect, useMemo, useRef } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
-import { User, Search, ChevronDown, ChevronRight, ChevronLeft, Sparkles, ExternalLink, Calendar, Clock, Truck, Dna, Filter, Sliders, Target, TrendingUp, Crown, Zap } from "lucide-react";
+import { User, Search, ChevronDown, ChevronRight, ChevronLeft, Sparkles, ExternalLink, Calendar, Clock, Truck, Dna, Filter, Sliders, Target, TrendingUp, Crown, Zap, Wand2, Loader2 } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest } from "@/lib/queryClient";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -640,6 +642,89 @@ export function DriverPoolSidebar({
   const [showStrictnessSlider, setShowStrictnessSlider] = useState(false);
   const [strategy, setStrategy] = useState<ScheduleStrategy | null>(null);
   const [showStrategyOptions, setShowStrategyOptions] = useState(false);
+  const [orToolsResult, setOrToolsResult] = useState<{
+    suggestions: Array<{
+      blockId: string;
+      driverId: string;
+      driverName: string;
+      confidence: number;
+      matchType: string;
+    }>;
+    stats: {
+      totalBlocks: number;
+      assigned: number;
+      unassigned: number;
+    };
+  } | null>(null);
+
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  // OR-Tools Auto-Match mutation
+  const autoMatchMutation = useMutation({
+    mutationFn: async () => {
+      const weekStart = currentWeekStart.toISOString().split('T')[0];
+      const response = await apiRequest("POST", "/api/matching/calculate", {
+        weekStart,
+        contractType: contractFilter !== 'all' ? contractFilter : undefined,
+      });
+      return response.json();
+    },
+    onSuccess: (data) => {
+      if (data.success) {
+        setOrToolsResult(data);
+        toast({
+          title: "OR-Tools Matching Complete",
+          description: `Found ${data.stats.assigned} matches for ${data.stats.totalBlocks} blocks`,
+        });
+      } else {
+        toast({
+          title: "Matching Failed",
+          description: data.message || "Unknown error",
+          variant: "destructive",
+        });
+      }
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Auto-Match Error",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Apply OR-Tools suggestions mutation
+  const applyMatchesMutation = useMutation({
+    mutationFn: async (assignments: Array<{ blockId: string; driverId: string }>) => {
+      const response = await apiRequest("POST", "/api/matching/apply", { assignments });
+      return response.json();
+    },
+    onSuccess: (data) => {
+      if (data.success) {
+        toast({
+          title: "Assignments Applied",
+          description: `Successfully assigned ${data.applied} blocks`,
+        });
+        setOrToolsResult(null);
+        // Invalidate calendar to refresh
+        queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
+      } else {
+        toast({
+          title: "Apply Failed",
+          description: data.message || "Unknown error",
+          variant: "destructive",
+        });
+      }
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Apply Error",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
 
   // Derive strictness from threshold for matching logic
   const strictness = thresholdToStrictness(threshold);
@@ -929,6 +1014,69 @@ export function DriverPoolSidebar({
             </div>
           </div>
         )}
+
+        {/* OR-Tools Auto-Match Button */}
+        <div className="mb-3">
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full h-9 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white border-0"
+            onClick={() => autoMatchMutation.mutate()}
+            disabled={autoMatchMutation.isPending || unassignedOccurrences.length === 0}
+          >
+            {autoMatchMutation.isPending ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                Optimizing...
+              </>
+            ) : (
+              <>
+                <Wand2 className="w-4 h-4 mr-2" />
+                Auto-Match with OR-Tools
+              </>
+            )}
+          </Button>
+          {orToolsResult && (
+            <div className="mt-2 p-2 rounded-lg bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800">
+              <div className="text-xs text-purple-700 dark:text-purple-300 mb-2">
+                <span className="font-semibold">{orToolsResult.stats.assigned}</span> matches found
+                {orToolsResult.stats.unassigned > 0 && (
+                  <span className="text-amber-600 dark:text-amber-400 ml-2">
+                    ({orToolsResult.stats.unassigned} unmatched)
+                  </span>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  className="flex-1 h-7 text-xs bg-green-600 hover:bg-green-700"
+                  onClick={() => {
+                    const assignments = orToolsResult.suggestions.map(s => ({
+                      blockId: s.blockId,
+                      driverId: s.driverId,
+                    }));
+                    applyMatchesMutation.mutate(assignments);
+                  }}
+                  disabled={applyMatchesMutation.isPending}
+                >
+                  {applyMatchesMutation.isPending ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    "Apply All"
+                  )}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs"
+                  onClick={() => setOrToolsResult(null)}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* Search */}
         <div className="relative mb-3">

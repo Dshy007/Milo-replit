@@ -12,6 +12,33 @@ import { blocks, drivers, driverDnaProfiles, blockAssignments } from "@shared/sc
 import { eq, and, gte, lte, isNull } from "drizzle-orm";
 import { format, startOfWeek, endOfWeek } from "date-fns";
 
+/**
+ * CANONICAL_START_TIMES - The Holy Grail lookup table
+ * Maps {solo_type}_{tractor_id} to the canonical start time
+ * Source: contracts table in database
+ */
+const CANONICAL_START_TIMES: Record<string, string> = {
+  // Solo1
+  "solo1_Tractor_1": "16:30",
+  "solo1_Tractor_2": "20:30",
+  "solo1_Tractor_3": "20:30",
+  "solo1_Tractor_4": "17:30",
+  "solo1_Tractor_5": "21:30",
+  "solo1_Tractor_6": "01:30",
+  "solo1_Tractor_7": "18:30",
+  "solo1_Tractor_8": "00:30",
+  "solo1_Tractor_9": "16:30",
+  "solo1_Tractor_10": "20:30",
+  // Solo2
+  "solo2_Tractor_1": "18:30",
+  "solo2_Tractor_2": "23:30",
+  "solo2_Tractor_3": "21:30",
+  "solo2_Tractor_4": "08:30",
+  "solo2_Tractor_5": "15:30",
+  "solo2_Tractor_6": "11:30",
+  "solo2_Tractor_7": "16:30",
+};
+
 interface DriverInput {
   id: string;
   name: string;
@@ -177,19 +204,19 @@ async function getUnassignedBlocks(tenantId: string, weekStart: Date, weekEnd: D
       const dayIndex = serviceDate.getDay();
       const dayName = DAY_NAMES[dayIndex];
 
-      // Extract time from startTimestamp
-      let time = "00:00";
-      if (b.startTimestamp) {
-        const ts = new Date(b.startTimestamp);
-        time = format(ts, "HH:mm");
-      }
+      // Use CANONICAL_START_TIMES lookup (Holy Grail) instead of startTimestamp
+      const soloType = (b.soloType || "solo1").toLowerCase();
+      const tractorId = b.tractorId || "Tractor_1";
+      const lookupKey = `${soloType}_${tractorId}`;
+      const time = CANONICAL_START_TIMES[lookupKey] || "00:00";
 
       return {
         id: b.id,
         day: dayName,
         time,
         contractType: b.soloType || "solo1",
-        serviceDate: format(serviceDate, "yyyy-MM-dd")
+        serviceDate: format(serviceDate, "yyyy-MM-dd"),
+        tractorId: tractorId
       };
     });
 }
