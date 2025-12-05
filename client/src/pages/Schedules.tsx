@@ -1,7 +1,7 @@
-import React, { useState, useMemo, memo, useCallback, useEffect } from "react";
+import React, { useState, useMemo, memo, useCallback, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format, startOfWeek, addWeeks, subWeeks, eachDayOfInterval, addDays } from "date-fns";
-import { ChevronLeft, ChevronRight, Calendar, User, Upload, X, LayoutGrid, List, UserMinus, Undo2, Redo2, CheckSquare, XSquare, Moon, Sun, Zap, Cpu, Shield, AlertTriangle, Search, Sparkles, Loader2, Dna, Clock, Truck } from "lucide-react";
+import { ChevronLeft, ChevronRight, Calendar, User, Upload, X, LayoutGrid, List, UserMinus, Undo2, Redo2, CheckSquare, XSquare, Moon, Sun, Zap, Cpu, AlertTriangle, Search, Sparkles, Loader2, Dna, Clock, Truck } from "lucide-react";
 import { ImportOverlay } from "@/components/ImportOverlay";
 import { ImportWizard } from "@/components/ImportWizard";
 import { ActualsComparisonReview } from "@/components/ActualsComparisonReview";
@@ -40,7 +40,7 @@ import { getMatchColor, getMatchBgColor } from "@/lib/utils";
 import { ContractTypeBadge } from "@/components/ContractTypeBadge";
 import { DNAPatternBadge } from "@/components/DNAPatternBadge";
 import type { DriverDnaProfile } from "@shared/schema";
-import { AnalysisPanel } from "@/components/AnalysisPanel";
+import { apiRequest } from "@/lib/queryClient";
 import type { Block, BlockAssignment, Driver, Contract } from "@shared/schema";
 
 // Day formatting helpers for DNA profile display (Sunday-Saturday order)
@@ -312,8 +312,28 @@ export default function Schedules() {
   } | null>(null);
   const [isComparingActuals, setIsComparingActuals] = useState(false);
 
-  // Analysis Panel state
-  const [showAnalysisPanel, setShowAnalysisPanel] = useState(false);
+  // DNA Analysis mutation (same as Schedule Intelligence page)
+  const analyzeDnaMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/driver-dna/analyze", {});
+      return res.json();
+    },
+    onSuccess: (result) => {
+      toast({
+        title: "Analysis Complete",
+        description: `Analyzed ${result.totalDrivers} drivers successfully.`,
+      });
+      // Refresh DNA profiles
+      queryClient.invalidateQueries({ queryKey: ["/api/driver-dna"] });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Analysis Failed",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
 
   // Compliance analysis state
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -358,6 +378,8 @@ export default function Schedules() {
   // hoveredDriverId = ephemeral hover state for visual highlighting
   const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
   const [hoveredDriverId, setHoveredDriverId] = useState<string | null>(null);
+  // Matching block IDs from sidebar - these are the EXACT blocks shown in the flip card
+  const [sidebarMatchingBlockIds, setSidebarMatchingBlockIds] = useState<string[]>([]);
   // Flip card state moved to sidebar - isCardFlipped and showAllBlocks removed
 
   // The "active" driver is either selected (sticky) or hovered
@@ -426,6 +448,30 @@ export default function Schedules() {
   const hoveredDriverProfile = activeDriverProfile;
   const hoveredDriverName = miloActiveDriver?.name || null;
 
+  // Helper to check if a bench slot row matches the selected driver's DNA profile
+  // Used to add subtle glow on matching rows when a driver is selected
+  // EXACT MATCH ONLY: time must match exactly (no tolerance)
+  const doesRowMatchDriverDNA = useCallback((contractType: string, startTime: string): boolean => {
+    if (!activeDriverProfile) return false;
+
+    // Check contract type match
+    const driverContract = activeDriverProfile.preferredContractType?.toLowerCase();
+    if (driverContract && driverContract !== contractType.toLowerCase()) return false;
+
+    // Check time match - EXACT match only (no tolerance)
+    const preferredTimes = activeDriverProfile.preferredStartTimes || [];
+    if (preferredTimes.length === 0) return false;
+
+    // Normalize time format for comparison (HH:MM)
+    const normalizeTime = (t: string) => t.slice(0, 5);
+    const slotTimeNorm = normalizeTime(startTime);
+
+    for (const prefTime of preferredTimes) {
+      if (normalizeTime(prefTime) === slotTimeNorm) return true; // Exact match only
+    }
+    return false;
+  }, [activeDriverProfile]);
+
   // DEBUG: Log when driver profile changes
   useEffect(() => {
     console.log('[DNA DEBUG STATE]', {
@@ -488,19 +534,6 @@ export default function Schedules() {
     setIsAssignmentModalOpen(false);
     setSelectedOccurrence(null);
   };
-
-  // Scroll to a block on the calendar when clicked from sidebar
-  const handleBlockClick = useCallback((occurrenceId: string) => {
-    const element = document.querySelector(`[data-occurrence-id="${occurrenceId}"]`);
-    if (element) {
-      element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
-      // Add a brief highlight effect
-      element.classList.add('ring-4', 'ring-green-500', 'ring-offset-2');
-      setTimeout(() => {
-        element.classList.remove('ring-4', 'ring-green-500', 'ring-offset-2');
-      }, 2000);
-    }
-  }, []);
 
   const handleRightClickUnassigned = (e: React.MouseEvent, occurrence: ShiftOccurrence) => {
     e.preventDefault();
@@ -1050,6 +1083,11 @@ export default function Schedules() {
     },
   });
 
+  // Quick-assign a driver to a block when clicked from sidebar flip card
+  // Note: This function is defined here but uses calendarData which is defined later.
+  // We use a ref to access current calendarData value.
+  const handleBlockClickRef = useRef<((occurrenceId: string, driverId?: string) => Promise<void>) | null>(null);
+
   // Handle drag start event
   const handleDragStart = (event: DragStartEvent) => {
     // Check if dragging an occurrence or a driver from sidebar
@@ -1477,61 +1515,11 @@ export default function Schedules() {
     return calendarData.occurrences.filter(occ => !occ.driverId);
   }, [calendarData]);
 
-  // Compute highlighted occurrence IDs for calendar (same logic as sidebar flip card)
-  // Holy Grail: Day + Time + Contract must match, ONE block per day, capped by contract rules
+  // Use the matching block IDs from the sidebar (single source of truth)
+  // These are the EXACT same blocks shown in the flip card
   const highlightedOccurrenceIds = useMemo(() => {
-    if (!activeDriverProfile || !unassignedOccurrences.length) {
-      return new Set<string>();
-    }
-
-    const profile = activeDriverProfile;
-
-    // Get all matching blocks
-    const allMatches = unassignedOccurrences
-      .map(occ => ({
-        occurrence: occ,
-        matchScore: calculateBlockMatch(occ, profile, false),
-      }))
-      .filter(item => item.matchScore > 0) // Only blocks that match all criteria
-      .sort((a, b) => {
-        // Sort by date first, then by how close to preferred time
-        const dateCompare = a.occurrence.serviceDate.localeCompare(b.occurrence.serviceDate);
-        if (dateCompare !== 0) return dateCompare;
-        // For same date, prefer time closest to preferred start time
-        const prefTimes = profile.preferredStartTimes || [];
-        const prefMinutes = prefTimes.length > 0 ? timeToMinutes(prefTimes[0]) : 0;
-        const aDiff = Math.abs(timeToMinutes(a.occurrence.startTime) - prefMinutes);
-        const bDiff = Math.abs(timeToMinutes(b.occurrence.startTime) - prefMinutes);
-        return aDiff - bDiff;
-      });
-
-    // ONE block per day - pick the best match for each unique date
-    const seenDates = new Set<string>();
-    const onePerDay: string[] = [];
-
-    for (const match of allMatches) {
-      const date = match.occurrence.serviceDate;
-      if (!seenDates.has(date)) {
-        seenDates.add(date);
-        onePerDay.push(match.occurrence.occurrenceId);
-      }
-    }
-
-    // Apply contract-type specific caps based on scheduling rules:
-    // - Solo2: MAX 3 blocks per week (38hr reset rule within rolling 6-day period)
-    // - Solo1: More flexible, typically 4-5 per week
-    // - Team: 3 per week
-    const contractType = profile.preferredContractType?.toLowerCase();
-    let maxBlocksPerWeek = 5; // Default for Solo1
-
-    if (contractType === 'solo2') {
-      maxBlocksPerWeek = 3; // Solo2 drivers: 38hr reset rule limits to 3 per week
-    } else if (contractType === 'team') {
-      maxBlocksPerWeek = 3;
-    }
-
-    return new Set(onePerDay.slice(0, maxBlocksPerWeek));
-  }, [activeDriverProfile, unassignedOccurrences]);
+    return new Set(sidebarMatchingBlockIds);
+  }, [sidebarMatchingBlockIds]);
 
   // Auto-scroll to first matching block when a driver is SELECTED (clicked, not hovered)
   useEffect(() => {
@@ -1580,6 +1568,298 @@ export default function Schedules() {
 
     return grouped;
   }, [calendarData]);
+
+  // Quick-assign a driver to a block when clicked from sidebar flip card
+  // Now defined after calendarData so we can record undo history
+  const handleBlockClick = useCallback(async (occurrenceId: string, driverId?: string) => {
+    const element = document.querySelector(`[data-occurrence-id="${occurrenceId}"]`);
+    const blockId = element?.getAttribute('data-block-id') || 'Block';
+
+    if (driverId) {
+      // Find the occurrence to get previous driver (should be null for unassigned)
+      const occurrence = calendarData?.occurrences.find(o => o.occurrenceId === occurrenceId);
+      const previousDriverId = occurrence?.driverId || null;
+
+      // VALIDATION: Check if driver already has an assignment that violates DOT rules
+      if (occurrence && calendarData) {
+        const blockDate = occurrence.serviceDate;
+        const blockTime = occurrence.startTime;
+        const blockDatetime = new Date(`${blockDate}T${blockTime}:00`);
+        const blockContractType = (occurrence.contractType || 'solo1').toLowerCase();
+        const isSolo2 = blockContractType === 'solo2';
+
+        // Get driver's existing assignments
+        const driverAssignments = calendarData.occurrences
+          .filter(o => o.driverId === driverId)
+          .map(o => ({
+            date: o.serviceDate,
+            datetime: new Date(`${o.serviceDate}T${o.startTime}:00`),
+          }));
+
+        // Check DOT compliance: minimum gap between blocks
+        const minGapHours = isSolo2 ? 48 : 24;
+        const minGapMs = minGapHours * 60 * 60 * 1000;
+
+        for (const existing of driverAssignments) {
+          const timeDiff = Math.abs(blockDatetime.getTime() - existing.datetime.getTime());
+          if (timeDiff < minGapMs) {
+            const driver = allDrivers.find(d => d.id === driverId);
+            toast({
+              variant: "destructive",
+              title: "Assignment Blocked",
+              description: `${driver?.firstName} ${driver?.lastName} already has a block on ${existing.date}. ${isSolo2 ? 'Solo2' : 'Solo1'} drivers need ${minGapHours}hr gaps between blocks.`,
+            });
+            return; // Don't proceed with assignment
+          }
+        }
+      }
+
+      try {
+        await updateAssignmentMutation.mutateAsync({ occurrenceId, driverId });
+
+        const driver = allDrivers.find(d => d.id === driverId);
+
+        // Record in undo history
+        const action = {
+          changes: [{
+            occurrenceId,
+            previousDriverId,
+            newDriverId: driverId,
+            blockId,
+          }],
+          timestamp: Date.now(),
+          isBulk: false,
+        };
+        setUndoStack(prev => [...prev, action]);
+        setRedoStack([]); // Clear redo on new action
+
+        // Scroll to block and show success animation
+        if (element) {
+          element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+          element.classList.add('ring-4', 'ring-green-500', 'ring-offset-2', 'animate-pulse');
+          setTimeout(() => {
+            element.classList.remove('ring-4', 'ring-green-500', 'ring-offset-2', 'animate-pulse');
+          }, 1500);
+        }
+
+        toast({
+          title: "Driver Assigned",
+          description: `${driver?.firstName} ${driver?.lastName} → ${blockId}`,
+        });
+
+        // Refresh data to update counts
+        queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"], refetchType: 'active' });
+        queryClient.invalidateQueries({ queryKey: ["/api/drivers"], refetchType: 'active' });
+
+      } catch (error: any) {
+        toast({
+          variant: "destructive",
+          title: "Assignment Failed",
+          description: error.message || "Failed to assign driver",
+        });
+      }
+    } else {
+      // Just scroll to block (no assignment)
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+        element.classList.add('ring-4', 'ring-green-500', 'ring-offset-2');
+        setTimeout(() => {
+          element.classList.remove('ring-4', 'ring-green-500', 'ring-offset-2');
+        }, 2000);
+      }
+    }
+  }, [calendarData, updateAssignmentMutation, allDrivers, toast, queryClient, setUndoStack, setRedoStack]);
+
+  // Two-way matching: Click unassigned block → Find and select matching driver
+  // Uses the same Holy Grail matching logic (Contract + Day + Time)
+  const handleUnassignedBlockClick = useCallback((occurrence: ShiftOccurrence) => {
+    if (!dnaProfileMap.size || !allDrivers.length) {
+      console.log('[Block→Driver] No DNA profiles or drivers loaded');
+      return;
+    }
+
+    const blockContract = (occurrence.contractType || '').toLowerCase();
+    // IMPORTANT: Parse date as local time to avoid timezone shift
+    // serviceDate is "YYYY-MM-DD", adding T00:00:00 makes it local
+    const blockDate = new Date(occurrence.serviceDate + 'T00:00:00');
+    const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    const blockDay = dayNames[blockDate.getDay()];
+    const blockTime = occurrence.startTime;
+
+    console.log('[Block→Driver] Finding matching drivers for block:', {
+      blockId: occurrence.blockId,
+      contract: blockContract,
+      day: blockDay,
+      time: blockTime,
+    });
+
+    // Find all drivers with matching DNA profiles
+    const matchingDrivers: { driverId: string; driverName: string; score: number }[] = [];
+
+    for (const driver of allDrivers) {
+      const profile = dnaProfileMap.get(driver.id);
+      if (!profile) continue;
+
+      // Check contract type match
+      const driverContract = (profile.preferredContractType || '').toLowerCase();
+      if (driverContract !== blockContract) continue;
+
+      // Check day match
+      const preferredDays = profile.preferredDays || [];
+      if (!preferredDays.some(d => d.toLowerCase() === blockDay)) continue;
+
+      // Check time match (within 2 hours)
+      const preferredTimes = profile.preferredStartTimes || [];
+      if (preferredTimes.length === 0) continue;
+
+      let bestTimeDiff = Infinity;
+      for (const prefTime of preferredTimes) {
+        const blockMinutes = timeToMinutes(blockTime);
+        const prefMinutes = timeToMinutes(prefTime);
+        const diff = Math.abs(blockMinutes - prefMinutes);
+        const wrapDiff = Math.min(diff, 1440 - diff);
+        bestTimeDiff = Math.min(bestTimeDiff, wrapDiff);
+      }
+
+      // Time must be within 2 hours
+      if (bestTimeDiff > 120) continue;
+
+      matchingDrivers.push({
+        driverId: driver.id,
+        driverName: `${driver.firstName} ${driver.lastName}`,
+        score: bestTimeDiff === 0 ? 100 : (100 - Math.floor(bestTimeDiff / 1.2)),
+      });
+    }
+
+    // Sort by score (highest first)
+    matchingDrivers.sort((a, b) => b.score - a.score);
+
+    console.log('[Block→Driver] Found matching drivers:', matchingDrivers);
+
+    if (matchingDrivers.length === 0) {
+      toast({
+        title: "No Matching Drivers",
+        description: `No drivers with matching DNA profile for ${occurrence.blockId}`,
+        variant: "default",
+      });
+      return;
+    }
+
+    // Select the best matching driver
+    const bestMatch = matchingDrivers[0];
+    setSelectedDriverId(bestMatch.driverId);
+
+    // Scroll to the driver in the sidebar
+    setTimeout(() => {
+      const driverElement = document.querySelector(`[data-driver-id="${bestMatch.driverId}"]`);
+      if (driverElement) {
+        driverElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // Add visual highlight animation
+        driverElement.classList.add('ring-4', 'ring-green-500', 'ring-offset-2');
+        setTimeout(() => {
+          driverElement.classList.remove('ring-4', 'ring-green-500', 'ring-offset-2');
+        }, 2000);
+      }
+    }, 100);
+
+    toast({
+      title: "Best Match Found",
+      description: `${bestMatch.driverName} (${bestMatch.score}% match) for ${occurrence.blockId}`,
+    });
+  }, [dnaProfileMap, allDrivers, toast, setSelectedDriverId]);
+
+  // Click on time slot row header → Find and highlight all matching drivers
+  // Shows drivers whose DNA matches this contract type + time slot (EXACT time match only)
+  const handleTimeSlotClick = useCallback((contractType: string, startTime: string) => {
+    if (!dnaProfileMap.size || !allDrivers.length) {
+      console.log('[TimeSlot→Drivers] No DNA profiles or drivers loaded');
+      return;
+    }
+
+    const slotContract = contractType.toLowerCase();
+    const slotTime = startTime;
+    const slotMinutes = timeToMinutes(slotTime);
+
+    console.log('[TimeSlot→Drivers] Finding matching drivers for time slot:', {
+      contract: slotContract,
+      time: slotTime,
+      minutes: slotMinutes,
+    });
+
+    // Find all drivers with matching DNA profiles - EXACT time match (within 30 min)
+    const matchingDrivers: { driverId: string; driverName: string; score: number }[] = [];
+
+    for (const driver of allDrivers) {
+      const profile = dnaProfileMap.get(driver.id);
+      if (!profile) continue;
+
+      // Check contract type match
+      const driverContract = (profile.preferredContractType || '').toLowerCase();
+      if (driverContract !== slotContract) continue;
+
+      // Check time match - EXACT match only (within 30 minutes)
+      const preferredTimes = profile.preferredStartTimes || [];
+      if (preferredTimes.length === 0) continue;
+
+      let bestTimeDiff = Infinity;
+      for (const prefTime of preferredTimes) {
+        const prefMinutes = timeToMinutes(prefTime);
+        const diff = Math.abs(slotMinutes - prefMinutes);
+        const wrapDiff = Math.min(diff, 1440 - diff);
+        bestTimeDiff = Math.min(bestTimeDiff, wrapDiff);
+      }
+
+      // Time must be within 30 minutes for exact slot match
+      if (bestTimeDiff > 30) continue;
+
+      matchingDrivers.push({
+        driverId: driver.id,
+        driverName: `${driver.firstName} ${driver.lastName}`,
+        score: bestTimeDiff === 0 ? 100 : (100 - Math.floor(bestTimeDiff)),
+      });
+    }
+
+    // Sort by score (highest first)
+    matchingDrivers.sort((a, b) => b.score - a.score);
+
+    console.log('[TimeSlot→Drivers] Found matching drivers:', matchingDrivers);
+
+    if (matchingDrivers.length === 0) {
+      toast({
+        title: "No Matching Drivers",
+        description: `No drivers with ${slotContract.toUpperCase()} DNA profile for ${slotTime}`,
+        variant: "default",
+      });
+      return;
+    }
+
+    // Select the best matching driver
+    const bestMatch = matchingDrivers[0];
+    setSelectedDriverId(bestMatch.driverId);
+
+    // Scroll to the driver in the sidebar
+    setTimeout(() => {
+      const driverElement = document.querySelector(`[data-driver-id="${bestMatch.driverId}"]`);
+      if (driverElement) {
+        driverElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // Add visual highlight animation
+        driverElement.classList.add('ring-4', 'ring-green-500', 'ring-offset-2');
+        setTimeout(() => {
+          driverElement.classList.remove('ring-4', 'ring-green-500', 'ring-offset-2');
+        }, 2000);
+      }
+    }, 100);
+
+    toast({
+      title: `${matchingDrivers.length} Matching Drivers`,
+      description: `Best: ${bestMatch.driverName} (${bestMatch.score}%) for ${slotContract.toUpperCase()} @ ${slotTime}`,
+    });
+  }, [dnaProfileMap, allDrivers, toast, setSelectedDriverId]);
+
+  // Update ref for any components that need it before calendarData is available
+  useEffect(() => {
+    handleBlockClickRef.current = handleBlockClick;
+  }, [handleBlockClick]);
 
   // Get sorted and filtered contracts for bench display
   const sortedContracts = useMemo(() => {
@@ -1726,13 +2006,18 @@ export default function Schedules() {
               <Button
                 variant="default"
                 size="sm"
-                onClick={() => setShowAnalysisPanel(true)}
+                onClick={() => analyzeDnaMutation.mutate()}
+                disabled={analyzeDnaMutation.isPending}
                 className="bg-green-600 hover:bg-green-700 text-white"
                 data-testid="button-analyze"
               >
-                <Shield className="w-4 h-4 mr-2" />
-                Analyze
-                {calendarData && (
+                {analyzeDnaMutation.isPending ? (
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <Zap className="w-4 h-4 mr-2" />
+                )}
+                {analyzeDnaMutation.isPending ? "Analyzing..." : "Analyze"}
+                {!analyzeDnaMutation.isPending && calendarData && (
                   <>
                     {calendarData.occurrences.filter(b => !b.driverId && !b.isRejectedLoad).length > 0 && (
                       <Badge variant="outline" className="ml-2 text-xs bg-amber-500/20 text-amber-300 border-amber-500/50">
@@ -2004,6 +2289,7 @@ export default function Schedules() {
             selectedDriverId={selectedDriverId}
             unassignedOccurrences={unassignedOccurrences}
             onBlockClick={handleBlockClick}
+            onMatchingBlocksChange={setSidebarMatchingBlockIds}
           />
 
           {/* Calendar */}
@@ -2042,7 +2328,11 @@ export default function Schedules() {
                   </td>
                 </tr>
               ) : (
-                sortedContracts.map((contract) => (
+                sortedContracts.map((contract) => {
+                  // Check if this row matches the selected driver's DNA profile
+                  const isRowHighlighted = doesRowMatchDriverDNA(contract.type, contract.startTime);
+
+                  return (
                   <tr
                     key={contract.id}
                     className="border-b"
@@ -2050,18 +2340,32 @@ export default function Schedules() {
                       backgroundColor: themeMode === 'day' ? undefined : 'rgba(0, 0, 0, 0.1)',
                     }}
                   >
-                    {/* Bench Slot Cell */}
+                    {/* Bench Slot Cell - Click to find matching drivers */}
                     <td
-                      className="p-3 border-r align-top"
+                      className={`p-3 border-r align-top cursor-pointer transition-all duration-300 ${
+                        isRowHighlighted
+                          ? ''
+                          : 'hover:bg-sky-50 dark:hover:bg-sky-900/20'
+                      }`}
                       style={{
-                        backgroundColor: themeMode === 'day' ? undefined : 'rgba(0, 0, 0, 0.2)',
-                        color: themeStyles.color
+                        background: isRowHighlighted
+                          ? (themeMode === 'day'
+                              ? 'linear-gradient(135deg, rgba(56, 189, 248, 0.15) 0%, rgba(14, 165, 233, 0.25) 100%)'
+                              : 'linear-gradient(135deg, rgba(56, 189, 248, 0.2) 0%, rgba(14, 165, 233, 0.35) 100%)')
+                          : (themeMode === 'day' ? undefined : 'rgba(0, 0, 0, 0.2)'),
+                        color: themeStyles.color,
+                        boxShadow: isRowHighlighted
+                          ? '0 0 20px rgba(56, 189, 248, 0.4), inset 0 0 15px rgba(56, 189, 248, 0.1)'
+                          : undefined,
+                        borderLeft: isRowHighlighted ? '3px solid rgba(14, 165, 233, 0.9)' : undefined,
                       }}
+                      onClick={() => handleTimeSlotClick(contract.type, contract.startTime)}
+                      title={`Click to find ${contract.type.toUpperCase()} drivers for ${contract.startTime}`}
                     >
                       <div className="space-y-1.5">
                         {/* Start Time & Status */}
                         <div className="flex items-center justify-between">
-                          <span className="text-base font-mono font-semibold text-foreground">
+                          <span className="text-base font-mono font-semibold text-foreground hover:text-purple-600 dark:hover:text-purple-400 transition-colors">
                             {formatTime(contract.startTime)}
                           </span>
                           <Badge 
@@ -2137,6 +2441,7 @@ export default function Schedules() {
                                   <div
                                     key={occ.occurrenceId}
                                     data-occurrence-id={occ.occurrenceId}
+                                    data-block-id={occ.blockId}
                                     className={`
                                       rounded-md transition-all duration-300 ease-out
                                       ${isSearchMatch ? 'ring-2 ring-yellow-400 ring-offset-1 bg-yellow-400/10' : ''}
@@ -2373,13 +2678,14 @@ export default function Schedules() {
                                             ? '0 0 20px rgba(34, 197, 94, 0.6), inset 0 0 10px rgba(34, 197, 94, 0.2)'
                                             : undefined,
                                         }}
+                                        onClick={() => handleUnassignedBlockClick(occ)}
                                         onContextMenu={(e) => handleRightClickUnassigned(e, occ)}
                                         title={
                                           isButtonHighlighted
                                             ? `AI Match: 100% - Excellent fit for ${hoveredDriverName}`
                                             : occ.isRejectedLoad
                                             ? "Rejected load - Amazon rejected driver assignment"
-                                            : "Right-click to assign driver"
+                                            : "Click to find matching driver, right-click to assign"
                                         }
                                       >
                                         <Badge
@@ -2414,7 +2720,8 @@ export default function Schedules() {
                       );
                     })}
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -2645,46 +2952,6 @@ export default function Schedules() {
         </div>
       )}
 
-      {/* Analysis Panel */}
-      {calendarData && (
-        <AnalysisPanel
-          open={showAnalysisPanel}
-          weekStart={weekRange.weekStart}
-          weekEnd={addDays(weekRange.weekStart, 6)}
-          blocks={calendarData.occurrences.map(occ => ({
-            id: occ.occurrenceId,
-            blockId: occ.blockId,
-            driverId: occ.driverId,
-            driverName: occ.driverName,
-            serviceDate: occ.serviceDate,
-            startTime: occ.startTime,
-            contractType: occ.contractType || 'unknown',
-            isRejectedLoad: occ.isRejectedLoad,
-          }))}
-          onAssignDriver={async (blockId, driverId) => {
-            // Find the occurrence by blockId
-            const occurrence = calendarData.occurrences.find(o => o.blockId === blockId);
-            if (!occurrence) return;
-
-            // Use the existing assignment mutation
-            await updateAssignmentMutation.mutateAsync({
-              occurrenceId: occurrence.occurrenceId,
-              driverId,
-            });
-          }}
-          onUnassignAll={async () => {
-            // Unassign all blocks that have drivers
-            const assignedOccurrences = calendarData.occurrences.filter(o => o.driverId);
-            for (const occ of assignedOccurrences) {
-              await updateAssignmentMutation.mutateAsync({
-                occurrenceId: occ.occurrenceId,
-                driverId: null,
-              });
-            }
-          }}
-          onClose={() => setShowAnalysisPanel(false)}
-        />
-      )}
     </div>
   </div>
   </>

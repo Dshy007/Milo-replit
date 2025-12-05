@@ -62,6 +62,69 @@ export interface DNAProfile {
 // Day names for pattern matching
 const DAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 
+// Canonical start times lookup - from Start Times page (contracts table)
+// This is the "holy grail" - use tractor ID to get the real start time
+const CANONICAL_START_TIMES: Record<string, string> = {
+  // Solo1 (10 tractors)
+  "solo1_Tractor_1": "16:30",
+  "solo1_Tractor_2": "20:30",
+  "solo1_Tractor_3": "20:30",
+  "solo1_Tractor_4": "17:30",
+  "solo1_Tractor_5": "21:30",
+  "solo1_Tractor_6": "01:30",
+  "solo1_Tractor_7": "18:30",
+  "solo1_Tractor_8": "00:30",
+  "solo1_Tractor_9": "16:30",
+  "solo1_Tractor_10": "20:30",
+  // Solo2 (7 tractors) - CORRECT times from database
+  "solo2_Tractor_1": "18:30",
+  "solo2_Tractor_2": "23:30",
+  "solo2_Tractor_3": "21:30",
+  "solo2_Tractor_4": "08:30",
+  "solo2_Tractor_5": "15:30",
+  "solo2_Tractor_6": "11:30",
+  "solo2_Tractor_7": "16:30",
+};
+
+/**
+ * Convert HH:MM to minutes since midnight
+ */
+function timeToMinutes(time: string): number {
+  const parts = time.split(':');
+  return parseInt(parts[0]) * 60 + parseInt(parts[1] || '0');
+}
+
+/**
+ * Find the NEAREST canonical start time for a raw timestamp
+ * This handles cases where tractorId is missing but we can infer from time proximity
+ */
+function findNearestCanonicalTime(rawTime: string, contractType: string): { time: string; tractor: string; diff: number } {
+  const rawMinutes = timeToMinutes(rawTime);
+  const prefix = contractType.toLowerCase() + '_';
+
+  let bestMatch = { time: rawTime, tractor: 'Unknown', diff: Infinity };
+
+  for (const [key, canonicalTime] of Object.entries(CANONICAL_START_TIMES)) {
+    if (!key.startsWith(prefix)) continue;
+
+    const canonicalMinutes = timeToMinutes(canonicalTime);
+
+    // Calculate difference with wraparound (e.g., 23:30 is close to 00:05)
+    const diff = Math.abs(rawMinutes - canonicalMinutes);
+    const wrapDiff = Math.min(diff, 1440 - diff); // 1440 = minutes in a day
+
+    if (wrapDiff < bestMatch.diff) {
+      bestMatch = {
+        time: canonicalTime,
+        tractor: key.replace(prefix, ''),
+        diff: wrapDiff,
+      };
+    }
+  }
+
+  return bestMatch;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 //                              GEMINI PROFILER
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -175,14 +238,19 @@ export class GeminiProfiler {
       };
     }
 
-    // Count day frequencies (total)
+    // ========================================================================
+    // TWO-PASS ALGORITHM: Prevents Solo1 times polluting Solo2 profiles
+    // ========================================================================
+    // Pass 1: Determine preferred contract type (majority wins)
+    // Pass 2: Only count times/tractors from assignments matching that type
+    // ========================================================================
+
+    // Pass 1: Count contract types and days (contract-agnostic)
     const dayFrequency = new Map<number, number>();
-    const timeFrequency = new Map<string, number>();
-    const tractorFrequency = new Map<string, number>();
     const contractFrequency = new Map<string, number>();
     const blockFrequency = new Map<string, number>();
 
-    // NEW: Track per-week day occurrences for better pattern detection
+    // Track per-week day occurrences for better pattern detection
     const weekDayMap = new Map<string, Set<number>>(); // week -> Set of days worked
 
     for (const assignment of assignments) {
@@ -195,33 +263,17 @@ export class GeminiProfiler {
       }
       weekDayMap.get(weekKey)!.add(assignment.dayOfWeek);
 
-      // Days (total frequency)
+      // Days (total frequency - contract-agnostic)
       dayFrequency.set(
         assignment.dayOfWeek,
         (dayFrequency.get(assignment.dayOfWeek) || 0) + 1
       );
 
-      // Start times
-      if (assignment.startTime) {
-        timeFrequency.set(
-          assignment.startTime,
-          (timeFrequency.get(assignment.startTime) || 0) + 1
-        );
-      }
-
-      // Tractors
-      if (assignment.tractorId) {
-        tractorFrequency.set(
-          assignment.tractorId,
-          (tractorFrequency.get(assignment.tractorId) || 0) + 1
-        );
-      }
-
       // Contract types
       if (assignment.contractType) {
         contractFrequency.set(
-          assignment.contractType,
-          (contractFrequency.get(assignment.contractType) || 0) + 1
+          assignment.contractType.toLowerCase(),
+          (contractFrequency.get(assignment.contractType.toLowerCase()) || 0) + 1
         );
       }
 
@@ -230,6 +282,52 @@ export class GeminiProfiler {
         blockFrequency.set(
           assignment.blockId,
           (blockFrequency.get(assignment.blockId) || 0) + 1
+        );
+      }
+    }
+
+    // Determine preferred contract type (majority wins)
+    const preferredContractType = this.getTopN(contractFrequency, 1)[0] || 'solo1';
+
+    // Pass 2: Count times/tractors ONLY from assignments matching preferredContractType
+    const timeFrequency = new Map<string, number>();
+    const tractorFrequency = new Map<string, number>();
+
+    for (const assignment of assignments) {
+      const assignmentContractType = assignment.contractType?.toLowerCase() || 'solo1';
+
+      // CRITICAL: Only count times/tractors from the PREFERRED contract type
+      // This prevents Solo1 times (like 00:30) from appearing in Solo2 driver profiles
+      if (assignmentContractType !== preferredContractType) {
+        continue; // Skip assignments from the "wrong" contract type
+      }
+
+      // Start times - use CANONICAL time from tractor lookup, or find nearest if no tractorId
+      let canonicalTime: string;
+
+      if (assignment.tractorId) {
+        // Direct lookup with tractorId
+        const lookupKey = `${preferredContractType}_${assignment.tractorId}`;
+        canonicalTime = CANONICAL_START_TIMES[lookupKey] || assignment.startTime;
+      } else {
+        // No tractorId - find nearest canonical time based on raw start time
+        const nearest = findNearestCanonicalTime(assignment.startTime, preferredContractType);
+        // Only use if within 2 hours (120 minutes)
+        canonicalTime = nearest.diff <= 120 ? nearest.time : assignment.startTime;
+      }
+
+      if (canonicalTime) {
+        timeFrequency.set(
+          canonicalTime,
+          (timeFrequency.get(canonicalTime) || 0) + 1
+        );
+      }
+
+      // Tractors (only from preferred contract type)
+      if (assignment.tractorId) {
+        tractorFrequency.set(
+          assignment.tractorId,
+          (tractorFrequency.get(assignment.tractorId) || 0) + 1
         );
       }
     }
@@ -269,12 +367,12 @@ export class GeminiProfiler {
     // Capture more times and tractors to avoid missing occasional shifts
     // Top 4 times (was 3) to include bump/late shift times
     // Top 4 tractors (was 2) for drivers who use multiple tractors
-    const preferredStartTimes = this.getTopN(timeFrequency, 4)
-      .sort(); // Sort chronologically (HH:MM format sorts correctly as strings)
+    // NOTE: Do NOT sort alphabetically - keep frequency order so most common times appear first
+    // This is critical because UI often shows only first 2 times
+    const preferredStartTimes = this.getTopN(timeFrequency, 4) as string[];
     const preferredTractors = this.getTopN(tractorFrequency, 4);
 
-    // Get most common contract type
-    const preferredContractType = this.getTopN(contractFrequency, 1)[0] || 'solo1';
+    // preferredContractType was determined in Pass 1 above
 
     // Get home blocks (run 3+ times)
     const homeBlocks = Array.from(blockFrequency.entries())

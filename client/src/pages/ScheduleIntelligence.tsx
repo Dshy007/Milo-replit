@@ -169,6 +169,12 @@ const parseInsights = (insights: string[] | null): { days: string[]; times: stri
 // All days for toggle buttons
 const ALL_DAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 
+// Canonical start times by contract type
+const CANONICAL_TIMES: Record<string, string[]> = {
+  solo1: ["16:30", "17:30", "18:30", "20:30", "21:30", "00:30", "01:30"],
+  solo2: ["08:30", "11:30", "15:30", "16:30", "18:30", "21:30", "23:30"],
+};
+
 // Flip Card for Driver DNA Profile
 function DriverCard({
   profile,
@@ -176,12 +182,14 @@ function DriverCard({
   isApplying
 }: {
   profile: DNAProfile;
-  onApplyInsights: (driverId: string, data: { days: string[]; times: string[]; tractors: string[] }) => void;
+  onApplyInsights: (driverId: string, data: { days: string[]; times: string[]; tractors: string[]; contractType: string }) => void;
   isApplying: boolean;
 }) {
   const [isFlipped, setIsFlipped] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [selectedDays, setSelectedDays] = useState<string[]>(profile.preferredDays || []);
+  const [selectedTimes, setSelectedTimes] = useState<string[]>(profile.preferredStartTimes || []);
+  const [selectedContractType, setSelectedContractType] = useState<string>(profile.preferredContractType || "solo1");
 
   const rawScore = parseFloat(profile.consistencyScore || "0");
   const consistency = Math.round(rawScore * 100);
@@ -191,7 +199,12 @@ function DriverCard({
 
   // Check if there are changes from current profile
   const currentDays = profile.preferredDays || [];
-  const hasChanges = JSON.stringify(sortDays(selectedDays)) !== JSON.stringify(sortDays(currentDays));
+  const currentTimes = profile.preferredStartTimes || [];
+  const currentContractType = profile.preferredContractType || "solo1";
+  const hasChanges =
+    JSON.stringify(sortDays(selectedDays)) !== JSON.stringify(sortDays(currentDays)) ||
+    JSON.stringify([...selectedTimes].sort()) !== JSON.stringify([...currentTimes].sort()) ||
+    selectedContractType !== currentContractType;
 
   const toggleDay = (day: string) => {
     setSelectedDays(prev =>
@@ -201,12 +214,21 @@ function DriverCard({
     );
   };
 
+  const toggleTime = (time: string) => {
+    setSelectedTimes(prev =>
+      prev.includes(time)
+        ? prev.filter(t => t !== time)
+        : [...prev, time]
+    );
+  };
+
   const handleSave = (e: React.MouseEvent) => {
     e.stopPropagation();
     onApplyInsights(profile.driverId, {
       days: selectedDays,
-      times: profile.preferredStartTimes || [],
-      tractors: profile.preferredTractors || []
+      times: selectedTimes,
+      tractors: profile.preferredTractors || [],
+      contractType: selectedContractType
     });
     setIsEditing(false);
   };
@@ -214,6 +236,8 @@ function DriverCard({
   const handleCancel = (e: React.MouseEvent) => {
     e.stopPropagation();
     setSelectedDays(profile.preferredDays || []);
+    setSelectedTimes(profile.preferredStartTimes || []);
+    setSelectedContractType(profile.preferredContractType || "solo1");
     setIsEditing(false);
   };
 
@@ -298,33 +322,91 @@ function DriverCard({
 
             <div className="flex-1 overflow-y-auto">
               {isEditing ? (
-                <>
-                  <h4 className="text-xs font-medium text-blue-700 dark:text-blue-300 mb-2">Select Work Days</h4>
-                  <div className="flex flex-wrap gap-1.5 mb-3">
-                    {ALL_DAYS.map(day => (
-                      <Button
-                        key={day}
-                        size="sm"
-                        variant={selectedDays.includes(day) ? "default" : "outline"}
-                        className={cn(
-                          "h-7 px-2 text-xs",
-                          selectedDays.includes(day)
-                            ? "bg-blue-600 hover:bg-blue-700"
-                            : "hover:bg-blue-50 dark:hover:bg-blue-900/30"
-                        )}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleDay(day);
-                        }}
-                      >
-                        {formatDay(day)}
-                      </Button>
-                    ))}
+                <div className="space-y-3 overflow-y-auto max-h-40">
+                  {/* Contract Type */}
+                  <div>
+                    <h4 className="text-xs font-medium text-blue-700 dark:text-blue-300 mb-1">Contract Type</h4>
+                    <div className="flex gap-2">
+                      {["solo1", "solo2"].map(type => (
+                        <Button
+                          key={type}
+                          size="sm"
+                          variant={selectedContractType === type ? "default" : "outline"}
+                          className={cn(
+                            "h-7 px-3 text-xs",
+                            selectedContractType === type
+                              ? "bg-purple-600 hover:bg-purple-700"
+                              : "hover:bg-purple-50 dark:hover:bg-purple-900/30"
+                          )}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedContractType(type);
+                            // Clear times when switching contract type
+                            setSelectedTimes([]);
+                          }}
+                        >
+                          {type.toUpperCase()}
+                        </Button>
+                      ))}
+                    </div>
                   </div>
-                  <p className="text-xs text-muted-foreground">
-                    Selected: {selectedDays.length > 0 ? sortDays(selectedDays).map(formatDay).join(", ") : "None"}
+
+                  {/* Work Days */}
+                  <div>
+                    <h4 className="text-xs font-medium text-blue-700 dark:text-blue-300 mb-1">Work Days</h4>
+                    <div className="flex flex-wrap gap-1">
+                      {ALL_DAYS.map(day => (
+                        <Button
+                          key={day}
+                          size="sm"
+                          variant={selectedDays.includes(day) ? "default" : "outline"}
+                          className={cn(
+                            "h-6 px-1.5 text-[10px]",
+                            selectedDays.includes(day)
+                              ? "bg-blue-600 hover:bg-blue-700"
+                              : "hover:bg-blue-50 dark:hover:bg-blue-900/30"
+                          )}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleDay(day);
+                          }}
+                        >
+                          {formatDay(day)}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Start Times */}
+                  <div>
+                    <h4 className="text-xs font-medium text-blue-700 dark:text-blue-300 mb-1">Start Times</h4>
+                    <div className="flex flex-wrap gap-1">
+                      {CANONICAL_TIMES[selectedContractType]?.map(time => (
+                        <Button
+                          key={time}
+                          size="sm"
+                          variant={selectedTimes.includes(time) ? "default" : "outline"}
+                          className={cn(
+                            "h-6 px-1.5 text-[10px] font-mono",
+                            selectedTimes.includes(time)
+                              ? "bg-green-600 hover:bg-green-700"
+                              : "hover:bg-green-50 dark:hover:bg-green-900/30"
+                          )}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleTime(time);
+                          }}
+                        >
+                          {time}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <p className="text-[10px] text-muted-foreground">
+                    {selectedContractType.toUpperCase()} • {sortDays(selectedDays).map(formatDay).join(", ") || "No days"} • {selectedTimes.join(", ") || "No times"}
                   </p>
-                </>
+                </div>
               ) : (
                 <>
                   <h4 className="text-xs font-medium text-blue-700 dark:text-blue-300 mb-1">AI Summary</h4>
@@ -469,30 +551,31 @@ export default function ScheduleIntelligence() {
   });
 
   const applyInsightsMutation = useMutation({
-    mutationFn: async ({ driverId, data }: { driverId: string; data: { days: string[]; times: string[]; tractors: string[] } }) => {
+    mutationFn: async ({ driverId, data }: { driverId: string; data: { days: string[]; times: string[]; tractors: string[]; contractType: string } }) => {
       setApplyingDriverId(driverId);
       const res = await apiRequest("PATCH", `/api/driver-dna/${driverId}`, {
         preferredDays: data.days.length > 0 ? data.days : undefined,
         preferredStartTimes: data.times.length > 0 ? data.times : undefined,
         preferredTractors: data.tractors.length > 0 ? data.tractors : undefined,
+        preferredContractType: data.contractType,
       });
       return res.json();
     },
     onSuccess: (_result: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/driver-dna"] });
       toast({
-        title: "Insights Applied!",
-        description: "Driver profile updated with discovered patterns.",
+        title: "Preferences Saved!",
+        description: "Driver availability updated successfully.",
       });
       setApplyingDriverId(null);
     },
     onError: (error: any) => {
-      toast({ title: "Failed to Apply", description: error.message, variant: "destructive" });
+      toast({ title: "Failed to Save", description: error.message, variant: "destructive" });
       setApplyingDriverId(null);
     },
   });
 
-  const handleApplyInsights = (driverId: string, data: { days: string[]; times: string[]; tractors: string[] }) => {
+  const handleApplyInsights = (driverId: string, data: { days: string[]; times: string[]; tractors: string[]; contractType: string }) => {
     applyInsightsMutation.mutate({ driverId, data });
   };
 

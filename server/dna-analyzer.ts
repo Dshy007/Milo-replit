@@ -52,19 +52,69 @@ const CANONICAL_START_TIMES: Record<string, string> = {
 };
 
 /**
+ * Convert HH:MM to minutes since midnight
+ */
+function timeToMinutes(time: string): number {
+  const [h, m] = time.split(':').map(Number);
+  return h * 60 + (m || 0);
+}
+
+/**
+ * Find the NEAREST canonical start time for a raw timestamp
+ * This handles cases where tractorId is missing but we can infer from time proximity
+ */
+function findNearestCanonicalTime(rawTime: string, contractType: string): { time: string; tractor: string; diff: number } {
+  const rawMinutes = timeToMinutes(rawTime);
+  const prefix = contractType.toLowerCase() + '_';
+
+  let bestMatch = { time: rawTime, tractor: 'Unknown', diff: Infinity };
+
+  for (const [key, canonicalTime] of Object.entries(CANONICAL_START_TIMES)) {
+    if (!key.startsWith(prefix)) continue;
+
+    const canonicalMinutes = timeToMinutes(canonicalTime);
+
+    // Calculate difference with wraparound (e.g., 23:30 is close to 00:05)
+    const diff = Math.abs(rawMinutes - canonicalMinutes);
+    const wrapDiff = Math.min(diff, 1440 - diff); // 1440 = minutes in a day
+
+    if (wrapDiff < bestMatch.diff) {
+      bestMatch = {
+        time: canonicalTime,
+        tractor: key.replace(prefix, ''),
+        diff: wrapDiff,
+      };
+    }
+  }
+
+  return bestMatch;
+}
+
+/**
  * Get canonical start time from soloType and tractorId
- * Falls back to formatted timestamp if no match found
+ * If tractorId is missing, finds the NEAREST canonical time based on raw timestamp
  */
 function getCanonicalStartTime(soloType: string | null, tractorId: string | null, fallbackTimestamp: Date): string {
+  // Direct lookup if we have both soloType and tractorId
   if (soloType && tractorId) {
-    // Build lookup key: "solo1_Tractor_6" or "solo2_Tractor_4"
     const key = `${soloType.toLowerCase()}_${tractorId}`;
     const canonicalTime = CANONICAL_START_TIMES[key];
     if (canonicalTime) {
       return canonicalTime;
     }
   }
-  // Fallback to formatted timestamp
+
+  // If no tractorId, find nearest canonical time based on raw timestamp
+  if (soloType) {
+    const rawTime = format(new Date(fallbackTimestamp), 'HH:mm');
+    const nearest = findNearestCanonicalTime(rawTime, soloType);
+    // Only use if within 2 hours (120 minutes)
+    if (nearest.diff <= 120) {
+      return nearest.time;
+    }
+  }
+
+  // Final fallback to formatted timestamp
   return format(new Date(fallbackTimestamp), 'HH:mm');
 }
 
@@ -533,14 +583,29 @@ function computeDNAFromBlockAssignments(assignments: {
     };
   }
 
+  // === PASS 1: Determine primary contract type from ALL assignments ===
+  const contractFrequency = new Map<string, number>();
+  for (const a of assignments) {
+    if (a.soloType) {
+      contractFrequency.set(a.soloType, (contractFrequency.get(a.soloType) || 0) + 1);
+    }
+  }
+  const preferredContractType = getTopNFromMap(contractFrequency, 1)[0] || 'solo1';
+
+  // === PASS 2: Compute times/tractors ONLY from primary contract type ===
+  // This prevents Solo1 times from polluting a Solo2 driver's profile (and vice versa)
+  const primaryAssignments = assignments.filter(a =>
+    (a.soloType || 'solo1').toLowerCase() === preferredContractType.toLowerCase()
+  );
+
   const dayFrequency = new Map<string, number>();
   const timeFrequency = new Map<string, number>();
   const tractorFrequency = new Map<string, number>();
-  const contractFrequency = new Map<string, number>();
   const weekSet = new Set<string>();
   const weekDayMap = new Map<string, Set<string>>();
 
-  for (const a of assignments) {
+  // Use primaryAssignments for time/tractor computation
+  for (const a of primaryAssignments) {
     const weekStart = new Date(a.serviceDate);
     weekStart.setDate(weekStart.getDate() - weekStart.getDay());
     const weekKey = weekStart.toISOString().split('T')[0];
@@ -553,16 +618,20 @@ function computeDNAFromBlockAssignments(assignments: {
 
     dayFrequency.set(a.dayName, (dayFrequency.get(a.dayName) || 0) + 1);
 
-    // Use canonical time from lookup
-    const canonicalTime = CANONICAL_START_TIMES[`${a.soloType?.toLowerCase()}_${a.tractorId}`] || a.startTime;
+    // Use canonical time from lookup, or find nearest if tractorId is missing
+    let canonicalTime: string;
+    if (a.tractorId) {
+      const key = `${a.soloType?.toLowerCase()}_${a.tractorId}`;
+      canonicalTime = CANONICAL_START_TIMES[key] || a.startTime;
+    } else {
+      // tractorId is missing - find nearest canonical time based on raw time
+      const nearest = findNearestCanonicalTime(a.startTime, a.soloType || 'solo1');
+      canonicalTime = nearest.diff <= 90 ? nearest.time : a.startTime; // Use nearest if within 90 min
+    }
     timeFrequency.set(canonicalTime, (timeFrequency.get(canonicalTime) || 0) + 1);
 
     if (a.tractorId) {
       tractorFrequency.set(a.tractorId, (tractorFrequency.get(a.tractorId) || 0) + 1);
-    }
-
-    if (a.soloType) {
-      contractFrequency.set(a.soloType, (contractFrequency.get(a.soloType) || 0) + 1);
     }
   }
 
@@ -589,9 +658,11 @@ function computeDNAFromBlockAssignments(assignments: {
     ? preferredDays
     : getTopNFromMap(dayFrequency, 4);
 
-  const preferredStartTimes = getTopNFromMap(timeFrequency, 2).sort();
+  // NOTE: Do NOT sort alphabetically - keep frequency order so most common times appear first
+  // This is critical because UI often shows only first 2 times
+  const preferredStartTimes = getTopNFromMap(timeFrequency, 2);
   const preferredTractors = getTopNFromMap(tractorFrequency, 3);
-  const preferredContractType = getTopNFromMap(contractFrequency, 1)[0] || 'solo1';
+  // NOTE: preferredContractType was already determined in PASS 1 above
 
   // Determine pattern group
   const sunWedDays = ['sunday', 'monday', 'tuesday', 'wednesday'];

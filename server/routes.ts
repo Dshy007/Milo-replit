@@ -1428,16 +1428,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
         };
       });
 
+      // Canonical start times lookup - from Start Times page (contracts table)
+      const CANONICAL_START_TIMES: Record<string, string> = {
+        // Solo1 (10 tractors)
+        "solo1_Tractor_1": "16:30",
+        "solo1_Tractor_2": "20:30",
+        "solo1_Tractor_3": "20:30",
+        "solo1_Tractor_4": "17:30",
+        "solo1_Tractor_5": "21:30",
+        "solo1_Tractor_6": "01:30",
+        "solo1_Tractor_7": "18:30",
+        "solo1_Tractor_8": "00:30",
+        "solo1_Tractor_9": "16:30",
+        "solo1_Tractor_10": "20:30",
+        // Solo2 (7 tractors) - CORRECT times from database
+        "solo2_Tractor_1": "18:30",
+        "solo2_Tractor_2": "23:30",
+        "solo2_Tractor_3": "21:30",
+        "solo2_Tractor_4": "08:30",
+        "solo2_Tractor_5": "15:30",
+        "solo2_Tractor_6": "11:30",
+        "solo2_Tractor_7": "16:30",
+      };
+
       // Transform imported blocks to the same simplified structure
       const simplifiedBlocks = importedBlocks.map(blk => {
         const contract = blk.contractId ? contractsMap.get(blk.contractId) || null : null;
         const assignment = assignmentsByBlockId.get(blk.id) || null;
         const driver = assignment ? driversMap.get(assignment.driverId) || null : null;
 
-        // Extract start time from startTimestamp
-        const startTime = blk.startTimestamp
+        // Use CANONICAL start time lookup based on soloType + tractorId
+        // This ensures blocks match driver DNA profiles correctly
+        const lookupKey = `${blk.soloType?.toLowerCase() || 'solo1'}_${blk.tractorId || ''}`;
+        const canonicalTime = CANONICAL_START_TIMES[lookupKey];
+
+        // Fall back to raw timestamp if no canonical lookup found
+        const fallbackTime = blk.startTimestamp
           ? `${String(blk.startTimestamp.getHours()).padStart(2, '0')}:${String(blk.startTimestamp.getMinutes()).padStart(2, '0')}`
           : '00:00';
+
+        const startTime = canonicalTime || fallbackTime;
 
         // Format service date as YYYY-MM-DD string
         const serviceDate = blk.serviceDate instanceof Date
@@ -3939,7 +3969,7 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
     try {
       const { driverId } = req.params;
       const tenantId = req.session.tenantId!;
-      const { preferredDays, preferredStartTimes, preferredTractors } = req.body;
+      const { preferredDays, preferredStartTimes, preferredTractors, preferredContractType } = req.body;
 
       // Find existing profile
       const existingProfile = await db
@@ -3970,6 +4000,9 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
       }
       if (preferredTractors !== undefined) {
         updateData.preferredTractors = preferredTractors;
+      }
+      if (preferredContractType !== undefined) {
+        updateData.preferredContractType = preferredContractType;
       }
 
       // Update the profile
@@ -5245,6 +5278,29 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
       // Day name lookup
       const DAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 
+      // Canonical start times lookup - from Start Times page (contracts table)
+      const CANONICAL_START_TIMES: Record<string, string> = {
+        // Solo1 (10 tractors)
+        "solo1_Tractor_1": "16:30",
+        "solo1_Tractor_2": "20:30",
+        "solo1_Tractor_3": "20:30",
+        "solo1_Tractor_4": "17:30",
+        "solo1_Tractor_5": "21:30",
+        "solo1_Tractor_6": "01:30",
+        "solo1_Tractor_7": "18:30",
+        "solo1_Tractor_8": "00:30",
+        "solo1_Tractor_9": "16:30",
+        "solo1_Tractor_10": "20:30",
+        // Solo2 (7 tractors) - CORRECT times from database
+        "solo2_Tractor_1": "18:30",
+        "solo2_Tractor_2": "23:30",
+        "solo2_Tractor_3": "21:30",
+        "solo2_Tractor_4": "08:30",
+        "solo2_Tractor_5": "15:30",
+        "solo2_Tractor_6": "11:30",
+        "solo2_Tractor_7": "16:30",
+      };
+
       // Time conversion helper
       function timeToMinutes(time: string): number {
         const [h, m] = time.split(':').map(Number);
@@ -5254,157 +5310,261 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
       // Track assignments in this batch to prevent double-booking
       const assignedDrivers = new Map<string, string[]>(); // driverId -> [blockIds]
 
-      // Process each block and find best driver match using DNA profiles
-      const recommendations = inputBlocks.map((block: any) => {
-        const blockId = block.blockId;
+      // Track OCCUPIED DATES per driver - prevent same-day duplicates
+      // Key: driverId, Value: Set of dates (YYYY-MM-DD)
+      const occupiedDates = new Map<string, Set<string>>();
+
+      // Group blocks by date for time-consistency matching
+      const blocksByDate = new Map<string, any[]>();
+      for (const block of inputBlocks) {
+        const dateKey = block.serviceDate;
+        if (!blocksByDate.has(dateKey)) {
+          blocksByDate.set(dateKey, []);
+        }
+        blocksByDate.get(dateKey)!.push(block);
+      }
+
+      // Helper to score a single driver for a block (returns timeDiff for sorting)
+      function scoreDriverForBlock(
+        driver: typeof allDriversRaw[0],
+        block: any,
+        checkOccupied: boolean = true
+      ): {
+        driver_id: string;
+        driver_name: string;
+        score: number;
+        reasons: string[];
+        matchType: string;
+        timeDiff: number;
+      } {
+        const dna = dnaByDriverId.get(driver.id);
+        const driverType = (driver.soloType || 'solo1').toLowerCase();
+        const driverName = `${driver.firstName} ${driver.lastName}`.trim();
         const contractType = (block.contractType || '').toLowerCase();
-        const blockDate = new Date(block.serviceDate + 'T12:00:00');
-        const dayOfWeek = blockDate.getDay();
-        const dayName = DAY_NAMES[dayOfWeek];
-        const startTimeStr = block.startTime || '00:00';
+        const blockDate = block.serviceDate; // YYYY-MM-DD string
+
+        // Get canonical time for this block
+        const lookupKey = `${contractType}_${block.tractorId || ''}`;
+        const canonicalTime = CANONICAL_START_TIMES[lookupKey];
+        const startTimeStr = canonicalTime || block.startTime || '00:00';
         const blockMinutes = timeToMinutes(startTimeStr);
 
-        // Score each driver based on DNA profile
-        const driverScores = allDriversRaw.map(driver => {
-          const dna = dnaByDriverId.get(driver.id);
-          const driverType = (driver.soloType || 'solo1').toLowerCase();
-          const driverName = `${driver.firstName} ${driver.lastName}`.trim();
+        // Get day name
+        const dt = new Date(blockDate + 'T12:00:00');
+        const dayName = DAY_NAMES[dt.getDay()];
 
-          // Base score and reasons
-          let score = 0;
-          const reasons: string[] = [];
-
-          // Check if driver already assigned too many blocks in this batch
-          const alreadyAssigned = assignedDrivers.get(driver.id)?.length || 0;
-          const maxAssignments = driverType === 'solo2' ? 3 : 6; // Solo2 limited to 3 blocks
-          if (alreadyAssigned >= maxAssignments) {
+        // Check if driver already occupied on this date (same-day duplicate prevention)
+        if (checkOccupied) {
+          const driverDates = occupiedDates.get(driver.id);
+          if (driverDates && driverDates.has(blockDate)) {
             return {
               driver_id: driver.id,
               driver_name: driverName,
               score: 0,
-              reasons: [`⚠ Already at max blocks (${alreadyAssigned})`],
-              matchType: 'blocked',
+              reasons: [`⚠ Already assigned a block on ${blockDate}`],
+              matchType: 'same_day_blocked',
+              timeDiff: Infinity,
             };
           }
+        }
 
-          // HOLY GRAIL MATCHING: Contract + Day + Time
-          if (!dna) {
-            // No DNA profile - just contract type match
-            if (driverType === contractType) {
-              score = 0.30;
-              reasons.push('○ Contract type match (no DNA profile)');
-            } else {
-              score = 0.10;
-              reasons.push('△ No DNA profile, type mismatch');
-            }
-            return {
-              driver_id: driver.id,
-              driver_name: driverName,
-              score,
-              reasons,
-              matchType: 'fallback',
-            };
-          }
-
-          // 1. CONTRACT TYPE MATCH (required for high score)
-          const dnaContractType = (dna.preferredContractType || 'solo1').toLowerCase();
-          const contractMatch = driverType === contractType && dnaContractType === contractType;
-
-          // 2. DAY MATCH
-          const preferredDays = dna.preferredDays || [];
-          const dayMatch = preferredDays.includes(dayName);
-
-          // 3. TIME MATCH (within 2 hours)
-          const preferredTimes = dna.preferredStartTimes || [];
-          let bestTimeDiff = Infinity;
-          for (const prefTime of preferredTimes) {
-            const prefMinutes = timeToMinutes(prefTime);
-            const diff = Math.abs(blockMinutes - prefMinutes);
-            const wrapDiff = Math.min(diff, 1440 - diff);
-            bestTimeDiff = Math.min(bestTimeDiff, wrapDiff);
-          }
-          const timeMatch = bestTimeDiff <= 120; // Within 2 hours
-          const exactTimeMatch = bestTimeDiff <= 30; // Within 30 minutes
-
-          // SCORING LOGIC
-          if (contractMatch && dayMatch && exactTimeMatch) {
-            // PERFECT HOLY GRAIL - 100%
-            score = 1.0;
-            reasons.push(`★ Perfect Match: ${contractType.toUpperCase()} + ${dayName} + ${startTimeStr}`);
-          } else if (contractMatch && dayMatch && timeMatch) {
-            // Near-perfect - 95%
-            score = 0.95;
-            reasons.push(`✓ Strong Match: ${contractType.toUpperCase()} + ${dayName} (time within 2hr)`);
-          } else if (contractMatch && dayMatch) {
-            // Contract + Day but not time - 80%
-            score = 0.80;
-            reasons.push(`✓ Day Match: ${contractType.toUpperCase()} + ${dayName}`);
-          } else if (contractMatch && timeMatch) {
-            // Contract + Time but not day - 70%
-            score = 0.70;
-            reasons.push(`○ Time Match: ${contractType.toUpperCase()} @ ${startTimeStr}`);
-          } else if (contractMatch) {
-            // Just contract type - 50%
-            score = 0.50;
-            reasons.push(`○ Contract Match: ${contractType.toUpperCase()} only`);
-          } else if (dayMatch && timeMatch) {
-            // Day + Time but wrong contract - 40%
-            score = 0.40;
-            reasons.push(`○ Schedule Match but wrong contract type`);
-          } else {
-            // No significant match
-            score = 0.20;
-            reasons.push('△ No pattern match in DNA profile');
-          }
-
-          // Penalty for over-assignment in batch
-          if (alreadyAssigned > 2) {
-            score = Math.max(0.1, score - 0.10);
-            reasons.push(`↓ Already assigned ${alreadyAssigned} blocks`);
-          }
-
+        // Check max assignments overall
+        const alreadyAssigned = assignedDrivers.get(driver.id)?.length || 0;
+        const maxAssignments = driverType === 'solo2' ? 3 : 6;
+        if (alreadyAssigned >= maxAssignments) {
           return {
             driver_id: driver.id,
             driver_name: driverName,
-            score: Math.round(score * 100) / 100,
-            reasons,
-            matchType: score >= 0.95 ? 'holy_grail' : score >= 0.70 ? 'strong' : score >= 0.50 ? 'contract' : 'weak',
+            score: 0,
+            reasons: [`⚠ Already at max blocks (${alreadyAssigned})`],
+            matchType: 'blocked',
+            timeDiff: Infinity,
           };
-        });
-
-        // Sort by score descending
-        driverScores.sort((a, b) => b.score - a.score);
-
-        // Track top recommendation for workload balance
-        if (driverScores.length > 0 && driverScores[0].score > 0.2) {
-          const topDriverId = driverScores[0].driver_id;
-          if (!assignedDrivers.has(topDriverId)) {
-            assignedDrivers.set(topDriverId, []);
-          }
-          assignedDrivers.get(topDriverId)!.push(blockId);
         }
 
-        return {
-          block_id: blockId,
-          contract_type: contractType,
-          service_date: block.serviceDate,
-          start_time: startTimeStr,
-          day_of_week: dayName,
-          recommendations: driverScores.slice(0, 5), // Top 5 candidates
-        };
-      });
+        // No DNA profile - just contract type match
+        if (!dna) {
+          if (driverType === contractType) {
+            return {
+              driver_id: driver.id,
+              driver_name: driverName,
+              score: 0.30,
+              reasons: ['○ Contract type match (no DNA profile)'],
+              matchType: 'fallback',
+              timeDiff: Infinity,
+            };
+          }
+          return {
+            driver_id: driver.id,
+            driver_name: driverName,
+            score: 0.10,
+            reasons: ['△ No DNA profile, type mismatch'],
+            matchType: 'fallback',
+            timeDiff: Infinity,
+          };
+        }
+
+        // CONTRACT TYPE MATCH (required)
+        const dnaContractType = (dna.preferredContractType || 'solo1').toLowerCase();
+        const contractMatch = driverType === contractType && dnaContractType === contractType;
+
+        if (!contractMatch) {
+          return {
+            driver_id: driver.id,
+            driver_name: driverName,
+            score: 0,
+            reasons: [`✗ Contract mismatch (needs ${contractType.toUpperCase()}, has ${dnaContractType.toUpperCase()})`],
+            matchType: 'no_match',
+            timeDiff: Infinity,
+          };
+        }
+
+        // DAY MATCH
+        const preferredDays = dna.preferredDays || [];
+        const dayMatch = preferredDays.includes(dayName);
+
+        // TIME MATCH - calculate best time difference
+        const preferredTimes = dna.preferredStartTimes || [];
+        let bestTimeDiff = Infinity;
+        for (const prefTime of preferredTimes) {
+          const prefMinutes = timeToMinutes(prefTime);
+          const diff = Math.abs(blockMinutes - prefMinutes);
+          const wrapDiff = Math.min(diff, 1440 - diff);
+          bestTimeDiff = Math.min(bestTimeDiff, wrapDiff);
+        }
+        const timeMatch = bestTimeDiff <= 120; // Within 2 hours
+
+        // HOLY GRAIL MATCHING
+        if (contractMatch && dayMatch && timeMatch) {
+          // Score based on time proximity: 100% for exact, down to 50% at 2hr
+          // Exact time (0 min diff) = 100%, 1hr off = 75%, 2hr off = 50%
+          const timeProximityScore = Math.max(0.50, 1.0 - (bestTimeDiff / 240));
+          return {
+            driver_id: driver.id,
+            driver_name: driverName,
+            score: Math.round(timeProximityScore * 100) / 100,
+            reasons: [`★ DNA Match: ${dayName} + ${startTimeStr} (${bestTimeDiff}min from preferred)`],
+            matchType: timeProximityScore >= 0.95 ? 'holy_grail' : 'strong',
+            timeDiff: bestTimeDiff,
+          };
+        } else if (contractMatch && dayMatch) {
+          return {
+            driver_id: driver.id,
+            driver_name: driverName,
+            score: 0,
+            reasons: [`✗ Time mismatch (${startTimeStr} not within 2hr of preferred)`],
+            matchType: 'no_match',
+            timeDiff: Infinity,
+          };
+        } else if (contractMatch && timeMatch) {
+          return {
+            driver_id: driver.id,
+            driver_name: driverName,
+            score: 0,
+            reasons: [`✗ Day mismatch (${dayName} not in preferred days)`],
+            matchType: 'no_match',
+            timeDiff: Infinity,
+          };
+        } else {
+          return {
+            driver_id: driver.id,
+            driver_name: driverName,
+            score: 0,
+            reasons: [`✗ No DNA pattern match (day/time don't align)`],
+            matchType: 'no_match',
+            timeDiff: Infinity,
+          };
+        }
+      }
+
+      // ALGORITHM: Process blocks date-by-date, time-by-time for consistency
+      // For each date, sort blocks by start time, then assign drivers preferring
+      // those whose preferred time is closest to the block time
+
+      const recommendations: any[] = [];
+
+      // Sort dates chronologically
+      const sortedDates = Array.from(blocksByDate.keys()).sort();
+
+      for (const dateKey of sortedDates) {
+        const blocksOnDate = blocksByDate.get(dateKey)!;
+
+        // Sort blocks on this date by canonical start time
+        blocksOnDate.sort((a, b) => {
+          const aKey = `${(a.contractType || '').toLowerCase()}_${a.tractorId || ''}`;
+          const bKey = `${(b.contractType || '').toLowerCase()}_${b.tractorId || ''}`;
+          const aTime = CANONICAL_START_TIMES[aKey] || a.startTime || '00:00';
+          const bTime = CANONICAL_START_TIMES[bKey] || b.startTime || '00:00';
+          return timeToMinutes(aTime) - timeToMinutes(bTime);
+        });
+
+        // Process each block on this date
+        for (const block of blocksOnDate) {
+          const blockId = block.blockId;
+          const contractType = (block.contractType || '').toLowerCase();
+          const lookupKey = `${contractType}_${block.tractorId || ''}`;
+          const canonicalTime = CANONICAL_START_TIMES[lookupKey];
+          const startTimeStr = canonicalTime || block.startTime || '00:00';
+          const dt = new Date(dateKey + 'T12:00:00');
+          const dayName = DAY_NAMES[dt.getDay()];
+
+          // Score all drivers for this block
+          const driverScores = allDriversRaw.map(driver =>
+            scoreDriverForBlock(driver, block, true)
+          );
+
+          // Filter to viable (score > 0) and sort by:
+          // 1. Score descending
+          // 2. Time difference ascending (prefer drivers whose time is closer)
+          const viableDrivers = driverScores
+            .filter(d => d.score > 0)
+            .sort((a, b) => {
+              if (b.score !== a.score) return b.score - a.score;
+              return a.timeDiff - b.timeDiff; // Closer time wins ties
+            });
+
+          // Assign top driver - mark date as occupied
+          if (viableDrivers.length > 0 && viableDrivers[0].score > 0.2) {
+            const topDriverId = viableDrivers[0].driver_id;
+
+            // Track in assignedDrivers
+            if (!assignedDrivers.has(topDriverId)) {
+              assignedDrivers.set(topDriverId, []);
+            }
+            assignedDrivers.get(topDriverId)!.push(blockId);
+
+            // Mark this date as OCCUPIED for this driver (prevents same-day duplicates)
+            if (!occupiedDates.has(topDriverId)) {
+              occupiedDates.set(topDriverId, new Set());
+            }
+            occupiedDates.get(topDriverId)!.add(dateKey);
+          }
+
+          recommendations.push({
+            block_id: blockId,
+            contract_type: contractType,
+            service_date: dateKey,
+            start_time: startTimeStr,
+            day_of_week: dayName,
+            has_candidates: viableDrivers.length > 0,
+            recommendations: viableDrivers.slice(0, 5),
+          });
+        }
+      }
 
       const executionTime = Date.now() - startTime;
 
-      // Count perfect matches
+      // Count match quality categories
       const perfectMatches = recommendations.filter(
         (r: any) => r.recommendations.length > 0 && r.recommendations[0].score >= 1.0
       ).length;
       const strongMatches = recommendations.filter(
         (r: any) => r.recommendations.length > 0 && r.recommendations[0].score >= 0.70 && r.recommendations[0].score < 1.0
       ).length;
+      const blocksWithCandidates = recommendations.filter((r: any) => r.has_candidates).length;
+      const blocksNoCandidates = recommendations.filter((r: any) => !r.has_candidates).length;
 
-      console.log(`[DNA-Predict] ${inputBlocks.length} blocks → ${perfectMatches} perfect (100%), ${strongMatches} strong (70%+)`);
+      console.log(`[DNA-Predict] ${inputBlocks.length} blocks → ${perfectMatches} perfect, ${strongMatches} strong, ${blocksNoCandidates} no candidates`);
 
       // Store analysis result
       const { analysisResults } = await import("@shared/schema");
@@ -5424,6 +5584,8 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
         stats: {
           perfectMatches,
           strongMatches,
+          blocksWithCandidates,
+          blocksNoCandidates,
           totalBlocks: inputBlocks.length,
         },
         executionTimeMs: executionTime,

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Driver Assignment Predictor
+Driver Assignment Predictor & DNA Analyzer
 Uses historical data to match drivers to blocks based on previous week patterns.
 
 Key logic:
@@ -8,13 +8,236 @@ Key logic:
 2. If no exact match, find drivers who ran similar blocks (same day of week, same time slot)
 3. Fall back to contract type matching if no historical patterns found
 4. Distribute workload evenly - don't assign same driver to all blocks
+
+DNA Analysis:
+- Finds the nearest canonical start time for each assignment
+- Computes frequency-based preferred times (most common first)
+- No AI needed - pure pattern matching
 """
 
 import sys
 import json
 from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional, Set
-from collections import defaultdict
+from typing import Dict, List, Any, Optional, Set, Tuple
+from collections import defaultdict, Counter
+
+# Canonical start times - the holy grail lookup table
+CANONICAL_START_TIMES = {
+    # Solo1 (10 tractors)
+    "solo1_Tractor_1": "16:30",
+    "solo1_Tractor_2": "20:30",
+    "solo1_Tractor_3": "20:30",
+    "solo1_Tractor_4": "17:30",
+    "solo1_Tractor_5": "21:30",
+    "solo1_Tractor_6": "01:30",
+    "solo1_Tractor_7": "18:30",
+    "solo1_Tractor_8": "00:30",
+    "solo1_Tractor_9": "16:30",
+    "solo1_Tractor_10": "20:30",
+    # Solo2 (7 tractors)
+    "solo2_Tractor_1": "18:30",
+    "solo2_Tractor_2": "23:30",
+    "solo2_Tractor_3": "21:30",
+    "solo2_Tractor_4": "08:30",
+    "solo2_Tractor_5": "15:30",
+    "solo2_Tractor_6": "11:30",
+    "solo2_Tractor_7": "16:30",
+}
+
+DAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+
+
+def time_to_minutes(time_str: str) -> int:
+    """Convert HH:MM to minutes since midnight"""
+    parts = time_str.split(':')
+    return int(parts[0]) * 60 + int(parts[1])
+
+
+def find_nearest_canonical_time(raw_time: str, contract_type: str) -> Tuple[str, str, int]:
+    """
+    Find the nearest canonical time for a given raw timestamp.
+    Returns (canonical_time, tractor_id, time_diff_minutes)
+    """
+    raw_minutes = time_to_minutes(raw_time)
+    prefix = contract_type.lower() + "_"
+
+    best_match = None
+    best_diff = float('inf')
+    best_tractor = None
+
+    for key, canonical_time in CANONICAL_START_TIMES.items():
+        if not key.startswith(prefix):
+            continue
+
+        canonical_minutes = time_to_minutes(canonical_time)
+
+        # Calculate difference with wraparound (e.g., 23:30 is close to 00:05)
+        diff = abs(raw_minutes - canonical_minutes)
+        wrap_diff = min(diff, 1440 - diff)  # 1440 = minutes in a day
+
+        if wrap_diff < best_diff:
+            best_diff = wrap_diff
+            best_match = canonical_time
+            best_tractor = key.replace(prefix, "")
+
+    return best_match or raw_time, best_tractor or "Unknown", int(best_diff)
+
+
+def analyze_driver_dna(assignments: List[Dict]) -> Dict:
+    """
+    Analyze a list of assignments and compute DNA profile.
+
+    Each assignment should have:
+    - serviceDate: ISO date string or datetime
+    - startTime: HH:MM (raw time from CST display)
+    - contractType: solo1, solo2, team
+    - tractorId: Tractor_N (optional - if missing, will infer from time)
+    """
+    if not assignments:
+        return {
+            "preferredDays": [],
+            "preferredStartTimes": [],
+            "preferredTractors": [],
+            "preferredContractType": "solo1",
+            "patternGroup": "mixed",
+            "consistencyScore": 0,
+            "assignmentsAnalyzed": 0,
+            "weeksAnalyzed": 0
+        }
+
+    day_counter = Counter()
+    time_counter = Counter()
+    tractor_counter = Counter()
+    contract_counter = Counter()
+
+    # Track per-week occurrences for consistency calculation
+    week_days = {}  # week_key -> set of days
+
+    for a in assignments:
+        # Parse date
+        service_date = a.get('serviceDate', '')
+        if isinstance(service_date, str):
+            try:
+                # Handle various formats
+                if 'T' in service_date:
+                    dt = datetime.fromisoformat(service_date.replace('Z', '+00:00').split('+')[0])
+                else:
+                    dt = datetime.strptime(service_date, '%Y-%m-%d')
+            except:
+                continue
+        else:
+            dt = service_date
+
+        day_of_week = dt.weekday()  # Monday=0, Sunday=6
+        # Convert to Sunday=0 format
+        day_index = (day_of_week + 1) % 7
+        day_name = DAY_NAMES[day_index]
+
+        # Get week key (Sunday-based)
+        week_start = dt - timedelta(days=day_index)
+        week_key = week_start.strftime('%Y-%m-%d')
+
+        if week_key not in week_days:
+            week_days[week_key] = set()
+        week_days[week_key].add(day_name)
+
+        day_counter[day_name] += 1
+
+        # Get canonical time
+        raw_time = a.get('startTime', '00:00')
+        contract_type = a.get('contractType', 'solo2')  # Default to solo2 based on context
+        tractor_id = a.get('tractorId', '')
+
+        # If we have tractor, use direct lookup; otherwise find nearest
+        if tractor_id:
+            lookup_key = f"{contract_type.lower()}_{tractor_id}"
+            canonical_time = CANONICAL_START_TIMES.get(lookup_key, raw_time)
+        else:
+            canonical_time, inferred_tractor, _ = find_nearest_canonical_time(raw_time, contract_type)
+            tractor_id = inferred_tractor
+
+        time_counter[canonical_time] += 1
+
+        if tractor_id:
+            tractor_counter[tractor_id] += 1
+
+        if contract_type:
+            contract_counter[contract_type.lower()] += 1
+
+    # Calculate preferred days (50%+ of weeks)
+    total_weeks = len(week_days)
+    day_week_count = Counter()
+    for days_in_week in week_days.values():
+        for day in days_in_week:
+            day_week_count[day] += 1
+
+    # Days that appear in 50%+ of weeks, sorted by frequency then day order
+    preferred_days = [
+        day for day, count in day_week_count.most_common()
+        if count >= total_weeks * 0.5
+    ]
+
+    if not preferred_days:
+        # Fallback to top 4 days by total frequency
+        preferred_days = [day for day, _ in day_counter.most_common(4)]
+
+    # CRITICAL: Top times by FREQUENCY (no alphabetical sort!)
+    # This ensures most common time is FIRST
+    preferred_times = [time for time, _ in time_counter.most_common(4)]
+
+    # Top tractors by frequency
+    preferred_tractors = [tractor for tractor, _ in tractor_counter.most_common(3)]
+
+    # Most common contract type
+    preferred_contract = contract_counter.most_common(1)[0][0] if contract_counter else 'solo2'
+
+    # Determine pattern group
+    sun_wed = {'sunday', 'monday', 'tuesday', 'wednesday'}
+    wed_sat = {'wednesday', 'thursday', 'friday', 'saturday'}
+
+    total_assignments = sum(day_counter.values())
+    sun_wed_count = sum(day_counter[d] for d in sun_wed)
+    wed_sat_count = sum(day_counter[d] for d in wed_sat)
+
+    # Adjust for wednesday overlap
+    wed_count = day_counter.get('wednesday', 0)
+    sun_wed_count -= wed_count / 2
+    wed_sat_count -= wed_count / 2
+
+    if total_assignments > 0:
+        if sun_wed_count / total_assignments >= 0.7:
+            pattern_group = 'sunWed'
+        elif wed_sat_count / total_assignments >= 0.7:
+            pattern_group = 'wedSat'
+        else:
+            pattern_group = 'mixed'
+    else:
+        pattern_group = 'mixed'
+
+    # Calculate consistency score
+    consistency_score = 0.0
+    if preferred_days and total_weeks > 0:
+        perfect_weeks = sum(
+            1 for days in week_days.values()
+            if all(d in days for d in preferred_days)
+        )
+        consistency_score = round(perfect_weeks / total_weeks, 2)
+
+    return {
+        "preferredDays": preferred_days,
+        "preferredStartTimes": preferred_times,
+        "preferredTractors": preferred_tractors,
+        "preferredContractType": preferred_contract,
+        "patternGroup": pattern_group,
+        "consistencyScore": consistency_score,
+        "assignmentsAnalyzed": len(assignments),
+        "weeksAnalyzed": total_weeks,
+        "debug": {
+            "dayFrequencies": dict(day_counter),
+            "timeFrequencies": dict(time_counter),
+            "tractorFrequencies": dict(tractor_counter)
+        }
+    }
 
 class AssignmentPredictor:
     def __init__(self, historical_data: List[Dict] = None):
@@ -326,6 +549,42 @@ def run_prediction(data: Dict) -> Dict[str, Any]:
                 'success': True,
                 'action': 'analyze_coverage',
                 'analysis': analysis
+            }
+
+        elif action == 'analyze_dna':
+            # DNA analysis - no AI, pure pattern matching
+            assignments = data.get('assignments', [])
+            profile = analyze_driver_dna(assignments)
+
+            return {
+                'success': True,
+                'action': 'analyze_dna',
+                'profile': profile
+            }
+
+        elif action == 'test_adan':
+            # Test with Adan's data from screenshots - CST times
+            test_assignments = [
+                {"serviceDate": "2024-11-15", "startTime": "01:16", "contractType": "solo2"},  # Sat
+                {"serviceDate": "2024-11-18", "startTime": "00:05", "contractType": "solo2"},  # Tue
+                {"serviceDate": "2024-11-20", "startTime": "00:29", "contractType": "solo2"},  # Thu
+                {"serviceDate": "2024-11-22", "startTime": "00:29", "contractType": "solo2"},  # Sat
+                {"serviceDate": "2024-11-24", "startTime": "21:52", "contractType": "solo2"},  # Mon
+                {"serviceDate": "2024-11-28", "startTime": "23:29", "contractType": "solo2"},  # Fri
+                {"serviceDate": "2024-11-08", "startTime": "00:05", "contractType": "solo2"},  # Sat
+                {"serviceDate": "2024-11-10", "startTime": "23:59", "contractType": "solo2"},  # Mon
+                {"serviceDate": "2024-11-13", "startTime": "00:05", "contractType": "solo2"},  # Thu
+                {"serviceDate": "2024-11-01", "startTime": "23:45", "contractType": "solo2"},  # Sat
+                {"serviceDate": "2024-11-06", "startTime": "00:05", "contractType": "solo2"},  # Thu
+            ]
+
+            profile = analyze_driver_dna(test_assignments)
+
+            return {
+                'success': True,
+                'action': 'test_adan',
+                'profile': profile,
+                'note': 'Times like 00:05, 00:29, 01:16 are CST display times. Nearest canonical is 23:30 (Solo2_Tractor_2).'
             }
 
         else:

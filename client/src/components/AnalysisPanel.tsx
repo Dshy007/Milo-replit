@@ -15,6 +15,7 @@ interface ShiftOccurrence {
   serviceDate: string;
   startTime: string;
   contractType: string;
+  tractorId?: string | null;  // Added for canonical time lookup
   isRejectedLoad?: boolean;
 }
 
@@ -200,6 +201,8 @@ interface StagedAssignment {
 interface PredictionStats {
   perfectMatches: number;
   strongMatches: number;
+  blocksWithCandidates: number;
+  blocksNoCandidates: number;
   totalBlocks: number;
 }
 
@@ -262,6 +265,7 @@ function AssignmentSuggestions({
             return {
               blockId: b.blockId,
               contractType: b.contractType,
+              tractorId: b.tractorId,  // Include for canonical time lookup
               shiftStart: `${b.serviceDate}T${b.startTime}:00Z`,
               shiftEnd: `${b.serviceDate}T${b.startTime}:00Z`,
               dayOfWeek,
@@ -285,25 +289,28 @@ function AssignmentSuggestions({
       }
 
       // Convert to staged assignments (top recommendation only)
+      // ONLY include blocks that have viable candidates (score > 0)
       const staged: StagedAssignment[] = [];
       for (const rec of data.recommendations || []) {
-        if (rec.recommendations?.length > 0) {
-          const topRec = rec.recommendations[0];
-          const blockData = unassignedBlocks.find(b => b.blockId === rec.block_id);
-          if (blockData) {
-            // Auto-accept 100% matches if enabled
-            const isPerfect = topRec.score >= 1.0;
-            staged.push({
-              blockId: rec.block_id,
-              blockData,
-              driverId: topRec.driver_id,
-              driverName: topRec.driver_name,
-              score: topRec.score,
-              reasons: topRec.reasons || [],
-              matchType: topRec.matchType || 'unknown',
-              status: autoAcceptPerfect && isPerfect ? "accepted" : "pending",
-            });
-          }
+        // Skip blocks with no viable candidates
+        if (!rec.has_candidates || !rec.recommendations?.length) {
+          continue;
+        }
+        const topRec = rec.recommendations[0];
+        const blockData = unassignedBlocks.find(b => b.blockId === rec.block_id);
+        if (blockData && topRec.score > 0) {
+          // Auto-accept 100% matches if enabled
+          const isPerfect = topRec.score >= 1.0;
+          staged.push({
+            blockId: rec.block_id,
+            blockData,
+            driverId: topRec.driver_id,
+            driverName: topRec.driver_name,
+            score: topRec.score,
+            reasons: topRec.reasons || [],
+            matchType: topRec.matchType || 'unknown',
+            status: autoAcceptPerfect && isPerfect ? "accepted" : "pending",
+          });
         }
       }
       setStagedAssignments(staged);
@@ -511,10 +518,10 @@ function AssignmentSuggestions({
       )}
 
       {/* Staging Area */}
-      {stagedAssignments.length > 0 && !isLoading && (
+      {(stagedAssignments.length > 0 || predictionStats?.blocksNoCandidates) && !isLoading && (
         <div className="space-y-3">
           {/* Match Quality Stats */}
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-4 gap-2">
             <div className="bg-green-50 border border-green-200 rounded-lg p-2 text-center">
               <div className="text-2xl font-bold text-green-600">{perfectMatchCount}</div>
               <div className="text-[10px] text-green-700 uppercase font-medium">100% Match</div>
@@ -525,224 +532,261 @@ function AssignmentSuggestions({
             </div>
             <div className="bg-gray-50 border border-gray-200 rounded-lg p-2 text-center">
               <div className="text-2xl font-bold text-gray-600">{stagedAssignments.length - perfectMatchCount - strongMatchCount}</div>
-              <div className="text-[10px] text-gray-500 uppercase font-medium">Other</div>
+              <div className="text-[10px] text-gray-500 uppercase font-medium">Weaker</div>
+            </div>
+            <div className="bg-red-50 border border-red-200 rounded-lg p-2 text-center">
+              <div className="text-2xl font-bold text-red-600">{predictionStats?.blocksNoCandidates || 0}</div>
+              <div className="text-[10px] text-red-700 uppercase font-medium">No Match</div>
             </div>
           </div>
 
-          {/* Staging Header */}
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-medium text-blue-800">
-                📋 Review & Apply
-              </span>
-              <Button size="sm" variant="ghost" onClick={handleClearStaging}>
-                <X className="w-4 h-4 mr-1" />
-                Clear
-              </Button>
-            </div>
-            <div className="flex gap-4 text-xs">
-              <span className="text-green-600 font-medium">✓ {acceptedCount} ready to apply</span>
-              <span className="text-amber-600">○ {pendingCount} pending review</span>
-              <span className="text-gray-500">✗ {stagedAssignments.filter(s => s.status === "rejected").length} rejected</span>
-            </div>
-          </div>
-
-          {/* Contract Type Tabs */}
-          <div className="flex gap-1 bg-gray-100 p-1 rounded-lg">
-            <button
-              className={`flex-1 px-3 py-1.5 text-xs font-medium rounded transition-colors ${
-                contractTab === "all"
-                  ? "bg-white shadow text-gray-900"
-                  : "text-gray-600 hover:text-gray-900"
-              }`}
-              onClick={() => setContractTab("all")}
-            >
-              All ({stagedAssignments.length})
-            </button>
-            <button
-              className={`flex-1 px-3 py-1.5 text-xs font-medium rounded transition-colors ${
-                contractTab === "solo1"
-                  ? "bg-white shadow text-gray-900"
-                  : "text-gray-600 hover:text-gray-900"
-              }`}
-              onClick={() => setContractTab("solo1")}
-            >
-              Solo1 ({solo1Count})
-            </button>
-            <button
-              className={`flex-1 px-3 py-1.5 text-xs font-medium rounded transition-colors ${
-                contractTab === "solo2"
-                  ? "bg-white shadow text-gray-900"
-                  : "text-gray-600 hover:text-gray-900"
-              }`}
-              onClick={() => setContractTab("solo2")}
-            >
-              Solo2 ({solo2Count})
-            </button>
-          </div>
-
-          {/* Bulk Actions */}
-          <div className="flex gap-2">
-            <Button size="sm" variant="outline" onClick={handleAcceptAll} className="flex-1">
-              <Check className="w-3 h-3 mr-1" />
-              Accept All
-            </Button>
-            <Button size="sm" variant="outline" onClick={handleRejectAll} className="flex-1">
-              <X className="w-3 h-3 mr-1" />
-              Reject All
-            </Button>
-          </div>
-
-          {/* Staged Assignments List - Table Layout */}
-          <ScrollArea className="h-[280px]">
-            <table className="w-full text-xs">
-              <thead className="sticky top-0 bg-gray-50 border-b">
-                <tr className="text-left text-gray-500">
-                  <th className="py-1.5 px-2 font-medium">Day/Time</th>
-                  <th className="py-1.5 px-2 font-medium">Block</th>
-                  <th className="py-1.5 px-2 font-medium">Driver</th>
-                  <th className="py-1.5 px-2 font-medium text-center">Match</th>
-                  <th className="py-1.5 px-2 font-medium text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredStaged.map((staged) => {
-                  const d = new Date(staged.blockData.serviceDate + "T12:00:00");
-                  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-                  const dayTime = `${days[d.getDay()]} ${staged.blockData.startTime}`;
-
-                  return (
-                    <tr
-                      key={staged.blockId}
-                      className={`border-b transition-colors ${
-                        staged.status === "accepted"
-                          ? "bg-green-50"
-                          : staged.status === "rejected"
-                          ? "bg-gray-50 opacity-50"
-                          : "hover:bg-gray-50"
-                      }`}
-                    >
-                      {/* Day/Time */}
-                      <td className="py-2 px-2">
-                        <div className="font-medium text-gray-900">{dayTime}</div>
-                        <div className="text-[10px] text-gray-400">{staged.blockData.serviceDate.slice(5)}</div>
-                      </td>
-
-                      {/* Block ID + Type */}
-                      <td className="py-2 px-2">
-                        <div className="font-mono font-medium">{staged.blockId.replace("B-", "")}</div>
-                        <Badge variant="secondary" className="text-[9px] px-1 py-0 mt-0.5">
-                          {staged.blockData.contractType}
-                        </Badge>
-                      </td>
-
-                      {/* Driver + Reason */}
-                      <td className="py-2 px-2">
-                        <div className="font-medium text-gray-900">{staged.driverName}</div>
-                        <div className="text-[10px] text-gray-500 max-w-[140px] truncate" title={staged.reasons[0]}>
-                          {staged.reasons[0]}
-                        </div>
-                      </td>
-
-                      {/* Score */}
-                      <td className="py-2 px-2 text-center">
-                        {staged.score >= 1.0 ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-bold bg-green-500 text-white text-xs shadow-sm">
-                            ★ 100%
-                          </span>
-                        ) : (
-                          <span
-                            className={`inline-block px-2 py-0.5 rounded font-bold text-xs ${
-                              staged.score >= 0.70
-                                ? "bg-amber-100 text-amber-700"
-                                : staged.score >= 0.50
-                                ? "bg-gray-100 text-gray-600"
-                                : "bg-red-50 text-red-600"
-                            }`}
-                          >
-                            {(staged.score * 100).toFixed(0)}%
-                          </span>
-                        )}
-                      </td>
-
-                      {/* Actions */}
-                      <td className="py-2 px-2 text-right">
-                        {staged.status === "pending" && (
-                          <div className="flex gap-1 justify-end">
-                            <button
-                              className="p-1 rounded text-green-600 hover:bg-green-100"
-                              onClick={() => handleAccept(staged.blockId)}
-                              title="Accept"
-                            >
-                              <Check className="w-4 h-4" />
-                            </button>
-                            <button
-                              className="p-1 rounded text-red-600 hover:bg-red-100"
-                              onClick={() => handleReject(staged.blockId)}
-                              title="Reject"
-                            >
-                              <X className="w-4 h-4" />
-                            </button>
-                          </div>
-                        )}
-                        {staged.status === "accepted" && (
-                          <span className="text-green-600 font-medium">✓</span>
-                        )}
-                        {staged.status === "rejected" && (
-                          <span className="text-gray-400">✗</span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </ScrollArea>
-
-          {/* Commit Button */}
-          <div className="border-t pt-3 space-y-2">
-            {acceptedCount > 0 && (
-              <div className="text-center text-sm text-gray-600 mb-1">
-                Remaining after apply: <strong className="text-amber-600">{unassignedBlocks.length - acceptedCount}</strong> blocks
+          {/* Warning if many blocks have no candidates */}
+          {predictionStats?.blocksNoCandidates && predictionStats.blocksNoCandidates > 0 && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm">
+              <div className="flex items-center gap-2 text-red-700">
+                <AlertTriangle className="w-4 h-4" />
+                <span className="font-medium">{predictionStats.blocksNoCandidates} blocks have no matching drivers</span>
               </div>
-            )}
-            <Button
-              className="w-full bg-green-600 hover:bg-green-700 h-12 text-lg"
-              onClick={handleCommitChanges}
-              disabled={acceptedCount === 0 || isCommitting}
-            >
-              {isCommitting ? (
-                <>
-                  <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                  Applying Assignments...
-                </>
-              ) : (
-                <>
-                  <Check className="w-5 h-5 mr-2" />
-                  Apply {acceptedCount} Assignment{acceptedCount !== 1 ? "s" : ""}
-                </>
-              )}
-            </Button>
+              <p className="text-red-600 text-xs mt-1">
+                These blocks need drivers whose DNA (day + time + contract) matches.
+              </p>
+            </div>
+          )}
 
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={handleGetSuggestions} className="flex-1">
-                Refresh
-              </Button>
+          {/* Staging Header - only show if we have staged assignments */}
+          {stagedAssignments.length > 0 && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-medium text-blue-800">
+                  📋 Review & Apply
+                </span>
+                <Button size="sm" variant="ghost" onClick={handleClearStaging}>
+                  <X className="w-4 h-4 mr-1" />
+                  Clear
+                </Button>
+              </div>
+              <div className="flex gap-4 text-xs">
+                <span className="text-green-600 font-medium">✓ {acceptedCount} ready to apply</span>
+                <span className="text-amber-600">○ {pendingCount} pending review</span>
+                <span className="text-gray-500">✗ {stagedAssignments.filter(s => s.status === "rejected").length} rejected</span>
+              </div>
+            </div>
+          )}
+
+          {/* Contract Type Tabs - only show if we have staged assignments */}
+          {stagedAssignments.length > 0 && (
+            <>
+              <div className="flex gap-1 bg-gray-100 p-1 rounded-lg">
+                <button
+                  className={`flex-1 px-3 py-1.5 text-xs font-medium rounded transition-colors ${
+                    contractTab === "all"
+                      ? "bg-white shadow text-gray-900"
+                      : "text-gray-600 hover:text-gray-900"
+                  }`}
+                  onClick={() => setContractTab("all")}
+                >
+                  All ({stagedAssignments.length})
+                </button>
+                <button
+                  className={`flex-1 px-3 py-1.5 text-xs font-medium rounded transition-colors ${
+                    contractTab === "solo1"
+                      ? "bg-white shadow text-gray-900"
+                      : "text-gray-600 hover:text-gray-900"
+                  }`}
+                  onClick={() => setContractTab("solo1")}
+                >
+                  Solo1 ({solo1Count})
+                </button>
+                <button
+                  className={`flex-1 px-3 py-1.5 text-xs font-medium rounded transition-colors ${
+                    contractTab === "solo2"
+                      ? "bg-white shadow text-gray-900"
+                      : "text-gray-600 hover:text-gray-900"
+                  }`}
+                  onClick={() => setContractTab("solo2")}
+                >
+                  Solo2 ({solo2Count})
+                </button>
+              </div>
+
+              {/* Bulk Actions */}
+              <div className="flex gap-2">
+                <Button size="sm" variant="outline" onClick={handleAcceptAll} className="flex-1">
+                  <Check className="w-3 h-3 mr-1" />
+                  Accept All
+                </Button>
+                <Button size="sm" variant="outline" onClick={handleRejectAll} className="flex-1">
+                  <X className="w-3 h-3 mr-1" />
+                  Reject All
+                </Button>
+              </div>
+            </>
+          )}
+
+          {/* Staged Assignments List - Table Layout - only show if we have staged assignments */}
+          {stagedAssignments.length > 0 && (
+            <ScrollArea className="h-[280px]">
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-gray-50 border-b">
+                  <tr className="text-left text-gray-500">
+                    <th className="py-1.5 px-2 font-medium">Day/Time</th>
+                    <th className="py-1.5 px-2 font-medium">Block</th>
+                    <th className="py-1.5 px-2 font-medium">Driver</th>
+                    <th className="py-1.5 px-2 font-medium text-center">Match</th>
+                    <th className="py-1.5 px-2 font-medium text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredStaged.map((staged) => {
+                    const d = new Date(staged.blockData.serviceDate + "T12:00:00");
+                    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+                    const dayTime = `${days[d.getDay()]} ${staged.blockData.startTime}`;
+
+                    return (
+                      <tr
+                        key={staged.blockId}
+                        className={`border-b transition-colors ${
+                          staged.status === "accepted"
+                            ? "bg-green-50"
+                            : staged.status === "rejected"
+                            ? "bg-gray-50 opacity-50"
+                            : "hover:bg-gray-50"
+                        }`}
+                      >
+                        {/* Day/Time */}
+                        <td className="py-2 px-2">
+                          <div className="font-medium text-gray-900">{dayTime}</div>
+                          <div className="text-[10px] text-gray-400">{staged.blockData.serviceDate.slice(5)}</div>
+                        </td>
+
+                        {/* Block ID + Type */}
+                        <td className="py-2 px-2">
+                          <div className="font-mono font-medium">{staged.blockId.replace("B-", "")}</div>
+                          <Badge variant="secondary" className="text-[9px] px-1 py-0 mt-0.5">
+                            {staged.blockData.contractType}
+                          </Badge>
+                        </td>
+
+                        {/* Driver + Reason */}
+                        <td className="py-2 px-2">
+                          <div className="font-medium text-gray-900">{staged.driverName}</div>
+                          <div className="text-[10px] text-gray-500 max-w-[140px] truncate" title={staged.reasons[0]}>
+                            {staged.reasons[0]}
+                          </div>
+                        </td>
+
+                        {/* Score */}
+                        <td className="py-2 px-2 text-center">
+                          {staged.score >= 1.0 ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-bold bg-green-500 text-white text-xs shadow-sm">
+                              ★ 100%
+                            </span>
+                          ) : (
+                            <span
+                              className={`inline-block px-2 py-0.5 rounded font-bold text-xs ${
+                                staged.score >= 0.70
+                                  ? "bg-amber-100 text-amber-700"
+                                  : staged.score >= 0.50
+                                  ? "bg-gray-100 text-gray-600"
+                                  : "bg-red-50 text-red-600"
+                              }`}
+                            >
+                              {(staged.score * 100).toFixed(0)}%
+                            </span>
+                          )}
+                        </td>
+
+                        {/* Actions */}
+                        <td className="py-2 px-2 text-right">
+                          {staged.status === "pending" && (
+                            <div className="flex gap-1 justify-end">
+                              <button
+                                className="p-1 rounded text-green-600 hover:bg-green-100"
+                                onClick={() => handleAccept(staged.blockId)}
+                                title="Accept"
+                              >
+                                <Check className="w-4 h-4" />
+                              </button>
+                              <button
+                                className="p-1 rounded text-red-600 hover:bg-red-100"
+                                onClick={() => handleReject(staged.blockId)}
+                                title="Reject"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            </div>
+                          )}
+                          {staged.status === "accepted" && (
+                            <span className="text-green-600 font-medium">✓</span>
+                          )}
+                          {staged.status === "rejected" && (
+                            <span className="text-gray-400">✗</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </ScrollArea>
+          )}
+
+          {/* Commit Button - only show if we have staged assignments */}
+          {stagedAssignments.length > 0 && (
+            <div className="border-t pt-3 space-y-2">
+              {acceptedCount > 0 && (
+                <div className="text-center text-sm text-gray-600 mb-1">
+                  Remaining after apply: <strong className="text-amber-600">{unassignedBlocks.length - acceptedCount}</strong> blocks
+                </div>
+              )}
               <Button
-                variant="outline"
-                onClick={() => {
-                  // Accept all remaining pending
-                  setStagedAssignments((prev) =>
-                    prev.map((s) => s.status === "pending" ? { ...s, status: "accepted" } : s)
-                  );
-                }}
-                className="flex-1"
-                disabled={pendingCount === 0}
+                className="w-full bg-green-600 hover:bg-green-700 h-12 text-lg"
+                onClick={handleCommitChanges}
+                disabled={acceptedCount === 0 || isCommitting}
               >
-                Accept All ({pendingCount})
+                {isCommitting ? (
+                  <>
+                    <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                    Applying Assignments...
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-5 h-5 mr-2" />
+                    Apply {acceptedCount} Assignment{acceptedCount !== 1 ? "s" : ""}
+                  </>
+                )}
+              </Button>
+
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={handleGetSuggestions} className="flex-1">
+                  Refresh
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    // Accept all remaining pending
+                    setStagedAssignments((prev) =>
+                      prev.map((s) => s.status === "pending" ? { ...s, status: "accepted" } : s)
+                    );
+                  }}
+                  className="flex-1"
+                  disabled={pendingCount === 0}
+                >
+                  Accept All ({pendingCount})
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Show refresh button when all blocks have no candidates */}
+          {stagedAssignments.length === 0 && predictionStats?.blocksNoCandidates && (
+            <div className="border-t pt-3">
+              <Button variant="outline" onClick={handleGetSuggestions} className="w-full">
+                <Users className="w-4 h-4 mr-2" />
+                Try Again
               </Button>
             </div>
-          </div>
+          )}
         </div>
       )}
     </div>

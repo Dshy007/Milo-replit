@@ -61,6 +61,45 @@ interface ComputedDNA {
 
 const DAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 
+/**
+ * Convert HH:MM to minutes since midnight
+ */
+function timeToMinutes(time: string): number {
+  const [h, m] = time.split(':').map(Number);
+  return h * 60 + (m || 0);
+}
+
+/**
+ * Find the NEAREST canonical start time for a raw timestamp
+ * This handles cases where tractorId is missing but we can infer from time proximity
+ */
+function findNearestCanonicalTime(rawTime: string, contractType: string): { time: string; tractor: string; diff: number } {
+  const rawMinutes = timeToMinutes(rawTime);
+  const prefix = contractType.toLowerCase() + '_';
+
+  let bestMatch = { time: rawTime, tractor: 'Unknown', diff: Infinity };
+
+  for (const [key, canonicalTime] of Object.entries(CANONICAL_START_TIMES)) {
+    if (!key.startsWith(prefix)) continue;
+
+    const canonicalMinutes = timeToMinutes(canonicalTime);
+
+    // Calculate difference with wraparound (e.g., 23:30 is close to 00:05)
+    const diff = Math.abs(rawMinutes - canonicalMinutes);
+    const wrapDiff = Math.min(diff, 1440 - diff); // 1440 = minutes in a day
+
+    if (wrapDiff < bestMatch.diff) {
+      bestMatch = {
+        time: canonicalTime,
+        tractor: key.replace(prefix, ''),
+        diff: wrapDiff,
+      };
+    }
+  }
+
+  return bestMatch;
+}
+
 function getCanonicalStartTime(soloType: string | null, tractorId: string | null): string | null {
   if (!soloType || !tractorId) return null;
   const key = `${soloType.toLowerCase()}_${tractorId}`;
@@ -88,16 +127,31 @@ function computeDNAFromAssignments(assignments: DriverAssignmentSummary['assignm
     };
   }
 
+  // === PASS 1: Determine primary contract type ===
+  const contractFrequency = new Map<string, number>();
+  for (const a of assignments) {
+    if (a.soloType) {
+      contractFrequency.set(a.soloType, (contractFrequency.get(a.soloType) || 0) + 1);
+    }
+  }
+  const preferredContractType = getTopN(contractFrequency, 1)[0] || 'solo1';
+
+  // === PASS 2: Compute times/tractors ONLY from primary contract type ===
+  // This prevents Solo1 times from polluting a Solo2 driver's profile (and vice versa)
+  const primaryAssignments = assignments.filter(a =>
+    (a.soloType || 'solo1').toLowerCase() === preferredContractType.toLowerCase()
+  );
+
   const dayFrequency = new Map<string, number>();
   const timeFrequency = new Map<string, number>();
   const tractorFrequency = new Map<string, number>();
-  const contractFrequency = new Map<string, number>();
   const weekSet = new Set<string>();
 
   // Track per-week day occurrences for consistency scoring
   const weekDayMap = new Map<string, Set<string>>();
 
-  for (const a of assignments) {
+  // Use primaryAssignments for time/tractor computation
+  for (const a of primaryAssignments) {
     // Get week identifier
     const weekStart = new Date(a.serviceDate);
     weekStart.setDate(weekStart.getDate() - weekStart.getDay());
@@ -112,19 +166,21 @@ function computeDNAFromAssignments(assignments: DriverAssignmentSummary['assignm
     // Day frequency
     dayFrequency.set(a.dayName, (dayFrequency.get(a.dayName) || 0) + 1);
 
-    // Time frequency - use canonical time
-    const canonicalTime = getCanonicalStartTime(a.soloType, a.tractorId);
-    const timeToUse = canonicalTime || a.startTime;
+    // Time frequency - use canonical time, or find nearest if tractorId is missing
+    let timeToUse: string;
+    if (a.tractorId) {
+      const canonicalTime = getCanonicalStartTime(a.soloType, a.tractorId);
+      timeToUse = canonicalTime || a.startTime;
+    } else {
+      // tractorId is missing - find nearest canonical time based on raw time
+      const nearest = findNearestCanonicalTime(a.startTime, a.soloType || 'solo1');
+      timeToUse = nearest.diff <= 90 ? nearest.time : a.startTime; // Use nearest if within 90 min
+    }
     timeFrequency.set(timeToUse, (timeFrequency.get(timeToUse) || 0) + 1);
 
     // Tractor frequency
     if (a.tractorId) {
       tractorFrequency.set(a.tractorId, (tractorFrequency.get(a.tractorId) || 0) + 1);
-    }
-
-    // Contract type frequency
-    if (a.soloType) {
-      contractFrequency.set(a.soloType, (contractFrequency.get(a.soloType) || 0) + 1);
     }
   }
 
@@ -155,13 +211,14 @@ function computeDNAFromAssignments(assignments: DriverAssignmentSummary['assignm
     : getTopN(dayFrequency, 4);
 
   // Get top times (limit to 2 for cleaner profiles)
-  const preferredStartTimes = getTopN(timeFrequency, 2).sort();
+  // NOTE: Do NOT sort alphabetically - keep frequency order so most common times appear first
+  // This is critical because UI often shows only first 2 times
+  const preferredStartTimes = getTopN(timeFrequency, 2);
 
   // Get top tractors
   const preferredTractors = getTopN(tractorFrequency, 3);
 
-  // Get dominant contract type
-  const preferredContractType = getTopN(contractFrequency, 1)[0] || 'solo1';
+  // NOTE: preferredContractType was already determined in PASS 1 above
 
   // Determine pattern group
   const sunWedDays = ['sunday', 'monday', 'tuesday', 'wednesday'];
