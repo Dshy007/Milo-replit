@@ -274,7 +274,7 @@ function DraggableDriver({ driver, dnaProfile, onHoverStart, onHoverEnd, onSelec
                 </span>
                 <span className="flex items-center gap-0.5">
                   <Clock className="w-2.5 h-2.5" />
-                  {dnaProfile.preferredStartTimes?.[0] || "Any"}
+                  {dnaProfile.preferredStartTimes?.length ? dnaProfile.preferredStartTimes.join(", ") : "Any"}
                 </span>
               </div>
 
@@ -507,20 +507,20 @@ function calculateBlockMatch(
   const preferredDays = dnaProfile.preferredDays || [];
   const dayMatches = preferredDays.length === 0 || preferredDays.some(d => d.toLowerCase() === dayOfWeek);
 
-  // Check time match (within ±2 hours of preferred start time)
+  // Check time match - use only PRIMARY (first) preferred time for strict matching
   const preferredTimes = dnaProfile.preferredStartTimes || [];
+  const primaryTime = preferredTimes[0]; // Only use the first/primary preferred time
   const blockTimeMinutes = timeToMinutes(occurrence.startTime);
 
-  let bestTimeDiff = Infinity;
-  for (const prefTime of preferredTimes) {
-    const prefMinutes = timeToMinutes(prefTime);
+  let timeDiff = Infinity;
+  if (primaryTime) {
+    const prefMinutes = timeToMinutes(primaryTime);
     const diff = Math.abs(blockTimeMinutes - prefMinutes);
     // Handle wraparound for overnight times
-    const wrapDiff = Math.min(diff, 1440 - diff);
-    bestTimeDiff = Math.min(bestTimeDiff, wrapDiff);
+    timeDiff = Math.min(diff, 1440 - diff);
   }
 
-  const timeMatches = preferredTimes.length === 0 || bestTimeDiff === 0; // Exact time match only
+  const timeMatches = !primaryTime || timeDiff === 0; // Exact match to PRIMARY time only
 
   // Debug: Log day/time matching details
   if (debug) {
@@ -531,10 +531,10 @@ function calculateBlockMatch(
       blockTime: occurrence.startTime,
       blockTimeMinutes,
       preferredDays,
-      preferredTimes,
+      primaryTime,
       dayMatches,
       timeMatches,
-      bestTimeDiff: bestTimeDiff === Infinity ? 'N/A (no preferred times)' : bestTimeDiff,
+      timeDiff: timeDiff === Infinity ? 'N/A (no preferred time)' : timeDiff,
     });
   }
 
@@ -549,7 +549,7 @@ function calculateBlockMatch(
           timeMatches,
         });
       }
-      return { score: 0, timeDiff: bestTimeDiff, dayMatches, timeMatches };
+      return { score: 0, timeDiff, dayMatches, timeMatches };
     }
   } else if (strictness === 'moderate') {
     // Day OR time must match
@@ -559,7 +559,7 @@ function calculateBlockMatch(
           blockId: occurrence.blockId,
         });
       }
-      return { score: 0, timeDiff: bestTimeDiff, dayMatches, timeMatches };
+      return { score: 0, timeDiff, dayMatches, timeMatches };
     }
   }
   // 'flexible' = only contract type needed (already checked above)
@@ -568,8 +568,8 @@ function calculateBlockMatch(
   let score = 0.5; // Base score for contract match
 
   if (dayMatches && timeMatches) {
-    // Perfect match - score based on time proximity
-    score = 1.0 - (bestTimeDiff / 240); // 0 min = 1.0, 120 min = 0.5
+    // Perfect match - exact time match gives full score
+    score = 1.0;
   } else if (dayMatches) {
     // Day matches but time doesn't
     score = 0.7;
@@ -590,7 +590,7 @@ function calculateBlockMatch(
     });
   }
 
-  return { score, timeDiff: bestTimeDiff, dayMatches, timeMatches };
+  return { score, timeDiff, dayMatches, timeMatches };
 }
 
 export function DriverPoolSidebar({

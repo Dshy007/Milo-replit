@@ -658,9 +658,8 @@ function computeDNAFromBlockAssignments(assignments: {
     ? preferredDays
     : getTopNFromMap(dayFrequency, 4);
 
-  // NOTE: Do NOT sort alphabetically - keep frequency order so most common times appear first
-  // This is critical because UI often shows only first 2 times
-  const preferredStartTimes = getTopNFromMap(timeFrequency, 2);
+  // Only store PRIMARY (most frequent) time - matching uses only first time
+  const preferredStartTimes = getTopNFromMap(timeFrequency, 1);
   const preferredTractors = getTopNFromMap(tractorFrequency, 3);
   // NOTE: preferredContractType was already determined in PASS 1 above
 
