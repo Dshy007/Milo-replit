@@ -158,7 +158,7 @@ export interface FleetDNAStats {
  * Analyze driver assignment history and generate DNA profiles
  */
 export async function analyzeDriverDNA(options: AnalysisOptions): Promise<AnalysisResult> {
-  const { tenantId, driverId, dayThreshold } = options;
+  const { tenantId, driverId } = options;
   const now = new Date();
   const startDate = options.startDate || subWeeks(startOfWeek(now, { weekStartsOn: 0 }), 12);
   const endDate = options.endDate || now;
@@ -166,88 +166,20 @@ export async function analyzeDriverDNA(options: AnalysisOptions): Promise<Analys
   console.log(`[DNA Analyzer] Starting analysis for tenant ${tenantId}`);
   console.log(`[DNA Analyzer] Date range: ${format(startDate, 'yyyy-MM-dd')} to ${format(endDate, 'yyyy-MM-dd')}`);
 
-  // Get the Gemini profiler
-  const profiler = await getGeminiProfiler();
+  // Use the block-assignment based analyzer (NOT the Gemini profiler)
+  // This uses computeDNAFromBlockAssignments() which returns 1 preferred time
+  const result = await regenerateDNAFromBlockAssignments(tenantId);
 
-  // Fetch all drivers (or specific driver)
-  const driverQuery = db
-    .select()
-    .from(drivers)
-    .where(
-      driverId
-        ? and(eq(drivers.tenantId, tenantId), eq(drivers.id, driverId))
-        : eq(drivers.tenantId, tenantId)
-    );
-
-  const allDrivers = await driverQuery;
-  console.log(`[DNA Analyzer] Found ${allDrivers.length} drivers to analyze`);
-
-  // Fetch historical assignments for all drivers
-  const assignmentData = await fetchHistoricalAssignments(tenantId, startDate, endDate, driverId);
-  console.log(`[DNA Analyzer] Found ${assignmentData.size} drivers with assignment data`);
-
-  // Build analysis inputs
-  const analysisInputs: DNAAnalysisInput[] = [];
-
-  for (const driver of allDrivers) {
-    const driverAssignments = assignmentData.get(driver.id) || [];
-    analysisInputs.push({
-      driverId: driver.id,
-      driverName: `${driver.firstName} ${driver.lastName}`,
-      assignments: driverAssignments,
-      analysisStartDate: startDate,
-      analysisEndDate: endDate,
-      dayThreshold, // Pass threshold to profiler (undefined = use default 0.5)
-    });
-  }
-
-  // Run the analysis
-  const profiles = await profiler.analyzeMultipleDrivers(analysisInputs, (completed, total) => {
-    console.log(`[DNA Analyzer] Progress: ${completed}/${total} drivers analyzed`);
-  });
-
-  // Save profiles to database
-  let profilesCreated = 0;
-  let profilesUpdated = 0;
-  let errors = 0;
-
-  for (const profile of profiles) {
-    try {
-      await saveDriverDNAProfile(tenantId, profile, startDate, endDate);
-
-      // Check if it was an update or create
-      const existing = await db
-        .select()
-        .from(driverDnaProfiles)
-        .where(
-          and(
-            eq(driverDnaProfiles.tenantId, tenantId),
-            eq(driverDnaProfiles.driverId, profile.driverId)
-          )
-        )
-        .limit(1);
-
-      if (existing.length > 0) {
-        profilesUpdated++;
-      } else {
-        profilesCreated++;
-      }
-    } catch (error) {
-      console.error(`[DNA Analyzer] Failed to save profile for ${profile.driverId}:`, error);
-      errors++;
-    }
-  }
-
-  console.log(`[DNA Analyzer] Complete: ${profilesCreated} created, ${profilesUpdated} updated, ${errors} errors`);
+  console.log(`[DNA Analyzer] Complete: ${result.updated} updated, ${result.skipped} skipped`);
 
   return {
-    totalDrivers: allDrivers.length,
-    profilesCreated,
-    profilesUpdated,
-    errors,
+    totalDrivers: result.processed,
+    profilesCreated: 0,
+    profilesUpdated: result.updated,
+    errors: result.skipped,
     analysisStartDate: startDate,
     analysisEndDate: endDate,
-    profiles,
+    profiles: [], // Not needed for this flow
   };
 }
 
@@ -720,7 +652,12 @@ export async function regenerateDNAFromBlockAssignments(tenantId: string): Promi
 }> {
   console.log(`[DNA Regenerate] Starting for tenant ${tenantId}`);
 
-  // Get all drivers with block assignments
+  // Only analyze assignments from the LAST 4 WEEKS (recency-weighted)
+  const fourWeeksAgo = subWeeks(new Date(), 4);
+  const cutoffDate = format(fourWeeksAgo, 'yyyy-MM-dd');
+  console.log(`[DNA Regenerate] Only considering assignments since ${cutoffDate}`);
+
+  // Get all drivers with RECENT block assignments (last 4 weeks)
   const driversResult = await db.execute(sql`
     SELECT DISTINCT
       d.id as driver_id,
@@ -729,7 +666,10 @@ export async function regenerateDNAFromBlockAssignments(tenantId: string): Promi
       d.tenant_id
     FROM drivers d
     INNER JOIN block_assignments ba ON ba.driver_id = d.id
-    WHERE ba.is_active = true AND d.tenant_id = ${tenantId}
+    INNER JOIN blocks b ON ba.block_id = b.id
+    WHERE ba.is_active = true
+    AND d.tenant_id = ${tenantId}
+    AND b.service_date >= ${cutoffDate}::date
     ORDER BY d.first_name, d.last_name
   `);
 
@@ -741,7 +681,7 @@ export async function regenerateDNAFromBlockAssignments(tenantId: string): Promi
     const driver = row as any;
     const driverName = `${driver.first_name} ${driver.last_name}`;
 
-    // Get assignments
+    // Get assignments from LAST 4 WEEKS ONLY
     const assignmentsResult = await db.execute(sql`
       SELECT
         b.service_date,
@@ -752,8 +692,8 @@ export async function regenerateDNAFromBlockAssignments(tenantId: string): Promi
       JOIN blocks b ON ba.block_id = b.id
       WHERE ba.driver_id = ${driver.driver_id}
       AND ba.is_active = true
+      AND b.service_date >= ${cutoffDate}::date
       ORDER BY b.service_date DESC
-      LIMIT 100
     `);
 
     const assignments = (assignmentsResult.rows as any[]).map(r => {

@@ -14,12 +14,38 @@ import { useLocation } from "wouter";
 import { getMatchColor } from "@/lib/utils";
 import type { Driver, DriverDnaProfile } from "@shared/schema";
 
-// Matching strictness levels
+// Match threshold (0-100) - higher = stricter matching
+// 80-100: Strict (Day + Time + Contract must match)
+// 40-79: Moderate (Contract + Day OR Time)
+// 0-39: Flexible (Only Contract type)
+const getThresholdLabel = (threshold: number): { label: string; description: string; color: string } => {
+  if (threshold >= 80) {
+    return {
+      label: 'Strict',
+      description: 'Day + Time + Contract must match',
+      color: 'bg-red-100 text-red-700 border-red-300 dark:bg-red-900/30 dark:text-red-400 dark:border-red-700'
+    };
+  } else if (threshold >= 40) {
+    return {
+      label: 'Moderate',
+      description: 'Contract + (Day OR Time) must match',
+      color: 'bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-900/30 dark:text-amber-400 dark:border-amber-700'
+    };
+  } else {
+    return {
+      label: 'Flexible',
+      description: 'Only Contract type must match',
+      color: 'bg-green-100 text-green-700 border-green-300 dark:bg-green-900/30 dark:text-green-400 dark:border-green-700'
+    };
+  }
+};
+
+// Convert threshold to strictness level for matching logic
 type StrictnessLevel = 'strict' | 'moderate' | 'flexible';
-const STRICTNESS_LABELS: Record<StrictnessLevel, { label: string; description: string }> = {
-  strict: { label: 'Strict', description: 'Day + Time + Contract must match' },
-  moderate: { label: 'Moderate', description: 'Contract + (Day OR Time) must match' },
-  flexible: { label: 'Flexible', description: 'Only Contract type must match' },
+const thresholdToStrictness = (threshold: number): StrictnessLevel => {
+  if (threshold >= 80) return 'strict';
+  if (threshold >= 40) return 'moderate';
+  return 'flexible';
 };
 
 // Schedule strategy presets
@@ -29,7 +55,7 @@ const STRATEGY_OPTIONS: Record<ScheduleStrategy, {
   description: string;
   icon: typeof Target;
   color: string;
-  strictness: StrictnessLevel;
+  threshold: number; // 0-100
   prioritize: 'coverage' | 'cost' | 'preference' | 'balance';
 }> = {
   cover: {
@@ -37,7 +63,7 @@ const STRATEGY_OPTIONS: Record<ScheduleStrategy, {
     description: 'Fill all blocks, relax matching if needed',
     icon: Target,
     color: 'bg-blue-600 hover:bg-blue-700',
-    strictness: 'flexible',
+    threshold: 20,
     prioritize: 'coverage',
   },
   overtime: {
@@ -45,7 +71,7 @@ const STRATEGY_OPTIONS: Record<ScheduleStrategy, {
     description: 'Spread blocks evenly, avoid driver overload',
     icon: TrendingUp,
     color: 'bg-amber-600 hover:bg-amber-700',
-    strictness: 'moderate',
+    threshold: 50,
     prioritize: 'cost',
   },
   premium: {
@@ -53,7 +79,7 @@ const STRATEGY_OPTIONS: Record<ScheduleStrategy, {
     description: 'Only assign perfect DNA matches',
     icon: Crown,
     color: 'bg-purple-600 hover:bg-purple-700',
-    strictness: 'strict',
+    threshold: 90,
     prioritize: 'preference',
   },
   balanced: {
@@ -61,7 +87,7 @@ const STRATEGY_OPTIONS: Record<ScheduleStrategy, {
     description: 'Best mix of coverage and driver preferences',
     icon: Zap,
     color: 'bg-emerald-600 hover:bg-emerald-700',
-    strictness: 'moderate',
+    threshold: 60,
     prioritize: 'balance',
   },
 };
@@ -610,19 +636,22 @@ export function DriverPoolSidebar({
   const [showAssigned, setShowAssigned] = useState(true);
   const [showUnavailable, setShowUnavailable] = useState(false);
   const [contractFilter, setContractFilter] = useState<'all' | 'solo1' | 'solo2'>('all');
-  const [strictness, setStrictness] = useState<StrictnessLevel>('strict');
+  const [threshold, setThreshold] = useState(80); // 0-100, default strict
   const [showStrictnessSlider, setShowStrictnessSlider] = useState(false);
   const [strategy, setStrategy] = useState<ScheduleStrategy | null>(null);
   const [showStrategyOptions, setShowStrategyOptions] = useState(false);
 
-  // When a strategy is selected, update strictness accordingly
+  // Derive strictness from threshold for matching logic
+  const strictness = thresholdToStrictness(threshold);
+
+  // When a strategy is selected, update threshold accordingly
   const handleStrategySelect = (selectedStrategy: ScheduleStrategy) => {
     if (strategy === selectedStrategy) {
       // Deselect if clicking same strategy
       setStrategy(null);
     } else {
       setStrategy(selectedStrategy);
-      setStrictness(STRATEGY_OPTIONS[selectedStrategy].strictness);
+      setThreshold(STRATEGY_OPTIONS[selectedStrategy].threshold);
     }
   };
 
@@ -1006,43 +1035,35 @@ export function DriverPoolSidebar({
             </div>
             <Badge
               variant="outline"
-              className={`text-xs ${
-                strictness === 'strict' ? 'bg-red-100 text-red-700 border-red-300 dark:bg-red-900/30 dark:text-red-400 dark:border-red-700' :
-                strictness === 'moderate' ? 'bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-900/30 dark:text-amber-400 dark:border-amber-700' :
-                'bg-green-100 text-green-700 border-green-300 dark:bg-green-900/30 dark:text-green-400 dark:border-green-700'
-              }`}
+              className={`text-xs ${getThresholdLabel(threshold).color}`}
             >
-              {STRICTNESS_LABELS[strictness].label}
+              {getThresholdLabel(threshold).label}
             </Badge>
           </button>
 
           {showStrictnessSlider && (
             <div className="mt-3 space-y-3">
-              {/* Three-way toggle buttons */}
-              <div className="flex gap-1">
-                {(['strict', 'moderate', 'flexible'] as StrictnessLevel[]).map((level) => (
-                  <Button
-                    key={level}
-                    variant={strictness === level ? 'default' : 'outline'}
-                    size="sm"
-                    className={`flex-1 h-8 text-xs ${
-                      strictness === level
-                        ? level === 'strict' ? 'bg-red-600 hover:bg-red-700' :
-                          level === 'moderate' ? 'bg-amber-600 hover:bg-amber-700' :
-                          'bg-green-600 hover:bg-green-700'
-                        : ''
-                    }`}
-                    onClick={() => setStrictness(level)}
-                  >
-                    {STRICTNESS_LABELS[level].label}
-                  </Button>
-                ))}
+              {/* Threshold slider */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                  <span>Flexible</span>
+                  <span className="font-medium">{threshold}</span>
+                  <span>Strict</span>
+                </div>
+                <Slider
+                  value={[threshold]}
+                  onValueChange={(values) => setThreshold(values[0])}
+                  min={0}
+                  max={100}
+                  step={5}
+                  className="w-full"
+                />
               </div>
 
               {/* Description of current level */}
               <div className="text-xs text-muted-foreground bg-slate-100 dark:bg-slate-800 rounded-md p-2">
-                <span className="font-medium">{STRICTNESS_LABELS[strictness].label}:</span>{' '}
-                {STRICTNESS_LABELS[strictness].description}
+                <span className="font-medium">{getThresholdLabel(threshold).label}:</span>{' '}
+                {getThresholdLabel(threshold).description}
               </div>
             </div>
           )}

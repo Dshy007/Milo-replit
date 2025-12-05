@@ -364,12 +364,9 @@ export class GeminiProfiler {
           .sort((a, b) => (a as number) - (b as number))
           .map(d => DAY_NAMES[d as number]);
 
-    // Capture more times and tractors to avoid missing occasional shifts
-    // Top 4 times (was 3) to include bump/late shift times
-    // Top 4 tractors (was 2) for drivers who use multiple tractors
-    // NOTE: Do NOT sort alphabetically - keep frequency order so most common times appear first
-    // This is critical because UI often shows only first 2 times
-    const preferredStartTimes = this.getTopN(timeFrequency, 4) as string[];
+    // Only store PRIMARY (most frequent) time - one time across ALL days
+    // Matching logic uses only the first preferred time, so storing multiple causes confusion
+    const preferredStartTimes = this.getTopN(timeFrequency, 1) as string[];
     const preferredTractors = this.getTopN(tractorFrequency, 4);
 
     // preferredContractType was determined in Pass 1 above
