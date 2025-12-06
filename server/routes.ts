@@ -3985,22 +3985,27 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
 
   // POST /api/matching/calculate - Calculate driver-block matches using OR-Tools
   // This replaces the client-side calculateBlockMatch() function
+  // minDays slider: 3 = part-time OK, 4 = prefer full-time, 5 = full-time only
   app.post("/api/matching/calculate", requireAuth, async (req, res) => {
     try {
       const tenantId = req.session.tenantId!;
-      const { weekStart, contractType } = req.body;
+      const { weekStart, contractType, minDays } = req.body;
 
       // Default to current week if no weekStart provided
       const weekStartDate = weekStart
         ? parseISO(weekStart)
         : startOfWeek(new Date(), { weekStartsOn: 0 }); // Sunday
 
-      console.log(`[OR-Tools API] Calculating matches for week starting ${format(weekStartDate, "yyyy-MM-dd")}, contract type: ${contractType || "all"}`);
+      // Validate minDays (3, 4, or 5)
+      const validMinDays = [3, 4, 5].includes(minDays) ? minDays : 3;
+
+      console.log(`[OR-Tools API] Calculating matches for week starting ${format(weekStartDate, "yyyy-MM-dd")}, contract type: ${contractType || "all"}, minDays: ${validMinDays}`);
 
       const result = await optimizeWeekSchedule(
         tenantId,
         weekStartDate,
-        contractType as "solo1" | "solo2" | "team" | undefined
+        contractType as "solo1" | "solo2" | "team" | undefined,
+        validMinDays
       );
 
       res.json({

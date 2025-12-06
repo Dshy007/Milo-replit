@@ -90,7 +90,8 @@ const DAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "frid
 async function callORToolsSolver(
   drivers: DriverInput[],
   blocks: BlockInput[],
-  slotHistory: Record<string, Record<string, number>> = {}
+  slotHistory: Record<string, Record<string, number>> = {},
+  minDays: number = 3
 ): Promise<ORToolsResult> {
   return new Promise((resolve, reject) => {
     const pythonPath = process.env.PYTHON_PATH || "python";
@@ -100,7 +101,8 @@ async function callORToolsSolver(
       action: "optimize",
       drivers,
       blocks,
-      slotHistory
+      slotHistory,
+      minDays
     });
 
     const python = spawn(pythonPath, [scriptPath, input]);
@@ -147,18 +149,21 @@ async function callORToolsSolver(
 }
 
 /**
- * Get ALL active drivers - no filtering, just need id and name for copy last week
+ * Get ALL active drivers with their contract types from DNA profiles
  */
 async function getDriversForOptimization(tenantId: string, contractTypeFilter?: string): Promise<DriverInput[]> {
-  console.log("[OR-Tools] COPY LAST WEEK MODE: Getting all active drivers");
+  console.log("[OR-Tools] Getting active drivers with contract types");
 
+  // Get drivers with their DNA profiles (for contract type)
   const allDrivers = await db
     .select({
       id: drivers.id,
       firstName: drivers.firstName,
       lastName: drivers.lastName,
+      contractType: driverDnaProfiles.preferredContractType,
     })
     .from(drivers)
+    .leftJoin(driverDnaProfiles, eq(drivers.id, driverDnaProfiles.driverId))
     .where(
       and(
         eq(drivers.tenantId, tenantId),
@@ -171,10 +176,16 @@ async function getDriversForOptimization(tenantId: string, contractTypeFilter?: 
     name: `${driver.firstName} ${driver.lastName}`,
     preferredDays: [],
     preferredTime: "",
-    contractType: "solo1",
+    contractType: (driver.contractType || "solo1").toLowerCase(),
   }));
 
-  console.log(`[OR-Tools] Found ${result.length} active drivers`);
+  // Count by contract type
+  const byCT: Record<string, number> = {};
+  for (const d of result) {
+    byCT[d.contractType] = (byCT[d.contractType] || 0) + 1;
+  }
+  console.log(`[OR-Tools] Found ${result.length} drivers:`, byCT);
+
   return result;
 }
 
@@ -336,11 +347,15 @@ async function get8WeekSlotHistory(tenantId: string, currentWeekStart: Date): Pr
 
 /**
  * Main optimization function - matches drivers to blocks using OR-Tools
+ *
+ * @param minDays - Minimum days per week a driver should work (3, 4, or 5)
+ *                  Slider: 3 = part-time OK, 4 = prefer full-time, 5 = full-time only
  */
 export async function optimizeWeekSchedule(
   tenantId: string,
   weekStart: Date,
-  contractTypeFilter?: "solo1" | "solo2" | "team"
+  contractTypeFilter?: "solo1" | "solo2" | "team",
+  minDays: number = 3
 ): Promise<{
   suggestions: Array<{
     blockId: string;
@@ -392,8 +407,9 @@ export async function optimizeWeekSchedule(
     driversCount: driverInputs.length,
     blocksCount: blockInputs.length,
     slotHistoryCount: Object.keys(slotHistory).length,
+    minDays,
   });
-  const result = await callORToolsSolver(driverInputs, blockInputs, slotHistory);
+  const result = await callORToolsSolver(driverInputs, blockInputs, slotHistory, minDays);
 
   // Convert to website format
   const suggestions = result.assignments.map(a => ({
@@ -453,7 +469,7 @@ export async function applyOptimizedSchedule(
         driverId: assignment.driverId,
         isActive: true,
         assignedAt: new Date(),
-        assignedBy: "ortools-optimizer"
+        assignedBy: null  // System-generated assignment (no user ID)
       });
 
       applied++;
