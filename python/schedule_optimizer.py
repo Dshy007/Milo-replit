@@ -1,230 +1,158 @@
 """
-Schedule Optimizer using Google OR-Tools CP-SAT Solver
+Schedule Optimizer - DRIVER-CENTRIC WEEKLY PATTERN MATCHING
 
-This module matches drivers to weekly runs (blocks) based on:
-- Driver preferences (days + ONE preferred time per driver)
-- Available runs/blocks with their times
-- Constraint: Match preferred time when available, closest time otherwise
+Strategy:
+1. Build each driver's weekly pattern (which days they work, which slots)
+2. Sort drivers by total historical shifts (most active first)
+3. For each driver, give them ONE block on EACH day they historically work
+4. This ensures drivers get their full weekly schedule preserved
 
-Usage:
-  python schedule_optimizer.py '{"action":"optimize","drivers":[...],"blocks":[...]}'
-
-Based on: https://developers.google.com/optimization/scheduling/employee_scheduling
+Example: If Firas worked Saturday, Sunday, Monday historically,
+he should get one block on each of those days this week.
 """
 
 import json
 import sys
-from ortools.sat.python import cp_model
+from collections import defaultdict
 
 
-def time_to_minutes(time_str: str) -> int:
-    """Convert HH:MM to minutes since midnight."""
-    if not time_str:
-        return 0
-    parts = time_str.replace(":", "").strip()
-    if len(parts) == 4:
-        hours = int(parts[:2])
-        mins = int(parts[2:])
-    else:
-        parts = time_str.split(":")
-        hours = int(parts[0])
-        mins = int(parts[1]) if len(parts) > 1 else 0
-    return hours * 60 + mins
-
-
-def minutes_to_time(minutes: int) -> str:
-    """Convert minutes since midnight to HH:MM."""
-    hours = (minutes // 60) % 24
-    mins = minutes % 60
-    return f"{hours:02d}:{mins:02d}"
-
-
-def optimize_schedule(drivers: list, blocks: list) -> dict:
+def optimize_schedule(drivers: list, blocks: list, slot_history: dict = None) -> dict:
     """
-    Use CP-SAT solver to assign drivers to blocks.
+    Match blocks to drivers based on 8-week slot history.
+    Uses DRIVER-CENTRIC approach: give each driver their weekly pattern.
 
     Args:
-        drivers: List of driver objects with:
-            - id: string
-            - name: string
-            - preferredDays: list of day names (lowercase)
-            - preferredTime: string (HH:MM) - ONE time for ALL days
-            - contractType: 'solo1' or 'solo2'
-
-        blocks: List of block objects with:
-            - id: string (block ID)
-            - day: string (lowercase day name)
-            - time: string (HH:MM)
-            - contractType: 'solo1' or 'solo2'
-            - serviceDate: string (YYYY-MM-DD)
+        drivers: List of driver objects (id, name)
+        blocks: List of block objects (id, day, time, contractType, serviceDate)
+        slot_history: dict mapping SLOT -> { driverId: count, ... }
+            Example: {"monday_16:30": {"driver-123": 5, "driver-456": 3}}
 
     Returns:
-        dict with:
-            - assignments: list of {blockId, driverId, driverName, matchType}
-            - unassigned: list of block IDs that couldn't be assigned
-            - stats: summary statistics
+        dict with assignments, unassigned, stats
     """
 
-    model = cp_model.CpModel()
+    print("=== DRIVER-CENTRIC WEEKLY PATTERN OPTIMIZER ===", file=sys.stderr)
+    print(f"=== Input: {len(drivers)} drivers, {len(blocks)} blocks, {len(slot_history or {})} slots with history ===", file=sys.stderr)
 
-    # Filter drivers and blocks by contract type for matching
-    # Create assignment variables: x[d][b] = 1 if driver d is assigned to block b
+    slot_history = slot_history or {}
 
-    num_drivers = len(drivers)
-    num_blocks = len(blocks)
+    # Build driver lookup
+    driver_map = {d["id"]: d for d in drivers}
 
-    if num_drivers == 0 or num_blocks == 0:
-        return {
-            "assignments": [],
-            "unassigned": [b["id"] for b in blocks],
-            "stats": {"totalBlocks": num_blocks, "assigned": 0, "unassigned": num_blocks}
-        }
+    # STEP 1: Build each driver's weekly pattern
+    # driver_pattern[driver_id] = {day: {slot: count, ...}, ...}
+    # Also track total shifts per driver
+    driver_pattern = defaultdict(lambda: defaultdict(dict))
+    driver_total_shifts = defaultdict(int)
 
-    # Create boolean variables for each (driver, block) pair
-    x = {}
-    for d_idx, driver in enumerate(drivers):
-        for b_idx, block in enumerate(blocks):
-            x[(d_idx, b_idx)] = model.NewBoolVar(f"x_{d_idx}_{b_idx}")
+    for slot, driver_counts in slot_history.items():
+        day = slot.split("_")[0]  # e.g., "monday" from "monday_16:30"
+        for driver_id, count in driver_counts.items():
+            driver_pattern[driver_id][day][slot] = count
+            driver_total_shifts[driver_id] += count
 
-    # Constraint 1: Each block assigned to at most one driver
-    for b_idx in range(num_blocks):
-        model.Add(sum(x[(d_idx, b_idx)] for d_idx in range(num_drivers)) <= 1)
+    # Log driver patterns
+    print(f"  Found {len(driver_pattern)} drivers with history", file=sys.stderr)
+    for driver_id, days in list(driver_pattern.items())[:5]:
+        name = driver_map.get(driver_id, {}).get("name", "Unknown")
+        day_list = list(days.keys())
+        total = driver_total_shifts[driver_id]
+        print(f"    {name}: {len(day_list)} days, {total} total shifts - {day_list}", file=sys.stderr)
 
-    # Constraint 2: Contract type must match
-    for d_idx, driver in enumerate(drivers):
-        driver_contract = driver.get("contractType", "solo1").lower()
-        for b_idx, block in enumerate(blocks):
-            block_contract = block.get("contractType", "solo1").lower()
-            if driver_contract != block_contract:
-                model.Add(x[(d_idx, b_idx)] == 0)
+    # STEP 2: Group blocks by day and slot
+    blocks_by_day = defaultdict(list)  # day -> [blocks]
+    blocks_by_slot = defaultdict(list)  # slot -> [blocks]
+    for block in blocks:
+        day = block["day"]
+        slot = f"{day}_{block['time']}"
+        blocks_by_day[day].append(block)
+        blocks_by_slot[slot].append(block)
 
-    # Constraint 3: Driver can only work one block per day
-    # Group blocks by date
-    blocks_by_date = {}
-    for b_idx, block in enumerate(blocks):
-        date = block.get("serviceDate", block.get("day", ""))
-        if date not in blocks_by_date:
-            blocks_by_date[date] = []
-        blocks_by_date[date].append(b_idx)
+    print(f"  Blocks by day: {dict((d, len(b)) for d, b in blocks_by_day.items())}", file=sys.stderr)
 
-    for d_idx in range(num_drivers):
-        for date, block_indices in blocks_by_date.items():
-            # At most one block per driver per day
-            model.Add(sum(x[(d_idx, b_idx)] for b_idx in block_indices) <= 1)
+    # STEP 3: Sort drivers by total historical shifts (most active first)
+    # This gives priority to drivers who work the most
+    sorted_drivers = sorted(
+        driver_pattern.keys(),
+        key=lambda d: -driver_total_shifts[d]
+    )
 
-    # Constraint 4: Solo2 drivers need 48-hour gaps (skip for simplicity now)
-    # This would require more complex temporal constraints
-
-    # Objective: Maximize assignments with preference for matching times
-    # Score:
-    #   - Perfect match (day + exact time): 100
-    #   - Day match + close time (within 2 hours): 50
-    #   - Day match + any time: 10
-    #   - No day match: 0 (don't assign)
-
-    objective_terms = []
-
-    for d_idx, driver in enumerate(drivers):
-        pref_days = [d.lower() for d in driver.get("preferredDays", [])]
-        pref_time = driver.get("preferredTime", "")
-        pref_minutes = time_to_minutes(pref_time) if pref_time else None
-
-        for b_idx, block in enumerate(blocks):
-            block_day = block.get("day", "").lower()
-            block_time = block.get("time", "")
-            block_minutes = time_to_minutes(block_time)
-
-            # Check if day matches
-            day_matches = block_day in pref_days if pref_days else True
-
-            if not day_matches:
-                # Don't assign if day doesn't match preferred days
-                model.Add(x[(d_idx, b_idx)] == 0)
-                continue
-
-            # Calculate time difference
-            if pref_minutes is not None:
-                time_diff = abs(block_minutes - pref_minutes)
-                # Handle wraparound
-                time_diff = min(time_diff, 1440 - time_diff)
-
-                if time_diff == 0:
-                    # Perfect time match
-                    score = 100
-                elif time_diff <= 60:
-                    # Within 1 hour
-                    score = 80
-                elif time_diff <= 120:
-                    # Within 2 hours
-                    score = 50
-                else:
-                    # More than 2 hours - still allow but low score
-                    score = 10
-            else:
-                # No preferred time - neutral score
-                score = 50
-
-            objective_terms.append(score * x[(d_idx, b_idx)])
-
-    # Maximize total score
-    model.Maximize(sum(objective_terms))
-
-    # Solve
-    solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 30.0  # 30 second timeout
-    status = solver.Solve(model)
-
-    # Extract results
     assignments = []
     assigned_blocks = set()
+    assigned_drivers_today = defaultdict(set)  # date -> set of driver IDs
 
-    if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        for d_idx, driver in enumerate(drivers):
-            for b_idx, block in enumerate(blocks):
-                if solver.Value(x[(d_idx, b_idx)]) == 1:
-                    # Determine match type
-                    pref_time = driver.get("preferredTime", "")
-                    block_time = block.get("time", "")
+    # STEP 4: For each driver, give them blocks on their historical days
+    for driver_id in sorted_drivers:
+        if driver_id not in driver_map:
+            continue
 
-                    if pref_time and block_time:
-                        pref_min = time_to_minutes(pref_time)
-                        block_min = time_to_minutes(block_time)
-                        diff = abs(pref_min - block_min)
-                        diff = min(diff, 1440 - diff)
+        driver = driver_map[driver_id]
+        driver_days = driver_pattern[driver_id]
 
-                        if diff == 0:
-                            match_type = "exact"
-                        elif diff <= 60:
-                            match_type = "close"
-                        else:
-                            match_type = "fallback"
-                    else:
-                        match_type = "default"
+        # Sort this driver's days by how often they work that day (most frequent first)
+        sorted_days = sorted(
+            driver_days.keys(),
+            key=lambda d: -sum(driver_days[d].values())
+        )
 
+        for day in sorted_days:
+            # Find all blocks on this day
+            day_blocks = blocks_by_day.get(day, [])
+            if not day_blocks:
+                continue
+
+            # Get this driver's preferred slots for this day (sorted by count)
+            day_slots = driver_days[day]
+            sorted_slots = sorted(day_slots.keys(), key=lambda s: -day_slots[s])
+
+            # Try to assign a block on this day
+            assigned_this_day = False
+            for slot in sorted_slots:
+                slot_blocks = blocks_by_slot.get(slot, [])
+                for block in slot_blocks:
+                    if block["id"] in assigned_blocks:
+                        continue
+
+                    # Check driver not already working this date
+                    if driver_id in assigned_drivers_today[block["serviceDate"]]:
+                        continue
+
+                    # Assign!
+                    count = day_slots[slot]
                     assignments.append({
                         "blockId": block["id"],
-                        "driverId": driver["id"],
+                        "driverId": driver_id,
                         "driverName": driver.get("name", "Unknown"),
-                        "matchType": match_type,
-                        "preferredTime": pref_time,
-                        "actualTime": block_time,
-                        "serviceDate": block.get("serviceDate", ""),
-                        "day": block.get("day", "")
+                        "matchType": "history",
+                        "preferredTime": block["time"],
+                        "actualTime": block["time"],
+                        "serviceDate": block["serviceDate"],
+                        "day": block["day"],
+                        "historyCount": count
                     })
                     assigned_blocks.add(block["id"])
+                    assigned_drivers_today[block["serviceDate"]].add(driver_id)
+                    assigned_this_day = True
+                    print(f"    {driver['name']} -> {day} ({slot}, {count}x history)", file=sys.stderr)
+                    break
+
+                if assigned_this_day:
+                    break
 
     # Find unassigned blocks
     unassigned = [b["id"] for b in blocks if b["id"] not in assigned_blocks]
+
+    print(f"=== Result: {len(assignments)} assigned, {len(unassigned)} unassigned ===", file=sys.stderr)
 
     return {
         "assignments": assignments,
         "unassigned": unassigned,
         "stats": {
-            "totalBlocks": num_blocks,
-            "totalDrivers": num_drivers,
+            "totalBlocks": len(blocks),
+            "totalDrivers": len(drivers),
             "assigned": len(assignments),
             "unassigned": len(unassigned),
-            "solverStatus": solver.StatusName(status)
+            "solverStatus": "DRIVER_PATTERN_MATCH"
         }
     }
 
@@ -246,8 +174,10 @@ def main():
     if action == "optimize":
         drivers = input_data.get("drivers", [])
         blocks = input_data.get("blocks", [])
-        result = optimize_schedule(drivers, blocks)
-        print(json.dumps(result))
+        # Now expecting slotHistory instead of lastWeekAssignments
+        slot_history = input_data.get("slotHistory", {})
+        result = optimize_schedule(drivers, blocks, slot_history)
+        print(json.dumps(result, indent=2))
     else:
         print(json.dumps({"error": f"Unknown action: {action}"}))
         sys.exit(1)

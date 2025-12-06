@@ -7,10 +7,14 @@
 
 import { spawn } from "child_process";
 import path from "path";
+import { fileURLToPath } from "url";
 import { db } from "./db";
 import { blocks, drivers, driverDnaProfiles, blockAssignments } from "@shared/schema";
 import { eq, and, gte, lte, isNull } from "drizzle-orm";
 import { format, startOfWeek, endOfWeek } from "date-fns";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 /**
  * CANONICAL_START_TIMES - The Holy Grail lookup table
@@ -83,7 +87,11 @@ const DAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "frid
 /**
  * Call Python OR-Tools solver
  */
-async function callORToolsSolver(drivers: DriverInput[], blocks: BlockInput[]): Promise<ORToolsResult> {
+async function callORToolsSolver(
+  drivers: DriverInput[],
+  blocks: BlockInput[],
+  slotHistory: Record<string, Record<string, number>> = {}
+): Promise<ORToolsResult> {
   return new Promise((resolve, reject) => {
     const pythonPath = process.env.PYTHON_PATH || "python";
     const scriptPath = path.join(__dirname, "../python/schedule_optimizer.py");
@@ -91,7 +99,8 @@ async function callORToolsSolver(drivers: DriverInput[], blocks: BlockInput[]): 
     const input = JSON.stringify({
       action: "optimize",
       drivers,
-      blocks
+      blocks,
+      slotHistory
     });
 
     const python = spawn(pythonPath, [scriptPath, input]);
@@ -108,6 +117,11 @@ async function callORToolsSolver(drivers: DriverInput[], blocks: BlockInput[]): 
     });
 
     python.on("close", (code) => {
+      // Always log Python stderr for debugging
+      if (stderr) {
+        console.log("[OR-Tools Python]", stderr);
+      }
+
       if (code !== 0) {
         console.error("[OR-Tools] Python script error:", stderr);
         reject(new Error(`Python script exited with code ${code}: ${stderr}`));
@@ -133,20 +147,18 @@ async function callORToolsSolver(drivers: DriverInput[], blocks: BlockInput[]): 
 }
 
 /**
- * Get drivers with DNA profiles for optimization
+ * Get ALL active drivers - no filtering, just need id and name for copy last week
  */
 async function getDriversForOptimization(tenantId: string, contractTypeFilter?: string): Promise<DriverInput[]> {
-  const driversWithDNA = await db
+  console.log("[OR-Tools] COPY LAST WEEK MODE: Getting all active drivers");
+
+  const allDrivers = await db
     .select({
       id: drivers.id,
       firstName: drivers.firstName,
       lastName: drivers.lastName,
-      preferredDays: driverDnaProfiles.preferredDays,
-      preferredStartTimes: driverDnaProfiles.preferredStartTimes,
-      preferredContractType: driverDnaProfiles.preferredContractType,
     })
     .from(drivers)
-    .innerJoin(driverDnaProfiles, eq(drivers.id, driverDnaProfiles.driverId))
     .where(
       and(
         eq(drivers.tenantId, tenantId),
@@ -154,24 +166,30 @@ async function getDriversForOptimization(tenantId: string, contractTypeFilter?: 
       )
     );
 
-  return driversWithDNA
-    .filter(d => {
-      if (!contractTypeFilter) return true;
-      return d.preferredContractType?.toLowerCase() === contractTypeFilter.toLowerCase();
-    })
-    .map(d => ({
-      id: d.id,
-      name: `${d.firstName} ${d.lastName}`,
-      preferredDays: (d.preferredDays as string[]) || [],
-      preferredTime: ((d.preferredStartTimes as string[]) || [])[0] || "",
-      contractType: d.preferredContractType || "solo1"
-    }));
+  const result: DriverInput[] = allDrivers.map(driver => ({
+    id: driver.id,
+    name: `${driver.firstName} ${driver.lastName}`,
+    preferredDays: [],
+    preferredTime: "",
+    contractType: "solo1",
+  }));
+
+  console.log(`[OR-Tools] Found ${result.length} active drivers`);
+  return result;
 }
 
 /**
  * Get unassigned blocks for a week
  */
 async function getUnassignedBlocks(tenantId: string, weekStart: Date, weekEnd: Date, contractTypeFilter?: string): Promise<BlockInput[]> {
+  // Ensure weekEnd includes the full last day (database stores dates with 12:00:00 timestamp)
+  // Add 1 day to weekEnd and use < instead of <= to include all of the last day
+  const weekEndPlusOne = new Date(weekEnd);
+  weekEndPlusOne.setDate(weekEndPlusOne.getDate() + 1);
+  weekEndPlusOne.setHours(0, 0, 0, 0);
+
+  console.log(`[OR-Tools] Getting blocks from ${format(weekStart, "yyyy-MM-dd")} to < ${format(weekEndPlusOne, "yyyy-MM-dd")}`);
+
   // Get all blocks in the date range
   const allBlocks = await db
     .select()
@@ -180,7 +198,7 @@ async function getUnassignedBlocks(tenantId: string, weekStart: Date, weekEnd: D
       and(
         eq(blocks.tenantId, tenantId),
         gte(blocks.serviceDate, weekStart),
-        lte(blocks.serviceDate, weekEnd)
+        lte(blocks.serviceDate, weekEndPlusOne)
       )
     );
 
@@ -222,6 +240,101 @@ async function getUnassignedBlocks(tenantId: string, weekStart: Date, weekEnd: D
 }
 
 /**
+ * Get 8-week slot history for historical pattern matching
+ * Maps SLOT (dayOfWeek_canonicalTime) -> { driverId: count }
+ * Example: "monday_16:30" -> { "driver-123": 5, "driver-456": 3 }
+ *
+ * This allows matching based on who has historically worked each slot
+ * A driver who worked monday_16:30 five times in 8 weeks gets priority
+ */
+async function get8WeekSlotHistory(tenantId: string, currentWeekStart: Date): Promise<Record<string, Record<string, number>>> {
+  // Calculate 8 weeks ago
+  const eightWeeksAgo = new Date(currentWeekStart);
+  eightWeeksAgo.setDate(eightWeeksAgo.getDate() - 56); // 8 weeks = 56 days
+
+  // End at the day before current week starts
+  const historyEnd = new Date(currentWeekStart);
+  historyEnd.setDate(historyEnd.getDate() - 1);
+
+  console.log(`[OR-Tools] Getting 8-week history from ${format(eightWeeksAgo, "yyyy-MM-dd")} to ${format(historyEnd, "yyyy-MM-dd")}`);
+
+  // Get all blocks from the 8-week history period
+  const historyBlocks = await db
+    .select({
+      id: blocks.id,
+      serviceDate: blocks.serviceDate,
+      soloType: blocks.soloType,
+      tractorId: blocks.tractorId
+    })
+    .from(blocks)
+    .where(
+      and(
+        eq(blocks.tenantId, tenantId),
+        gte(blocks.serviceDate, eightWeeksAgo),
+        lte(blocks.serviceDate, historyEnd)
+      )
+    );
+
+  // Build a map of blockId -> SLOT
+  const blockIdToSlot: Record<string, string> = {};
+  for (const b of historyBlocks) {
+    const serviceDate = new Date(b.serviceDate);
+    const dayIndex = serviceDate.getDay();
+    const dayName = DAY_NAMES[dayIndex];
+
+    // Use canonical time from Holy Grail lookup
+    const soloType = (b.soloType || "solo1").toLowerCase();
+    const tractorId = b.tractorId || "Tractor_1";
+    const lookupKey = `${soloType}_${tractorId}`;
+    const canonicalTime = CANONICAL_START_TIMES[lookupKey] || "00:00";
+
+    // SLOT = dayOfWeek_canonicalTime (e.g., "monday_16:30")
+    const slot = `${dayName}_${canonicalTime}`;
+    blockIdToSlot[b.id] = slot;
+  }
+
+  // Get all active assignments
+  const assignments = await db
+    .select({
+      blockId: blockAssignments.blockId,
+      driverId: blockAssignments.driverId
+    })
+    .from(blockAssignments)
+    .where(eq(blockAssignments.isActive, true));
+
+  // Build slot history: SLOT -> { driverId: count }
+  const slotHistory: Record<string, Record<string, number>> = {};
+
+  for (const a of assignments) {
+    if (!a.blockId) continue;
+    const slot = blockIdToSlot[a.blockId];
+    if (slot) {
+      if (!slotHistory[slot]) {
+        slotHistory[slot] = {};
+      }
+      slotHistory[slot][a.driverId] = (slotHistory[slot][a.driverId] || 0) + 1;
+    }
+  }
+
+  // Log summary
+  const totalSlots = Object.keys(slotHistory).length;
+  const totalAssignments = Object.values(slotHistory).reduce(
+    (sum, drivers) => sum + Object.values(drivers).reduce((s, c) => s + c, 0),
+    0
+  );
+  console.log(`[OR-Tools] Built history: ${totalSlots} slots, ${totalAssignments} total assignments`);
+
+  // Log sample
+  const sampleSlots = Object.entries(slotHistory).slice(0, 3);
+  for (const [slot, drivers] of sampleSlots) {
+    const topDriver = Object.entries(drivers).sort((a, b) => b[1] - a[1])[0];
+    console.log(`[OR-Tools]   ${slot}: ${Object.keys(drivers).length} drivers (top: ${topDriver?.[1] || 0} times)`);
+  }
+
+  return slotHistory;
+}
+
+/**
  * Main optimization function - matches drivers to blocks using OR-Tools
  */
 export async function optimizeWeekSchedule(
@@ -255,6 +368,9 @@ export async function optimizeWeekSchedule(
   const driverInputs = await getDriversForOptimization(tenantId, contractTypeFilter);
   const blockInputs = await getUnassignedBlocks(tenantId, weekStart, weekEnd, contractTypeFilter);
 
+  // Get 8-week slot history for pattern matching
+  const slotHistory = await get8WeekSlotHistory(tenantId, weekStart);
+
   console.log(`[OR-Tools] Found ${driverInputs.length} drivers and ${blockInputs.length} unassigned blocks`);
 
   if (driverInputs.length === 0 || blockInputs.length === 0) {
@@ -271,8 +387,13 @@ export async function optimizeWeekSchedule(
     };
   }
 
-  // Call OR-Tools solver
-  const result = await callORToolsSolver(driverInputs, blockInputs);
+  // Call OR-Tools solver with historical data
+  console.log("[OR-Tools] Calling Python with:", {
+    driversCount: driverInputs.length,
+    blocksCount: blockInputs.length,
+    slotHistoryCount: Object.keys(slotHistory).length,
+  });
+  const result = await callORToolsSolver(driverInputs, blockInputs, slotHistory);
 
   // Convert to website format
   const suggestions = result.assignments.map(a => ({
@@ -302,6 +423,8 @@ export async function applyOptimizedSchedule(
   let applied = 0;
   const errors: string[] = [];
 
+  console.log(`[Apply] Starting to apply ${assignments.length} assignments for tenant ${tenantId}`);
+
   for (const assignment of assignments) {
     try {
       // Check if already assigned
@@ -317,11 +440,13 @@ export async function applyOptimizedSchedule(
         .limit(1);
 
       if (existing.length > 0) {
+        console.log(`[Apply] Block ${assignment.blockId} already has active assignment`);
         errors.push(`Block ${assignment.blockId} already assigned`);
         continue;
       }
 
       // Create assignment
+      console.log(`[Apply] Creating assignment: block=${assignment.blockId}, driver=${assignment.driverId}`);
       await db.insert(blockAssignments).values({
         tenantId,
         blockId: assignment.blockId,
@@ -332,10 +457,13 @@ export async function applyOptimizedSchedule(
       });
 
       applied++;
+      console.log(`[Apply] Successfully assigned block ${assignment.blockId}`);
     } catch (e: any) {
+      console.error(`[Apply] Failed to assign ${assignment.blockId}:`, e.message);
       errors.push(`Failed to assign ${assignment.blockId}: ${e.message}`);
     }
   }
 
+  console.log(`[Apply] Completed: ${applied} applied, ${errors.length} errors`);
   return { applied, errors };
 }
