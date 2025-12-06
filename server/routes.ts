@@ -40,6 +40,8 @@ import {
   updateSingleDriverDNA,
 } from "./dna-analyzer";
 import { optimizeWeekSchedule, applyOptimizedSchedule } from "./ortools-matcher";
+import { optimizeWithGemini, applyGeminiSchedule } from "./gemini-scheduler";
+import { optimizeWithClaude, applyClaudeSchedule } from "./claude-scheduler";
 
 // Require SESSION_SECRET
 const SESSION_SECRET = process.env.SESSION_SECRET!;
@@ -4048,6 +4050,148 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
       });
     } catch (error: any) {
       console.error("Apply assignments error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to apply assignments",
+        error: error.message
+      });
+    }
+  });
+
+  // ==================== GEMINI SCHEDULER ====================
+
+  // POST /api/matching/gemini - Calculate matches using Gemini AI
+  app.post("/api/matching/gemini", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { weekStart, contractType, minDays } = req.body;
+
+      const weekStartDate = weekStart
+        ? parseISO(weekStart)
+        : startOfWeek(new Date(), { weekStartsOn: 0 });
+
+      const validMinDays = [3, 4, 5].includes(minDays) ? minDays : 3;
+
+      console.log(`[Gemini API] Calculating matches for week starting ${format(weekStartDate, "yyyy-MM-dd")}`);
+
+      const result = await optimizeWithGemini(
+        tenantId,
+        weekStartDate,
+        contractType as "solo1" | "solo2" | "team" | undefined,
+        validMinDays
+      );
+
+      res.json({
+        success: true,
+        suggestions: result.suggestions,
+        unassigned: result.unassigned,
+        stats: result.stats,
+      });
+    } catch (error: any) {
+      console.error("Gemini matching error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to calculate matches with Gemini",
+        error: error.message
+      });
+    }
+  });
+
+  // POST /api/matching/gemini/apply - Apply Gemini-optimized assignments
+  app.post("/api/matching/gemini/apply", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { assignments } = req.body;
+
+      if (!Array.isArray(assignments) || assignments.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "No assignments provided"
+        });
+      }
+
+      console.log(`[Gemini API] Applying ${assignments.length} assignments`);
+
+      const result = await applyGeminiSchedule(tenantId, assignments);
+
+      res.json({
+        success: true,
+        applied: result.applied,
+        errors: result.errors,
+      });
+    } catch (error: any) {
+      console.error("Apply Gemini assignments error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to apply assignments",
+        error: error.message
+      });
+    }
+  });
+
+  // ==================== CLAUDE SCHEDULER ====================
+
+  // POST /api/matching/claude - Calculate matches using Claude AI
+  app.post("/api/matching/claude", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { weekStart, contractType, minDays } = req.body;
+
+      const weekStartDate = weekStart
+        ? parseISO(weekStart)
+        : startOfWeek(new Date(), { weekStartsOn: 0 });
+
+      const validMinDays = [3, 4, 5].includes(minDays) ? minDays : 3;
+
+      console.log(`[Claude API] Calculating matches for week starting ${format(weekStartDate, "yyyy-MM-dd")}`);
+
+      const result = await optimizeWithClaude(
+        tenantId,
+        weekStartDate,
+        contractType as "solo1" | "solo2" | "team" | undefined,
+        validMinDays
+      );
+
+      res.json({
+        success: true,
+        suggestions: result.suggestions,
+        unassigned: result.unassigned,
+        stats: result.stats,
+      });
+    } catch (error: any) {
+      console.error("Claude matching error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to calculate matches with Claude",
+        error: error.message
+      });
+    }
+  });
+
+  // POST /api/matching/claude/apply - Apply Claude-optimized assignments
+  app.post("/api/matching/claude/apply", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { assignments } = req.body;
+
+      if (!Array.isArray(assignments) || assignments.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "No assignments provided"
+        });
+      }
+
+      console.log(`[Claude API] Applying ${assignments.length} assignments`);
+
+      const result = await applyClaudeSchedule(tenantId, assignments);
+
+      res.json({
+        success: true,
+        applied: result.applied,
+        errors: result.errors,
+      });
+    } catch (error: any) {
+      console.error("Apply Claude assignments error:", error);
       res.status(500).json({
         success: false,
         message: "Failed to apply assignments",

@@ -526,29 +526,53 @@ function calculateBlockMatch(
     return noMatch;
   }
 
+  // CRITICAL: Exclude drivers with empty preferences (must have BOTH days AND time set)
+  // This matches the Python OR-Tools logic - empty preferences = ineligible, not "match anything"
+  const preferredDays = dnaProfile.preferredDays || [];
+  const preferredTimes = dnaProfile.preferredStartTimes || [];
+  const primaryTime = preferredTimes[0]; // Only use the first/primary preferred time
+
+  if (preferredDays.length === 0 || !primaryTime) {
+    if (debug) {
+      console.log('[DNA MATCH] Driver has incomplete preferences - EXCLUDED:', {
+        preferredDays,
+        primaryTime: primaryTime || 'EMPTY',
+      });
+    }
+    return noMatch;
+  }
+
   // Get day of week from service date (lowercase full day names to match DB format)
   const date = new Date(occurrence.serviceDate + 'T00:00:00');
   const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
   const dayOfWeek = days[date.getDay()];
 
-  // Check day match
-  const preferredDays = dnaProfile.preferredDays || [];
-  const dayMatches = preferredDays.length === 0 || preferredDays.some(d => d.toLowerCase() === dayOfWeek);
+  // Check day match - since we already validated preferredDays is not empty above,
+  // we can now require actual day matching (no wildcard for empty)
+  const dayMatches = preferredDays.some(d => d.toLowerCase() === dayOfWeek);
 
-  // Check time match - use only PRIMARY (first) preferred time for strict matching
-  const preferredTimes = dnaProfile.preferredStartTimes || [];
-  const primaryTime = preferredTimes[0]; // Only use the first/primary preferred time
-  const blockTimeMinutes = timeToMinutes(occurrence.startTime);
-
-  let timeDiff = Infinity;
-  if (primaryTime) {
-    const prefMinutes = timeToMinutes(primaryTime);
-    const diff = Math.abs(blockTimeMinutes - prefMinutes);
-    // Handle wraparound for overnight times
-    timeDiff = Math.min(diff, 1440 - diff);
+  // HARD CONSTRAINT: Day preference is mandatory - if day doesn't match, reject immediately
+  // This matches the Python OR-Tools behavior: drivers can ONLY be assigned to preferred days
+  if (!dayMatches) {
+    if (debug) {
+      console.log('[DNA MATCH] HARD CONSTRAINT: Day mismatch - block rejected', {
+        blockId: occurrence.blockId,
+        blockDay: dayOfWeek,
+        preferredDays,
+      });
+    }
+    return noMatch;
   }
 
-  const timeMatches = !primaryTime || timeDiff === 0; // Exact match to PRIMARY time only
+  // Check time match - since we already validated primaryTime exists above,
+  // calculate time difference for scoring
+  const blockTimeMinutes = timeToMinutes(occurrence.startTime);
+  const prefMinutes = timeToMinutes(primaryTime);
+  const diff = Math.abs(blockTimeMinutes - prefMinutes);
+  // Handle wraparound for overnight times
+  const timeDiff = Math.min(diff, 1440 - diff);
+
+  const timeMatches = timeDiff === 0; // Exact match to PRIMARY time only
 
   // Debug: Log day/time matching details
   if (debug) {
@@ -562,48 +586,37 @@ function calculateBlockMatch(
       primaryTime,
       dayMatches,
       timeMatches,
-      timeDiff: timeDiff === Infinity ? 'N/A (no preferred time)' : timeDiff,
+      timeDiff,
     });
   }
 
-  // Apply strictness rules
+  // Apply strictness rules for TIME matching (day is already guaranteed via hard constraint above)
   if (strictness === 'strict') {
-    // Both day AND time must match
-    if (!dayMatches || !timeMatches) {
+    // Strict mode: time must ALSO match exactly
+    if (!timeMatches) {
       if (debug) {
-        console.log('[DNA MATCH] STRICT: Day or time mismatch', {
+        console.log('[DNA MATCH] STRICT: Time mismatch', {
           blockId: occurrence.blockId,
-          dayMatches,
           timeMatches,
         });
       }
       return { score: 0, timeDiff, dayMatches, timeMatches };
     }
-  } else if (strictness === 'moderate') {
-    // Day OR time must match
-    if (!dayMatches && !timeMatches) {
-      if (debug) {
-        console.log('[DNA MATCH] MODERATE: Neither day nor time matches', {
-          blockId: occurrence.blockId,
-        });
-      }
-      return { score: 0, timeDiff, dayMatches, timeMatches };
-    }
   }
-  // 'flexible' = only contract type needed (already checked above)
+  // 'moderate' and 'flexible' = day match is sufficient (already guaranteed above)
 
-  // Calculate score based on how well it matches
-  let score = 0.5; // Base score for contract match
+  // Calculate score based on time proximity (day is guaranteed to match at this point)
+  let score = 0.7; // Base score for day match
 
-  if (dayMatches && timeMatches) {
-    // Perfect match - exact time match gives full score
+  if (timeMatches) {
+    // Perfect match - day AND exact time match
     score = 1.0;
-  } else if (dayMatches) {
-    // Day matches but time doesn't
-    score = 0.7;
-  } else if (timeMatches) {
-    // Time matches but day doesn't
-    score = 0.6;
+  } else if (timeDiff <= 60) {
+    // Day matches, time within 1 hour
+    score = 0.9;
+  } else if (timeDiff <= 120) {
+    // Day matches, time within 2 hours
+    score = 0.8;
   }
 
   if (debug) {
@@ -660,11 +673,11 @@ export function DriverPoolSidebar({
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  // OR-Tools Auto-Match mutation
+  // Claude AI Auto-Match mutation
   const autoMatchMutation = useMutation({
     mutationFn: async () => {
       const weekStart = currentWeekStart.toISOString().split('T')[0];
-      const response = await apiRequest("POST", "/api/matching/calculate", {
+      const response = await apiRequest("POST", "/api/matching/claude", {
         weekStart,
         contractType: contractFilter !== 'all' ? contractFilter : undefined,
       });
@@ -674,7 +687,7 @@ export function DriverPoolSidebar({
       if (data.success) {
         setOrToolsResult(data);
         toast({
-          title: "OR-Tools Matching Complete",
+          title: "Claude Matching Complete",
           description: `Found ${data.stats.assigned} matches for ${data.stats.totalBlocks} blocks`,
         });
       } else {
@@ -694,10 +707,10 @@ export function DriverPoolSidebar({
     },
   });
 
-  // Apply OR-Tools suggestions mutation
+  // Apply Claude suggestions mutation
   const applyMatchesMutation = useMutation({
     mutationFn: async (assignments: Array<{ blockId: string; driverId: string }>) => {
-      const response = await apiRequest("POST", "/api/matching/apply", { assignments });
+      const response = await apiRequest("POST", "/api/matching/claude/apply", { assignments });
       return response.json();
     },
     onSuccess: (data) => {
@@ -1015,24 +1028,24 @@ export function DriverPoolSidebar({
           </div>
         )}
 
-        {/* OR-Tools Auto-Match Button */}
+        {/* Claude AI Auto-Match Button */}
         <div className="mb-3">
           <Button
             variant="outline"
             size="sm"
-            className="w-full h-9 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white border-0"
+            className="w-full h-9 bg-gradient-to-r from-orange-500 to-amber-600 hover:from-orange-600 hover:to-amber-700 text-white border-0"
             onClick={() => autoMatchMutation.mutate()}
             disabled={autoMatchMutation.isPending || unassignedOccurrences.length === 0}
           >
             {autoMatchMutation.isPending ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Optimizing...
+                Claude Thinking...
               </>
             ) : (
               <>
-                <Wand2 className="w-4 h-4 mr-2" />
-                Auto-Match with OR-Tools
+                <Sparkles className="w-4 h-4 mr-2" />
+                Auto-Match with Claude
               </>
             )}
           </Button>
@@ -1171,7 +1184,8 @@ export function DriverPoolSidebar({
           )}
         </div>
 
-        {/* Matching Strictness Slider */}
+        {/* Match Strictness - DISABLED: Using Copy Last Week mode */}
+        {false && (
         <div className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-700">
           <button
             onClick={() => setShowStrictnessSlider(!showStrictnessSlider)}
@@ -1216,6 +1230,7 @@ export function DriverPoolSidebar({
             </div>
           )}
         </div>
+        )}
       </div>
 
       {/* Driver Lists */}

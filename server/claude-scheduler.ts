@@ -1,0 +1,708 @@
+/**
+ * Claude Schedule Optimizer
+ *
+ * Uses Anthropic's Claude AI to intelligently match drivers to blocks.
+ * Unlike the Gemini scheduler, this PROPERLY uses DNA profile preferences.
+ *
+ * Key differences from Gemini:
+ * - Includes preferredDays and preferredStartTimes in the prompt
+ * - Uses Claude's superior pattern recognition
+ * - No quota issues with paid API key
+ */
+
+import Anthropic from "@anthropic-ai/sdk";
+import { db } from "./db";
+import { blocks, drivers, driverDnaProfiles, blockAssignments } from "@shared/schema";
+import { eq, and, gte, lte } from "drizzle-orm";
+import { format, endOfWeek } from "date-fns";
+
+// Canonical start times - the Holy Grail lookup
+const CANONICAL_START_TIMES: Record<string, string> = {
+  "solo1_Tractor_1": "16:30",
+  "solo1_Tractor_2": "20:30",
+  "solo1_Tractor_3": "20:30",
+  "solo1_Tractor_4": "17:30",
+  "solo1_Tractor_5": "21:30",
+  "solo1_Tractor_6": "01:30",
+  "solo1_Tractor_7": "18:30",
+  "solo1_Tractor_8": "00:30",
+  "solo1_Tractor_9": "16:30",
+  "solo1_Tractor_10": "20:30",
+  "solo2_Tractor_1": "18:30",
+  "solo2_Tractor_2": "23:30",
+  "solo2_Tractor_3": "21:30",
+  "solo2_Tractor_4": "08:30",
+  "solo2_Tractor_5": "15:30",
+  "solo2_Tractor_6": "11:30",
+  "solo2_Tractor_7": "16:30",
+};
+
+const DAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+
+interface DriverInfo {
+  id: string;
+  name: string;
+  contractType: string;
+  preferredDays: string[];
+  preferredStartTime: string;
+}
+
+interface BlockInfo {
+  id: string;
+  day: string;
+  time: string;
+  contractType: string;
+  serviceDate: string;
+  tractorId: string;
+}
+
+interface SlotHistory {
+  [slot: string]: {
+    [driverId: string]: number;
+  };
+}
+
+interface ScheduleSuggestion {
+  blockId: string;
+  driverId: string;
+  driverName: string;
+  confidence: number;
+  matchType: string;
+  reason: string;
+}
+
+/**
+ * ClaudeScheduler - AI-powered schedule optimization using Anthropic Claude
+ */
+class ClaudeScheduler {
+  private client: Anthropic;
+  private initialized: boolean = false;
+
+  constructor() {
+    const apiKey = process.env.ANTHROPIC_API_KEY || "";
+    if (!apiKey) {
+      console.warn("[ClaudeScheduler] No ANTHROPIC_API_KEY found");
+    } else {
+      console.log("[ClaudeScheduler] API key found, length:", apiKey.length);
+    }
+    this.client = new Anthropic({ apiKey });
+    this.initialized = true;
+  }
+
+  /**
+   * Main optimization function - uses Claude to match drivers to blocks
+   */
+  async optimizeSchedule(
+    driversData: DriverInfo[],
+    blocksData: BlockInfo[],
+    slotHistory: SlotHistory,
+    minDays: number = 3
+  ): Promise<{
+    suggestions: ScheduleSuggestion[];
+    unassigned: string[];
+    stats: {
+      totalBlocks: number;
+      totalDrivers: number;
+      assigned: number;
+      unassigned: number;
+      solverStatus: string;
+    };
+  }> {
+    if (blocksData.length === 0) {
+      return {
+        suggestions: [],
+        unassigned: [],
+        stats: {
+          totalBlocks: 0,
+          totalDrivers: driversData.length,
+          assigned: 0,
+          unassigned: 0,
+          solverStatus: "NO_BLOCKS"
+        }
+      };
+    }
+
+    console.log(`[ClaudeScheduler] Processing ${driversData.length} drivers, ${blocksData.length} blocks`);
+
+    // Group by contract type
+    const solo1Drivers = driversData.filter(d => d.contractType === "solo1");
+    const solo2Drivers = driversData.filter(d => d.contractType === "solo2");
+    const solo1Blocks = blocksData.filter(b => b.contractType.toLowerCase() === "solo1");
+    const solo2Blocks = blocksData.filter(b => b.contractType.toLowerCase() === "solo2");
+
+    console.log(`[ClaudeScheduler] Solo1: ${solo1Drivers.length} drivers, ${solo1Blocks.length} blocks`);
+    console.log(`[ClaudeScheduler] Solo2: ${solo2Drivers.length} drivers, ${solo2Blocks.length} blocks`);
+
+    const allSuggestions: ScheduleSuggestion[] = [];
+    const allUnassigned: string[] = [];
+
+    // Process solo1
+    if (solo1Blocks.length > 0 && solo1Drivers.length > 0) {
+      const result = await this.matchContractType(solo1Drivers, solo1Blocks, slotHistory, minDays, "solo1");
+      allSuggestions.push(...result.suggestions);
+      allUnassigned.push(...result.unassigned);
+    } else if (solo1Blocks.length > 0) {
+      allUnassigned.push(...solo1Blocks.map(b => b.id));
+    }
+
+    // Process solo2
+    if (solo2Blocks.length > 0 && solo2Drivers.length > 0) {
+      const result = await this.matchContractType(solo2Drivers, solo2Blocks, slotHistory, minDays, "solo2");
+      allSuggestions.push(...result.suggestions);
+      allUnassigned.push(...result.unassigned);
+    } else if (solo2Blocks.length > 0) {
+      allUnassigned.push(...solo2Blocks.map(b => b.id));
+    }
+
+    return {
+      suggestions: allSuggestions,
+      unassigned: allUnassigned,
+      stats: {
+        totalBlocks: blocksData.length,
+        totalDrivers: driversData.length,
+        assigned: allSuggestions.length,
+        unassigned: allUnassigned.length,
+        solverStatus: "CLAUDE_OPTIMAL"
+      }
+    };
+  }
+
+  /**
+   * Match drivers to blocks for one contract type using Claude
+   * KEY DIFFERENCE: Includes DNA preferences in the prompt!
+   */
+  private async matchContractType(
+    ctDrivers: DriverInfo[],
+    ctBlocks: BlockInfo[],
+    slotHistory: SlotHistory,
+    minDays: number,
+    contractType: string
+  ): Promise<{ suggestions: ScheduleSuggestion[]; unassigned: string[] }> {
+
+    // Build COMPLETE driver info including DNA preferences and history
+    const driverSummaries = ctDrivers.map(driver => {
+      // Get historical slots worked
+      const historySlots: string[] = [];
+      for (const [slot, driverCounts] of Object.entries(slotHistory)) {
+        const count = driverCounts[driver.id] || 0;
+        if (count > 0) {
+          historySlots.push(`${slot}(${count}x)`);
+        }
+      }
+
+      return {
+        id: driver.id,
+        name: driver.name,
+        // DNA PREFERENCES - the key data that was missing!
+        preferredDays: driver.preferredDays.length > 0 ? driver.preferredDays.join(", ") : "none specified",
+        preferredTime: driver.preferredStartTime || "none specified",
+        // Historical patterns
+        history: historySlots.slice(0, 8).join(", ") || "new driver"
+      };
+    });
+
+    // Group blocks by day for cleaner display
+    const blocksByDay: Record<string, BlockInfo[]> = {};
+    for (const block of ctBlocks) {
+      if (!blocksByDay[block.day]) blocksByDay[block.day] = [];
+      blocksByDay[block.day].push(block);
+    }
+
+    const uniqueDates = [...new Set(ctBlocks.map(b => b.serviceDate))].sort();
+
+    // Build the prompt - Claude gets ALL the context
+    const prompt = `You are an expert schedule optimizer for Amazon delivery drivers. Your task is to match drivers to delivery blocks optimally.
+
+## CONTRACT TYPE: ${contractType.toUpperCase()}
+
+## DRIVERS (${ctDrivers.length} total)
+Each driver has:
+- DNA Profile preferences (preferred days and start times from their historical patterns)
+- Historical slot data (showing which day_time slots they've worked and how many times)
+
+${driverSummaries.map(d => `
+**${d.name}** (ID: ${d.id.slice(0, 8)}...)
+  - Preferred Days: ${d.preferredDays}
+  - Preferred Start Time: ${d.preferredTime}
+  - Historical Slots: ${d.history}
+`).join("\n")}
+
+## BLOCKS TO ASSIGN (${ctBlocks.length} total across ${uniqueDates.length} days)
+${Object.entries(blocksByDay).map(([day, dayBlocks]) =>
+  `**${day.toUpperCase()}**: ${dayBlocks.length} blocks at times [${[...new Set(dayBlocks.map(b => b.time))].join(", ")}]`
+).join("\n")}
+
+## OPTIMIZATION RULES (in priority order)
+1. **Contract Type Match**: HARD CONSTRAINT - Only ${contractType} drivers can be assigned to ${contractType} blocks (already filtered)
+2. **One Block Per Day**: HARD CONSTRAINT - Each driver can work AT MOST ONE block per calendar date
+3. **DNA Preference Match**: PRIORITY 1 - Assign drivers to blocks on their preferred days and at their preferred times
+4. **Historical Pattern Match**: PRIORITY 2 - Assign drivers to slots they've historically worked (shown as day_time(Nx))
+5. **Fair Distribution**: Each driver should get ${minDays === 5 ? "equal blocks (5 each if possible)" : minDays === 4 ? "4-6 blocks" : "3-7 blocks"}
+6. **Complete Coverage**: ALL ${ctBlocks.length} blocks must be assigned
+
+## FULL BLOCK LIST (use exact IDs)
+${ctBlocks.map(b => `${b.id} | ${b.day} | ${b.time} | ${b.serviceDate}`).join("\n")}
+
+## FULL DRIVER LIST (use exact IDs)
+${ctDrivers.map(d => `${d.id} | ${d.name}`).join("\n")}
+
+## RESPONSE FORMAT
+Return ONLY a JSON array with this exact structure:
+[
+  {
+    "blockId": "full-uuid-here",
+    "driverId": "full-uuid-here",
+    "driverName": "Driver Name",
+    "reason": "brief explanation (e.g., 'preferred day + historical match')"
+  }
+]
+
+IMPORTANT:
+- Use the COMPLETE UUIDs exactly as shown above
+- Assign EVERY block exactly once
+- Each driver works max 1 block per DATE
+- Prioritize DNA preferences over historical patterns
+
+Return ONLY the JSON array, no other text or explanation.`;
+
+    try {
+      console.log(`[ClaudeScheduler] Calling Claude for ${contractType}...`);
+
+      const response = await this.client.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 8192,
+        messages: [{
+          role: "user",
+          content: prompt
+        }]
+      });
+
+      // Extract text response
+      const textBlock = response.content.find(block => block.type === "text");
+      if (!textBlock || textBlock.type !== "text") {
+        throw new Error("No text response from Claude");
+      }
+
+      const responseText = textBlock.text;
+
+      // Parse JSON from response
+      const jsonMatch = responseText.match(/\[[\s\S]*\]/);
+      if (!jsonMatch) {
+        console.error("[ClaudeScheduler] No JSON array in response:", responseText.slice(0, 500));
+        throw new Error("No JSON array found in Claude response");
+      }
+
+      const assignments = JSON.parse(jsonMatch[0]) as Array<{
+        blockId: string;
+        driverId: string;
+        driverName: string;
+        reason: string;
+      }>;
+
+      console.log(`[ClaudeScheduler] Claude returned ${assignments.length} assignments for ${contractType}`);
+
+      // Convert to suggestions format
+      const suggestions: ScheduleSuggestion[] = [];
+      const assignedBlockIds = new Set<string>();
+      const driverDateAssignments: Record<string, Set<string>> = {}; // driverId -> Set of dates
+
+      for (const assignment of assignments) {
+        const block = ctBlocks.find(b => b.id === assignment.blockId);
+        const driver = ctDrivers.find(d => d.id === assignment.driverId);
+
+        if (!block || !driver) {
+          console.warn(`[ClaudeScheduler] Invalid assignment: block=${assignment.blockId?.slice(0, 8)}, driver=${assignment.driverId?.slice(0, 8)}`);
+          continue;
+        }
+
+        if (assignedBlockIds.has(block.id)) {
+          console.warn(`[ClaudeScheduler] Block ${block.id.slice(0, 8)} already assigned, skipping`);
+          continue;
+        }
+
+        // Check driver hasn't been assigned to this date already
+        if (!driverDateAssignments[driver.id]) {
+          driverDateAssignments[driver.id] = new Set();
+        }
+        if (driverDateAssignments[driver.id].has(block.serviceDate)) {
+          console.warn(`[ClaudeScheduler] Driver ${driver.name} already assigned on ${block.serviceDate}, skipping`);
+          continue;
+        }
+
+        // Calculate confidence based on match quality
+        const slot = `${block.day}_${block.time}`;
+        const historyCount = slotHistory[slot]?.[driver.id] || 0;
+        const preferredDayMatch = driver.preferredDays.includes(block.day);
+        const preferredTimeMatch = driver.preferredStartTime === block.time;
+
+        let confidence = 0.5;
+        let matchType = "assigned";
+
+        if (preferredDayMatch && preferredTimeMatch) {
+          confidence = 1.0;
+          matchType = "perfect_match";
+        } else if (preferredDayMatch || preferredTimeMatch) {
+          confidence = 0.85;
+          matchType = "preference_match";
+        } else if (historyCount > 0) {
+          confidence = 0.7 + Math.min(0.2, historyCount * 0.05);
+          matchType = "historical";
+        }
+
+        suggestions.push({
+          blockId: block.id,
+          driverId: driver.id,
+          driverName: driver.name,
+          confidence,
+          matchType,
+          reason: assignment.reason || "Claude assignment"
+        });
+
+        assignedBlockIds.add(block.id);
+        driverDateAssignments[driver.id].add(block.serviceDate);
+      }
+
+      // Find unassigned blocks
+      const unassigned = ctBlocks
+        .filter(b => !assignedBlockIds.has(b.id))
+        .map(b => b.id);
+
+      if (unassigned.length > 0) {
+        console.warn(`[ClaudeScheduler] ${unassigned.length} blocks unassigned for ${contractType}`);
+      }
+
+      return { suggestions, unassigned };
+
+    } catch (error: any) {
+      console.error("[ClaudeScheduler] Claude API error:", error.message || error);
+      // Fallback to simple round-robin
+      return this.fallbackAssignment(ctDrivers, ctBlocks, slotHistory);
+    }
+  }
+
+  /**
+   * Fallback assignment when Claude fails
+   */
+  private fallbackAssignment(
+    ctDrivers: DriverInfo[],
+    ctBlocks: BlockInfo[],
+    slotHistory: SlotHistory
+  ): { suggestions: ScheduleSuggestion[]; unassigned: string[] } {
+    console.log("[ClaudeScheduler] Using fallback round-robin assignment");
+
+    const suggestions: ScheduleSuggestion[] = [];
+    const driverAssignmentsByDate: Record<string, Set<string>> = {};
+
+    const sortedBlocks = [...ctBlocks].sort((a, b) => a.serviceDate.localeCompare(b.serviceDate));
+
+    let driverIndex = 0;
+    for (const block of sortedBlocks) {
+      let attempts = 0;
+      while (attempts < ctDrivers.length) {
+        const driver = ctDrivers[driverIndex % ctDrivers.length];
+
+        if (!driverAssignmentsByDate[block.serviceDate]) {
+          driverAssignmentsByDate[block.serviceDate] = new Set();
+        }
+
+        if (!driverAssignmentsByDate[block.serviceDate].has(driver.id)) {
+          const slot = `${block.day}_${block.time}`;
+          const historyCount = slotHistory[slot]?.[driver.id] || 0;
+
+          suggestions.push({
+            blockId: block.id,
+            driverId: driver.id,
+            driverName: driver.name,
+            confidence: historyCount > 0 ? 0.7 : 0.5,
+            matchType: "fallback",
+            reason: "Round-robin fallback assignment"
+          });
+
+          driverAssignmentsByDate[block.serviceDate].add(driver.id);
+          driverIndex++;
+          break;
+        }
+
+        driverIndex++;
+        attempts++;
+      }
+    }
+
+    const assignedBlockIds = new Set(suggestions.map(s => s.blockId));
+    const unassigned = ctBlocks.filter(b => !assignedBlockIds.has(b.id)).map(b => b.id);
+
+    return { suggestions, unassigned };
+  }
+}
+
+// Singleton instance
+let schedulerInstance: ClaudeScheduler | null = null;
+
+async function getClaudeScheduler(): Promise<ClaudeScheduler> {
+  if (!schedulerInstance) {
+    schedulerInstance = new ClaudeScheduler();
+  }
+  return schedulerInstance;
+}
+
+/**
+ * Main export - optimize a week's schedule using Claude
+ */
+export async function optimizeWithClaude(
+  tenantId: string,
+  weekStart: Date,
+  contractTypeFilter?: "solo1" | "solo2" | "team",
+  minDays: number = 3
+): Promise<{
+  suggestions: Array<{
+    blockId: string;
+    driverId: string;
+    driverName: string;
+    confidence: number;
+    matchType: string;
+    preferredTime: string;
+    actualTime: string;
+  }>;
+  unassigned: string[];
+  stats: {
+    totalBlocks: number;
+    totalDrivers: number;
+    assigned: number;
+    unassigned: number;
+    solverStatus: string;
+  };
+}> {
+  const weekEnd = endOfWeek(weekStart, { weekStartsOn: 0 });
+
+  console.log(`[ClaudeScheduler] Optimizing ${format(weekStart, "yyyy-MM-dd")} to ${format(weekEnd, "yyyy-MM-dd")}`);
+
+  // Get drivers with DNA profiles - INCLUDING PREFERENCES
+  const allDrivers = await db
+    .select({
+      id: drivers.id,
+      firstName: drivers.firstName,
+      lastName: drivers.lastName,
+      contractType: driverDnaProfiles.preferredContractType,
+      preferredDays: driverDnaProfiles.preferredDays,
+      preferredStartTimes: driverDnaProfiles.preferredStartTimes,
+    })
+    .from(drivers)
+    .leftJoin(driverDnaProfiles, eq(drivers.id, driverDnaProfiles.driverId))
+    .where(
+      and(
+        eq(drivers.tenantId, tenantId),
+        eq(drivers.status, "active")
+      )
+    );
+
+  const driverInputs: DriverInfo[] = allDrivers.map(d => ({
+    id: d.id,
+    name: `${d.firstName} ${d.lastName}`,
+    contractType: (d.contractType || "solo1").toLowerCase(),
+    // ACTUALLY USE THE DNA PREFERENCES!
+    preferredDays: (d.preferredDays as string[]) || [],
+    preferredStartTime: ((d.preferredStartTimes as string[]) || [])[0] || ""
+  }));
+
+  // Log DNA profile stats
+  const driversWithPrefs = driverInputs.filter(d => d.preferredDays.length > 0 || d.preferredStartTime);
+  console.log(`[ClaudeScheduler] ${driversWithPrefs.length}/${driverInputs.length} drivers have DNA preferences`);
+
+  // Get unassigned blocks
+  const weekEndPlusOne = new Date(weekEnd);
+  weekEndPlusOne.setDate(weekEndPlusOne.getDate() + 1);
+
+  const allBlocks = await db
+    .select()
+    .from(blocks)
+    .where(
+      and(
+        eq(blocks.tenantId, tenantId),
+        gte(blocks.serviceDate, weekStart),
+        lte(blocks.serviceDate, weekEndPlusOne)
+      )
+    );
+
+  const assignments = await db
+    .select({ blockId: blockAssignments.blockId })
+    .from(blockAssignments)
+    .where(eq(blockAssignments.isActive, true));
+
+  const assignedBlockIds = new Set(assignments.map(a => a.blockId));
+
+  const blockInputs: BlockInfo[] = allBlocks
+    .filter(b => !assignedBlockIds.has(b.id))
+    .filter(b => {
+      if (!contractTypeFilter) return true;
+      return b.soloType?.toLowerCase() === contractTypeFilter.toLowerCase();
+    })
+    .map(b => {
+      const serviceDate = new Date(b.serviceDate);
+      const dayIndex = serviceDate.getDay();
+      const dayName = DAY_NAMES[dayIndex];
+      const soloType = (b.soloType || "solo1").toLowerCase();
+      const tractorId = b.tractorId || "Tractor_1";
+      const lookupKey = `${soloType}_${tractorId}`;
+      const time = CANONICAL_START_TIMES[lookupKey] || "00:00";
+
+      return {
+        id: b.id,
+        day: dayName,
+        time,
+        contractType: soloType,
+        serviceDate: format(serviceDate, "yyyy-MM-dd"),
+        tractorId
+      };
+    });
+
+  // Get 8-week slot history
+  const slotHistory = await get8WeekSlotHistory(tenantId, weekStart);
+
+  console.log(`[ClaudeScheduler] Found ${driverInputs.length} drivers, ${blockInputs.length} unassigned blocks`);
+
+  if (driverInputs.length === 0 || blockInputs.length === 0) {
+    return {
+      suggestions: [],
+      unassigned: blockInputs.map(b => b.id),
+      stats: {
+        totalBlocks: blockInputs.length,
+        totalDrivers: driverInputs.length,
+        assigned: 0,
+        unassigned: blockInputs.length,
+        solverStatus: "NO_DATA"
+      }
+    };
+  }
+
+  // Call Claude scheduler
+  const scheduler = await getClaudeScheduler();
+  const result = await scheduler.optimizeSchedule(driverInputs, blockInputs, slotHistory, minDays);
+
+  // Convert to expected format
+  const suggestions = result.suggestions.map(s => {
+    const block = blockInputs.find(b => b.id === s.blockId);
+    return {
+      blockId: s.blockId,
+      driverId: s.driverId,
+      driverName: s.driverName,
+      confidence: s.confidence,
+      matchType: s.matchType,
+      preferredTime: block?.time || "",
+      actualTime: block?.time || ""
+    };
+  });
+
+  return {
+    suggestions,
+    unassigned: result.unassigned,
+    stats: result.stats
+  };
+}
+
+/**
+ * Get 8-week slot history for pattern matching
+ */
+async function get8WeekSlotHistory(tenantId: string, currentWeekStart: Date): Promise<SlotHistory> {
+  const eightWeeksAgo = new Date(currentWeekStart);
+  eightWeeksAgo.setDate(eightWeeksAgo.getDate() - 56);
+
+  const historyEnd = new Date(currentWeekStart);
+  historyEnd.setDate(historyEnd.getDate() - 1);
+
+  const historyBlocks = await db
+    .select({
+      id: blocks.id,
+      serviceDate: blocks.serviceDate,
+      soloType: blocks.soloType,
+      tractorId: blocks.tractorId
+    })
+    .from(blocks)
+    .where(
+      and(
+        eq(blocks.tenantId, tenantId),
+        gte(blocks.serviceDate, eightWeeksAgo),
+        lte(blocks.serviceDate, historyEnd)
+      )
+    );
+
+  const blockIdToSlot: Record<string, string> = {};
+  for (const b of historyBlocks) {
+    const serviceDate = new Date(b.serviceDate);
+    const dayIndex = serviceDate.getDay();
+    const dayName = DAY_NAMES[dayIndex];
+    const soloType = (b.soloType || "solo1").toLowerCase();
+    const tractorId = b.tractorId || "Tractor_1";
+    const lookupKey = `${soloType}_${tractorId}`;
+    const canonicalTime = CANONICAL_START_TIMES[lookupKey] || "00:00";
+    const slot = `${dayName}_${canonicalTime}`;
+    blockIdToSlot[b.id] = slot;
+  }
+
+  const assignmentsData = await db
+    .select({
+      blockId: blockAssignments.blockId,
+      driverId: blockAssignments.driverId
+    })
+    .from(blockAssignments)
+    .where(eq(blockAssignments.isActive, true));
+
+  const slotHistory: SlotHistory = {};
+  for (const a of assignmentsData) {
+    if (!a.blockId) continue;
+    const slot = blockIdToSlot[a.blockId];
+    if (slot) {
+      if (!slotHistory[slot]) slotHistory[slot] = {};
+      slotHistory[slot][a.driverId] = (slotHistory[slot][a.driverId] || 0) + 1;
+    }
+  }
+
+  console.log(`[ClaudeScheduler] Built history: ${Object.keys(slotHistory).length} unique slots`);
+  return slotHistory;
+}
+
+/**
+ * Apply Claude-optimized assignments to database
+ */
+export async function applyClaudeSchedule(
+  tenantId: string,
+  assignments: Array<{ blockId: string; driverId: string }>
+): Promise<{ applied: number; errors: string[] }> {
+  let applied = 0;
+  const errors: string[] = [];
+
+  for (const assignment of assignments) {
+    try {
+      const existing = await db
+        .select()
+        .from(blockAssignments)
+        .where(
+          and(
+            eq(blockAssignments.blockId, assignment.blockId),
+            eq(blockAssignments.isActive, true)
+          )
+        )
+        .limit(1);
+
+      if (existing.length > 0) {
+        errors.push(`Block ${assignment.blockId} already assigned`);
+        continue;
+      }
+
+      await db.insert(blockAssignments).values({
+        tenantId,
+        blockId: assignment.blockId,
+        driverId: assignment.driverId,
+        isActive: true,
+        assignedAt: new Date(),
+        assignedBy: null
+      });
+
+      applied++;
+    } catch (e: any) {
+      errors.push(`Failed to assign ${assignment.blockId}: ${e.message}`);
+    }
+  }
+
+  console.log(`[ClaudeScheduler] Applied ${applied} assignments, ${errors.length} errors`);
+  return { applied, errors };
+}
