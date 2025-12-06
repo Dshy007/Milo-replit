@@ -105,7 +105,8 @@ async function callORToolsSolver(
       minDays
     });
 
-    const python = spawn(pythonPath, [scriptPath, input]);
+    // Pass data via stdin instead of command line args (avoids ENAMETOOLONG error)
+    const python = spawn(pythonPath, [scriptPath]);
 
     let stdout = "";
     let stderr = "";
@@ -145,6 +146,10 @@ async function callORToolsSolver(
     python.on("error", (err) => {
       reject(new Error(`Failed to start Python: ${err.message}`));
     });
+
+    // Write input to stdin and close
+    python.stdin.write(input);
+    python.stdin.end();
   });
 }
 

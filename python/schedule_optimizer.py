@@ -280,12 +280,13 @@ def solve_contract_type(drivers: list, blocks: list, slot_history: dict,
 
 
 def main():
-    if len(sys.argv) < 2:
-        print(json.dumps({"error": "No input provided"}))
-        sys.exit(1)
-
+    # Read from stdin (handles large data that exceeds command line limits)
     try:
-        data = json.loads(sys.argv[1])
+        input_data = sys.stdin.read()
+        if not input_data:
+            print(json.dumps({"error": "No input provided"}))
+            sys.exit(1)
+        data = json.loads(input_data)
     except json.JSONDecodeError as e:
         print(json.dumps({"error": f"Invalid JSON: {e}"}))
         sys.exit(1)
