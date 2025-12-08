@@ -167,8 +167,9 @@ export async function analyzeDriverDNA(options: AnalysisOptions): Promise<Analys
   console.log(`[DNA Analyzer] Date range: ${format(startDate, 'yyyy-MM-dd')} to ${format(endDate, 'yyyy-MM-dd')}`);
 
   // Use the block-assignment based analyzer (NOT the Gemini profiler)
-  // This uses computeDNAFromBlockAssignments() which returns 1 preferred time
-  const result = await regenerateDNAFromBlockAssignments(tenantId);
+  // This uses computeDNAFromBlockAssignments() with configurable dayThreshold
+  const threshold = options.dayThreshold !== undefined ? options.dayThreshold : 0.25;
+  const result = await regenerateDNAFromBlockAssignments(tenantId, threshold);
 
   console.log(`[DNA Analyzer] Complete: ${result.updated} updated, ${result.skipped} skipped`);
 
@@ -501,7 +502,7 @@ function computeDNAFromBlockAssignments(assignments: {
   startTime: string;
   soloType: string;
   tractorId: string;
-}[]): ComputedDNA {
+}[], dayThreshold: number = 0.25): ComputedDNA {
   if (assignments.length === 0) {
     return {
       preferredDays: [],
@@ -577,8 +578,11 @@ function computeDNAFromBlockAssignments(assignments: {
     }
   }
 
+  // Use configurable threshold to capture day patterns
+  // Lower threshold (e.g., 0.25) = more days captured (broader patterns)
+  // Higher threshold (e.g., 0.80) = only dominant days captured (stricter)
   const preferredDays = Array.from(dayWeekCount.entries())
-    .filter(([_, weekCount]) => weekCount >= totalWeeks * 0.5)
+    .filter(([_, weekCount]) => weekCount >= totalWeeks * dayThreshold)
     .sort((a, b) => {
       const diff = b[1] - a[1];
       if (diff !== 0) return diff;
@@ -586,12 +590,13 @@ function computeDNAFromBlockAssignments(assignments: {
     })
     .map(([day]) => day);
 
+  // Capture all days worked if threshold doesn't find enough, otherwise use threshold-based days
   const finalPreferredDays = preferredDays.length > 0
     ? preferredDays
-    : getTopNFromMap(dayFrequency, 4);
+    : getTopNFromMap(dayFrequency, 7); // Capture ALL days worked if no threshold match
 
-  // Only store PRIMARY (most frequent) time - matching uses only first time
-  const preferredStartTimes = getTopNFromMap(timeFrequency, 1);
+  // Store TOP 3 preferred times - Claude uses all for flexible matching
+  const preferredStartTimes = getTopNFromMap(timeFrequency, 3);
   const preferredTractors = getTopNFromMap(tractorFrequency, 3);
   // NOTE: preferredContractType was already determined in PASS 1 above
 
@@ -644,13 +649,13 @@ function computeDNAFromBlockAssignments(assignments: {
  * Regenerate DNA profiles from block_assignments data
  * Uses improved algorithm that looks at actual assignment patterns
  */
-export async function regenerateDNAFromBlockAssignments(tenantId: string): Promise<{
+export async function regenerateDNAFromBlockAssignments(tenantId: string, dayThreshold: number = 0.25): Promise<{
   processed: number;
   updated: number;
   skipped: number;
   details: { name: string; changed: boolean; before: string; after: string }[];
 }> {
-  console.log(`[DNA Regenerate] Starting for tenant ${tenantId}`);
+  console.log(`[DNA Regenerate] Starting for tenant ${tenantId}, dayThreshold: ${dayThreshold}`);
 
   // Only analyze assignments from the LAST 4 WEEKS (recency-weighted)
   const fourWeeksAgo = subWeeks(new Date(), 4);
@@ -719,7 +724,7 @@ export async function regenerateDNAFromBlockAssignments(tenantId: string): Promi
       continue;
     }
 
-    const newDNA = computeDNAFromBlockAssignments(assignments);
+    const newDNA = computeDNAFromBlockAssignments(assignments, dayThreshold);
 
     // Get existing profile
     const existingResult = await db.execute(sql`

@@ -202,26 +202,30 @@ function checkDriverCompliance(
     });
   }
 
-  // Check Solo2 48-hour start-to-start gap
+  // Check Solo2 10-hour rest requirement (DOT standard)
   if (newBlock.blockType === "solo2") {
     for (const existing of driverBlocks) {
       if (existing.blockType === "solo2") {
-        const hoursBetween = getHoursBetween(
+        // Calculate end time of existing block
+        const existingEndDate = addHoursToDateTime(
           existing.date,
           existing.startTime,
-          newBlock.date,
-          newBlock.startTime
+          DOT_RULES.solo2.blockDuration
         );
-        if (hoursBetween < DOT_RULES.solo2.minStartToStartGap) {
+        const newStartDate = new Date(`${newBlock.date}T${newBlock.startTime}:00`);
+        // Hours from existing block END to new block START
+        const restHours = (newStartDate.getTime() - existingEndDate.getTime()) / (1000 * 60 * 60);
+
+        if (restHours > 0 && restHours < DOT_RULES.solo2.minRestBetweenShifts) {
           violations.push({
             type: "insufficient_gap",
             severity: "error",
-            message: `Solo2 requires 48h between starts. ${driver.name} has only ${hoursBetween.toFixed(1)}h gap`,
+            message: `DOT requires 10h rest between shifts. ${driver.name} has only ${restHours.toFixed(1)}h`,
             details: {
               driverId: driver.id,
               blockId: newBlock.blockId,
-              actualValue: hoursBetween,
-              requiredValue: DOT_RULES.solo2.minStartToStartGap,
+              actualValue: restHours,
+              requiredValue: DOT_RULES.solo2.minRestBetweenShifts,
             },
           });
         }

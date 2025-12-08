@@ -15,7 +15,8 @@
       "Bash(\"/c/Users/shire/AppData/Local/Programs/Python/Python312/python.exe\" python/assignment_predictor.py '{\"\"\"\"action\"\"\"\":\"\"\"\"predict\"\"\"\",\"\"\"\"blocks\"\"\"\":[{\"\"\"\"blockId\"\"\"\":\"\"\"\"B-TEST\"\"\"\",\"\"\"\"contractType\"\"\"\":\"\"\"\"solo2\"\"\"\"}],\"\"\"\"drivers\"\"\"\":[{\"\"\"\"id\"\"\"\":\"\"\"\"1\"\"\"\",\"\"\"\"name\"\"\"\":\"\"\"\"John\"\"\"\",\"\"\"\"type\"\"\"\":\"\"\"\"solo2\"\"\"\"}]}')",
       "Bash(pip install:*)",
       "Bash(curl:*)",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Bash(cat:*)"
     ],
     "deny": [],
     "ask": []

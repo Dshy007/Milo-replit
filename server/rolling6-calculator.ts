@@ -6,12 +6,14 @@ type ShiftTemplate = typeof shiftTemplates.$inferSelect;
 
 /**
  * DOT Rolling-6 Compliance Calculator
- * 
+ *
  * CRITICAL RULES:
+ * - All drivers: 10 hours minimum rest between shifts
+ * - All drivers: 34 hours off after 6 consecutive work days
  * - Solo1: Maximum 14 hours duty time in any 1 duty day (24-hour period)
  * - Solo2: Maximum 38 hours duty time in any 2 duty days (48-hour period)
  * - Team: Different rules (not implemented yet)
- * 
+ *
  * A "duty day" is a rolling 24-hour window, not calendar day.
  * Must look back from the proposed block start time.
  */

@@ -35,13 +35,15 @@ import { useToast } from "@/hooks/use-toast";
 import { queryClient } from "@/lib/queryClient";
 import { DriverAssignmentModal } from "@/components/DriverAssignmentModal";
 import { ScheduleListView } from "@/components/ScheduleListView";
-import { DriverPoolSidebar, calculateBlockMatch, timeToMinutes } from "@/components/DriverPoolSidebar";
+import { DriverPoolSidebar, calculateBlockMatch, timeToMinutes, type BlockMatchResult, type StrictnessLevel } from "@/components/DriverPoolSidebar";
 import { getMatchColor, getMatchBgColor } from "@/lib/utils";
 import { ContractTypeBadge } from "@/components/ContractTypeBadge";
 import { DNAPatternBadge } from "@/components/DNAPatternBadge";
 import type { DriverDnaProfile } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
 import type { Block, BlockAssignment, Driver, Contract } from "@shared/schema";
+import { MiloChat } from "@/components/MiloChat";
+import { MessageSquare } from "lucide-react";
 
 // Day formatting helpers for DNA profile display (Sunday-Saturday order)
 const DAY_ORDER = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
@@ -83,6 +85,18 @@ type ShiftOccurrence = {
 type CalendarResponse = {
   range: { start: string; end: string };
   occurrences: ShiftOccurrence[];
+};
+
+// Block analysis type for Driver Profile Analyzer
+type BlockAnalysis = {
+  occurrence: ShiftOccurrence;
+  topMatches: Array<{
+    driverId: string;
+    driverName: string;
+    score: number;
+    matchResult: BlockMatchResult;
+    dnaProfile: DriverDnaProfile;
+  }>;
 };
 
 // Draggable occurrence component
@@ -335,6 +349,9 @@ export default function Schedules() {
     },
   });
 
+  // Block analyzer state
+  const [showBlockAnalyzer, setShowBlockAnalyzer] = useState(false);
+
   // Compliance analysis state
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisProgress, setAnalysisProgress] = useState(0);
@@ -378,6 +395,7 @@ export default function Schedules() {
   // hoveredDriverId = ephemeral hover state for visual highlighting
   const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
   const [hoveredDriverId, setHoveredDriverId] = useState<string | null>(null);
+  const [isMiloChatOpen, setIsMiloChatOpen] = useState(false);
   // Matching block IDs from sidebar - these are the EXACT blocks shown in the flip card
   const [sidebarMatchingBlockIds, setSidebarMatchingBlockIds] = useState<string[]>([]);
   // Flip card state moved to sidebar - isCardFlipped and showAllBlocks removed
@@ -750,15 +768,15 @@ export default function Schedules() {
 
   const clearAllMutation = useMutation({
     mutationFn: async ({ weekStart, weekEnd }: { weekStart: string; weekEnd: string }) => {
-      // Clear both shift occurrences AND imported blocks
-      const [shiftsResponse, blocksResponse] = await Promise.all([
+      // Clear driver assignments from blocks (keeps blocks intact for re-matching)
+      const [shiftsResponse, assignmentsResponse] = await Promise.all([
         fetch('/api/shift-occurrences/clear-week', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
           body: JSON.stringify({ weekStart, weekEnd }),
         }),
-        fetch('/api/blocks/clear-week', {
+        fetch('/api/assignments/clear-week', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
@@ -771,26 +789,26 @@ export default function Schedules() {
         throw new Error(error.message || 'Failed to clear shifts');
       }
 
-      if (!blocksResponse.ok) {
-        const error = await blocksResponse.json();
-        throw new Error(error.message || 'Failed to clear blocks');
+      if (!assignmentsResponse.ok) {
+        const error = await assignmentsResponse.json();
+        throw new Error(error.message || 'Failed to clear assignments');
       }
 
-      const [shiftsResult, blocksResult] = await Promise.all([
+      const [shiftsResult, assignmentsResult] = await Promise.all([
         shiftsResponse.json(),
-        blocksResponse.json(),
+        assignmentsResponse.json(),
       ]);
 
       return {
         shiftsCount: shiftsResult.count || 0,
-        blocksCount: blocksResult.count || 0
+        assignmentsCount: assignmentsResult.count || 0
       };
     },
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
       toast({
-        title: "Schedule Cleared",
-        description: `Deleted ${result.shiftsCount} shifts and ${result.blocksCount} imported blocks`,
+        title: "Assignments Cleared",
+        description: `Cleared ${result.shiftsCount} shifts and ${result.assignmentsCount} block assignments`,
       });
       setShowClearAllDialog(false);
     },
@@ -1458,6 +1476,43 @@ export default function Schedules() {
     return calendarData.occurrences.filter(occ => !occ.driverId);
   }, [calendarData]);
 
+  // Block analysis for Driver Profile Analyzer - analyze each unassigned block against all drivers
+  const blockAnalysis = useMemo<BlockAnalysis[]>(() => {
+    if (!unassignedOccurrences.length || !dnaData?.profiles?.length) return [];
+
+    // Map driver IDs to driver names for lookup
+    const driverNameMap = new Map<string, string>();
+    for (const driver of allDrivers) {
+      driverNameMap.set(driver.id, `${driver.firstName} ${driver.lastName}`);
+    }
+
+    return unassignedOccurrences.map(occ => {
+      // Calculate match scores for ALL drivers with DNA profiles
+      const driverMatches = dnaData.profiles
+        .map((profile: DriverDnaProfile) => {
+          const matchResult = calculateBlockMatch(
+            occ,
+            profile,
+            'balanced' as StrictnessLevel
+          );
+          return {
+            driverId: profile.driverId,
+            driverName: driverNameMap.get(profile.driverId) || profile.driverId,
+            score: matchResult.score,
+            matchResult,
+            dnaProfile: profile,
+          };
+        })
+        .filter(match => match.score > 0) // Only include drivers with some match
+        .sort((a, b) => b.score - a.score); // Sort by score descending
+
+      return {
+        occurrence: occ,
+        topMatches: driverMatches, // Include ALL matching drivers, not just top 5
+      };
+    });
+  }, [unassignedOccurrences, dnaData?.profiles, allDrivers]);
+
   // Use the matching block IDs from the sidebar (single source of truth)
   // These are the EXACT same blocks shown in the flip card
   const highlightedOccurrenceIds = useMemo(() => {
@@ -1535,18 +1590,39 @@ export default function Schedules() {
             datetime: new Date(`${o.serviceDate}T${o.startTime}:00`),
           }));
 
-        // Check DOT compliance: minimum gap between blocks
-        const minGapHours = isSolo2 ? 48 : 24;
-        const minGapMs = minGapHours * 60 * 60 * 1000;
+        // Check DOT compliance based on contract type:
+        // - Solo1: 12hr block + 10hr rest = 22hr minimum from start to start
+        // - Solo2: 24hr block (leave Day 1, return Day 2) + 10hr rest = 34hr from start to start
+        const BLOCK_DURATION_HOURS = isSolo2 ? 24 : 12;
+        const REST_HOURS = 10;
+        const minGapMs = (BLOCK_DURATION_HOURS + REST_HOURS) * 60 * 60 * 1000;
+        const gapDescription = isSolo2 ? '24hr block + 10hr rest' : '12hr block + 10hr rest';
 
         for (const existing of driverAssignments) {
-          const timeDiff = Math.abs(blockDatetime.getTime() - existing.datetime.getTime());
-          if (timeDiff < minGapMs) {
+          // New block must start after the min gap from existing block
+          const timeDiff = blockDatetime.getTime() - existing.datetime.getTime();
+
+          // Check if new block is within the blocked window
+          if (timeDiff >= 0 && timeDiff < minGapMs) {
+            const driver = allDrivers.find(d => d.id === driverId);
+            const earliestStart = new Date(existing.datetime.getTime() + minGapMs);
+            const earliestTimeStr = earliestStart.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+            toast({
+              variant: "destructive",
+              title: "Assignment Blocked",
+              description: `${driver?.firstName} ${driver?.lastName} has a block on ${existing.date}. Next block can start at ${earliestTimeStr} (${gapDescription}).`,
+            });
+            return; // Don't proceed with assignment
+          }
+
+          // Also check if existing block would start within the gap window after the new block
+          const reverseTimeDiff = existing.datetime.getTime() - blockDatetime.getTime();
+          if (reverseTimeDiff >= 0 && reverseTimeDiff < minGapMs) {
             const driver = allDrivers.find(d => d.id === driverId);
             toast({
               variant: "destructive",
               title: "Assignment Blocked",
-              description: `${driver?.firstName} ${driver?.lastName} already has a block on ${existing.date}. ${isSolo2 ? 'Solo2' : 'Solo1'} drivers need ${minGapHours}hr gaps between blocks.`,
+              description: `${driver?.firstName} ${driver?.lastName} has a later block that's too close. Need ${BLOCK_DURATION_HOURS + REST_HOURS}hr gap (${gapDescription}).`,
             });
             return; // Don't proceed with assignment
           }
@@ -1924,31 +2000,6 @@ export default function Schedules() {
               </Button>
 
               <Button
-                variant="default"
-                size="sm"
-                onClick={() => analyzeDnaMutation.mutate()}
-                disabled={analyzeDnaMutation.isPending}
-                className="bg-green-600 hover:bg-green-700 text-white"
-                data-testid="button-analyze"
-              >
-                {analyzeDnaMutation.isPending ? (
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                ) : (
-                  <Zap className="w-4 h-4 mr-2" />
-                )}
-                {analyzeDnaMutation.isPending ? "Analyzing..." : "Analyze"}
-                {!analyzeDnaMutation.isPending && calendarData && (
-                  <>
-                    {calendarData.occurrences.filter(b => !b.driverId && !b.isRejectedLoad).length > 0 && (
-                      <Badge variant="outline" className="ml-2 text-xs bg-amber-500/20 text-amber-300 border-amber-500/50">
-                        {calendarData.occurrences.filter(b => !b.driverId && !b.isRejectedLoad).length}
-                      </Badge>
-                    )}
-                  </>
-                )}
-              </Button>
-
-              <Button
                 variant="destructive"
                 size="sm"
                 onClick={() => setShowClearAllDialog(true)}
@@ -1956,6 +2007,17 @@ export default function Schedules() {
               >
                 <X className="w-4 h-4 mr-2" />
                 Clear All
+              </Button>
+
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setIsMiloChatOpen(true)}
+                className="bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 text-white border-0"
+                data-testid="button-milo-chat"
+              >
+                <MessageSquare className="w-4 h-4 mr-2" />
+                Ask MILO
               </Button>
 
               {/* DNA Matching Status Indicator */}
@@ -2186,6 +2248,22 @@ export default function Schedules() {
                 </Label>
               </div>
             )}
+
+            {/* Block Analyzer Toggle */}
+            <Button
+              variant={showBlockAnalyzer ? "default" : "outline"}
+              size="sm"
+              onClick={() => setShowBlockAnalyzer(!showBlockAnalyzer)}
+              className="flex items-center gap-1"
+            >
+              <Dna className="w-4 h-4" />
+              Block Analyzer
+              {blockAnalysis.length > 0 && (
+                <Badge variant="secondary" className="ml-1 text-xs">
+                  {blockAnalysis.length}
+                </Badge>
+              )}
+            </Button>
           </div>
         </div>
 
@@ -2741,10 +2819,10 @@ export default function Schedules() {
       <AlertDialog open={showClearAllDialog} onOpenChange={setShowClearAllDialog}>
         <AlertDialogContent data-testid="dialog-confirm-clear-all">
           <AlertDialogHeader>
-            <AlertDialogTitle>Clear All Shifts for This Week?</AlertDialogTitle>
+            <AlertDialogTitle>Clear All Assignments for This Week?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently delete ALL shift occurrences for the week of {format(weekRange.weekStart, "MMM d")} - {format(addDays(weekRange.weekStart, 6), "MMM d, yyyy")}.
-              This action cannot be undone.
+              This will clear ALL driver assignments for the week of {format(weekRange.weekStart, "MMM d")} - {format(addDays(weekRange.weekStart, 6), "MMM d, yyyy")}.
+              Imported blocks will remain so you can re-run Auto-Match.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -2825,6 +2903,97 @@ export default function Schedules() {
         currentWeekStart={weekRange.weekStart}
       />
 
+      {/* Block Analyzer Panel */}
+      <Dialog open={showBlockAnalyzer} onOpenChange={setShowBlockAnalyzer}>
+        <DialogContent className="max-w-6xl max-h-[85vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Dna className="w-5 h-5 text-purple-500" />
+              Block Analyzer - {blockAnalysis.length} Unassigned Blocks
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex-1 overflow-auto">
+            {blockAnalysis.length === 0 ? (
+              <div className="text-center py-12 text-muted-foreground">
+                No unassigned blocks to analyze. All blocks have drivers assigned.
+              </div>
+            ) : (
+              <table className="w-full text-sm border-collapse">
+                <thead className="sticky top-0 bg-background border-b z-10">
+                  <tr>
+                    <th className="text-left p-2 font-semibold">Block</th>
+                    <th className="text-left p-2 font-semibold">Date</th>
+                    <th className="text-left p-2 font-semibold">Time</th>
+                    <th className="text-left p-2 font-semibold">Type</th>
+                    <th className="text-left p-2 font-semibold">Matching Drivers (click to assign)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {blockAnalysis.map((analysis) => (
+                    <tr key={analysis.occurrence.occurrenceId} className="border-b hover:bg-muted/50">
+                      <td className="p-2 font-mono font-semibold">{analysis.occurrence.blockId}</td>
+                      <td className="p-2">{format(new Date(analysis.occurrence.serviceDate + 'T00:00:00'), 'EEE MMM d')}</td>
+                      <td className="p-2 font-mono">{analysis.occurrence.startTime}</td>
+                      <td className="p-2">
+                        <Badge className={getBlockTypeColor(analysis.occurrence.contractType || '')}>
+                          {analysis.occurrence.contractType || 'N/A'}
+                        </Badge>
+                      </td>
+                      <td className="p-2">
+                        {analysis.topMatches.length === 0 ? (
+                          <span className="text-muted-foreground italic">No matching drivers</span>
+                        ) : (
+                          <div className="flex flex-wrap gap-1">
+                            {analysis.topMatches.map((match) => (
+                              <button
+                                key={match.driverId}
+                                onClick={async () => {
+                                  try {
+                                    await updateAssignmentMutation.mutateAsync({
+                                      occurrenceId: analysis.occurrence.occurrenceId,
+                                      driverId: match.driverId,
+                                    });
+                                    toast({
+                                      title: "Driver Assigned",
+                                      description: `${match.driverName} assigned to ${analysis.occurrence.blockId}`,
+                                    });
+                                  } catch (error: any) {
+                                    toast({
+                                      variant: "destructive",
+                                      title: "Assignment Failed",
+                                      description: error.message || "Failed to assign driver",
+                                    });
+                                  }
+                                }}
+                                className={`
+                                  px-2 py-1 rounded text-xs font-medium transition-all
+                                  hover:scale-105 hover:shadow-md cursor-pointer
+                                  ${match.score >= 100
+                                    ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300 border border-green-300'
+                                    : match.score >= 75
+                                    ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300 border border-blue-300'
+                                    : match.score >= 50
+                                    ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 border border-amber-300'
+                                    : 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300 border border-gray-300'
+                                  }
+                                `}
+                                title={`Click to assign ${match.driverName} to this block`}
+                              >
+                                {match.driverName} ({match.score}%)
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Actuals Comparison Review */}
       <ActualsComparisonReview
         open={isActualsReviewOpen}
@@ -2871,6 +3040,9 @@ export default function Schedules() {
           </div>
         </div>
       )}
+
+      {/* MILO Chat */}
+      <MiloChat isOpen={isMiloChatOpen} onClose={() => setIsMiloChatOpen(false)} />
 
     </div>
   </div>

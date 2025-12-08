@@ -86,10 +86,10 @@ export const DOT_RULES = {
     estimatedPay: 498,            // dollars
   },
   solo2: {
-    blockDuration: 38,            // hours
-    minStartToStartGap: 48,       // hours - THE KEY RULE for Solo2
-    maxConsecutiveDays: 6,
-    weeklyReset: 34,              // hours
+    blockDuration: 24,            // hours - Solo2 is overnight route (leave Day 1, return Day 2)
+    minRestBetweenShifts: 10,     // hours - DOT requires 10hr rest between shifts
+    maxConsecutiveDays: 6,        // Amazon builds Wed out, Thu back w/10hr rest, Fri out for consistency
+    weeklyReset: 34,              // hours required for weekly reset after 6 days
     bumpTolerance: 2,             // hours
     maxPerWeek: 3,
     estimatedPay: 980,            // dollars

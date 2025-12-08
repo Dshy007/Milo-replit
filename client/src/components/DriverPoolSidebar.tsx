@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
-import { User, Search, ChevronDown, ChevronRight, ChevronLeft, Sparkles, ExternalLink, Calendar, Clock, Truck, Dna, Filter, Sliders, Target, TrendingUp, Crown, Zap, Wand2, Loader2 } from "lucide-react";
+import { User, Search, ChevronDown, ChevronRight, ChevronLeft, Sparkles, ExternalLink, Calendar, Clock, Truck, Dna, Filter, Sliders, Target, TrendingUp, Crown, Zap, Wand2, Loader2, RefreshCw, Settings2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { Input } from "@/components/ui/input";
@@ -13,7 +13,7 @@ import { Slider } from "@/components/ui/slider";
 import { DNAPatternBadge } from "@/components/DNAPatternBadge";
 import { ContractTypeBadge } from "@/components/ContractTypeBadge";
 import { useLocation } from "wouter";
-import { getMatchColor } from "@/lib/utils";
+import { getMatchColor, cn } from "@/lib/utils";
 import type { Driver, DriverDnaProfile } from "@shared/schema";
 
 // Match threshold (0-100) - higher = stricter matching
@@ -93,6 +93,32 @@ const STRATEGY_OPTIONS: Record<ScheduleStrategy, {
     prioritize: 'balance',
   },
 };
+
+// Analysis Accuracy: 0-100% where 100% = most confident results (balanced threshold)
+// User perspective: 100% = "I'm confident these are their true preferences"
+function accuracyToThreshold(accuracy: number): number {
+  const minThreshold = 0.25; // Best results (100% confidence)
+  const maxThreshold = 0.80; // Strictest (0% confidence)
+  return maxThreshold - (accuracy / 100) * (maxThreshold - minThreshold);
+}
+
+function getAccuracyLabel(accuracy: number): string {
+  // Higher accuracy = lower threshold = more days captured = broader patterns
+  // Lower accuracy = higher threshold = fewer days captured = stricter patterns
+  if (accuracy >= 90) return "Broad (more days)";
+  if (accuracy >= 70) return "Moderate";
+  if (accuracy >= 50) return "Balanced";
+  if (accuracy >= 30) return "Selective";
+  return "Strict (fewer days)";
+}
+
+function getAccuracyColor(accuracy: number): string {
+  if (accuracy >= 90) return "text-emerald-600 dark:text-emerald-400";
+  if (accuracy >= 70) return "text-blue-600 dark:text-blue-400";
+  if (accuracy >= 50) return "text-sky-600 dark:text-sky-400";
+  if (accuracy >= 30) return "text-amber-600 dark:text-amber-400";
+  return "text-orange-600 dark:text-orange-400";
+}
 
 type ShiftOccurrence = {
   occurrenceId: string;
@@ -336,16 +362,26 @@ function DraggableDriver({ driver, dnaProfile, onHoverStart, onHoverEnd, onSelec
                           if (isFloatingAway) return; // Already clicked
 
                           // Calculate which blocks conflict with this one (DOT rules)
+                          // Solo1: 12hr block + 10hr rest = 22hr from start to next start
+                          // Solo2: 24hr block + 10hr rest = 34hr from start to next start
                           const clickedDatetime = new Date(`${occ.serviceDate}T${occ.startTime}:00`);
-                          const isSolo2 = (occ.contractType || '').toLowerCase() === 'solo2';
-                          const minGapMs = (isSolo2 ? 48 : 24) * 60 * 60 * 1000;
+                          const isSolo2 = dnaProfile?.preferredContractType?.toLowerCase() === 'solo2';
+                          const BLOCK_DURATION_HOURS = isSolo2 ? 24 : 12;
+                          const REST_HOURS = 10;
+                          const minGapMs = (BLOCK_DURATION_HOURS + REST_HOURS) * 60 * 60 * 1000;
 
                           // Find all conflicting blocks and mark them all as floating away
                           const conflictingIds = new Set<string>([occ.occurrenceId]);
                           for (const match of matchingBlocks) {
                             const matchDatetime = new Date(`${match.occurrence.serviceDate}T${match.occurrence.startTime}:00`);
-                            const timeDiff = Math.abs(clickedDatetime.getTime() - matchDatetime.getTime());
-                            if (timeDiff < minGapMs) {
+                            // Check if match is within gap window after clicked block
+                            const timeDiffForward = matchDatetime.getTime() - clickedDatetime.getTime();
+                            // Check if clicked block is within gap window after match
+                            const timeDiffBackward = clickedDatetime.getTime() - matchDatetime.getTime();
+
+                            // Conflict if either block is within the min gap window of the other
+                            if ((timeDiffForward >= 0 && timeDiffForward < minGapMs) ||
+                                (timeDiffBackward >= 0 && timeDiffBackward < minGapMs)) {
                               conflictingIds.add(match.occurrence.occurrenceId);
                             }
                           }
@@ -526,17 +562,16 @@ function calculateBlockMatch(
     return noMatch;
   }
 
-  // CRITICAL: Exclude drivers with empty preferences (must have BOTH days AND time set)
+  // CRITICAL: Exclude drivers with empty preferences (must have BOTH days AND times set)
   // This matches the Python OR-Tools logic - empty preferences = ineligible, not "match anything"
   const preferredDays = dnaProfile.preferredDays || [];
   const preferredTimes = dnaProfile.preferredStartTimes || [];
-  const primaryTime = preferredTimes[0]; // Only use the first/primary preferred time
 
-  if (preferredDays.length === 0 || !primaryTime) {
+  if (preferredDays.length === 0 || preferredTimes.length === 0) {
     if (debug) {
       console.log('[DNA MATCH] Driver has incomplete preferences - EXCLUDED:', {
         preferredDays,
-        primaryTime: primaryTime || 'EMPTY',
+        preferredTimes: preferredTimes.length > 0 ? preferredTimes : 'EMPTY',
       });
     }
     return noMatch;
@@ -564,15 +599,26 @@ function calculateBlockMatch(
     return noMatch;
   }
 
-  // Check time match - since we already validated primaryTime exists above,
-  // calculate time difference for scoring
+  // Check time match against ALL preferred times (not just the first one!)
+  // This is critical: Firas with times [17:30, 16:30] should match blocks at BOTH times
   const blockTimeMinutes = timeToMinutes(occurrence.startTime);
-  const prefMinutes = timeToMinutes(primaryTime);
-  const diff = Math.abs(blockTimeMinutes - prefMinutes);
-  // Handle wraparound for overnight times
-  const timeDiff = Math.min(diff, 1440 - diff);
 
-  const timeMatches = timeDiff === 0; // Exact match to PRIMARY time only
+  // Find the best (smallest) time difference across ALL preferred times
+  let bestTimeDiff = Infinity;
+  let timeMatches = false;
+  for (const prefTime of preferredTimes) {
+    const prefMinutes = timeToMinutes(prefTime);
+    const diff = Math.abs(blockTimeMinutes - prefMinutes);
+    // Handle wraparound for overnight times
+    const wrappedDiff = Math.min(diff, 1440 - diff);
+    if (wrappedDiff < bestTimeDiff) {
+      bestTimeDiff = wrappedDiff;
+    }
+    if (wrappedDiff === 0) {
+      timeMatches = true; // Exact match to ANY preferred time
+    }
+  }
+  const timeDiff = bestTimeDiff;
 
   // Debug: Log day/time matching details
   if (debug) {
@@ -583,7 +629,7 @@ function calculateBlockMatch(
       blockTime: occurrence.startTime,
       blockTimeMinutes,
       preferredDays,
-      primaryTime,
+      preferredTimes,
       dayMatches,
       timeMatches,
       timeDiff,
@@ -655,6 +701,7 @@ export function DriverPoolSidebar({
   const [showStrictnessSlider, setShowStrictnessSlider] = useState(false);
   const [strategy, setStrategy] = useState<ScheduleStrategy | null>(null);
   const [showStrategyOptions, setShowStrategyOptions] = useState(false);
+  const [analysisAccuracy, setAnalysisAccuracy] = useState(75); // 0-100%, default 75% (confident)
   const [orToolsResult, setOrToolsResult] = useState<{
     suggestions: Array<{
       blockId: string;
@@ -673,11 +720,11 @@ export function DriverPoolSidebar({
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  // Claude AI Auto-Match mutation
+  // Deterministic Auto-Match mutation (fast, no AI)
   const autoMatchMutation = useMutation({
     mutationFn: async () => {
       const weekStart = currentWeekStart.toISOString().split('T')[0];
-      const response = await apiRequest("POST", "/api/matching/claude", {
+      const response = await apiRequest("POST", "/api/matching/deterministic", {
         weekStart,
         contractType: contractFilter !== 'all' ? contractFilter : undefined,
       });
@@ -687,7 +734,7 @@ export function DriverPoolSidebar({
       if (data.success) {
         setOrToolsResult(data);
         toast({
-          title: "Claude Matching Complete",
+          title: "Auto-Match Complete",
           description: `Found ${data.stats.assigned} matches for ${data.stats.totalBlocks} blocks`,
         });
       } else {
@@ -707,10 +754,10 @@ export function DriverPoolSidebar({
     },
   });
 
-  // Apply Claude suggestions mutation
+  // Apply deterministic suggestions mutation
   const applyMatchesMutation = useMutation({
     mutationFn: async (assignments: Array<{ blockId: string; driverId: string }>) => {
-      const response = await apiRequest("POST", "/api/matching/claude/apply", { assignments });
+      const response = await apiRequest("POST", "/api/matching/deterministic/apply", { assignments });
       return response.json();
     },
     onSuccess: (data) => {
@@ -736,6 +783,26 @@ export function DriverPoolSidebar({
         description: error.message,
         variant: "destructive",
       });
+    },
+  });
+
+  // DNA Analysis mutation (Re-analyze all drivers)
+  const analyzeMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/driver-dna/analyze", {
+        dayThreshold: accuracyToThreshold(analysisAccuracy),
+      });
+      return res.json();
+    },
+    onSuccess: (result: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/driver-dna"] });
+      toast({
+        title: "Analysis Complete",
+        description: `Analyzed ${result.totalDrivers} drivers successfully.`,
+      });
+    },
+    onError: (error: any) => {
+      toast({ title: "Analysis Failed", description: error.message, variant: "destructive" });
     },
   });
 
@@ -851,8 +918,8 @@ export function DriverPoolSidebar({
   // Calculate matching blocks for a driver (Holy Grail: day + time + contract must match)
   //
   // DOT Compliance Rules:
-  // - SOLO2: 48-hour minimum between block STARTS (38hr block + 10hr rest)
-  // - SOLO1: 10-hour rest between blocks (but blocks are shorter ~10-14hr)
+  // - Both Solo1 and Solo2: 10 hours minimum rest between shifts
+  // - After 6 consecutive days: 34 hours off required
   // - Weekly max: Solo2 = 3 blocks, Solo1 = 6 blocks
   const getMatchingBlocks = (driverId: string): MatchingBlock[] => {
     const profile = dnaProfileMap.get(driverId);
@@ -893,14 +960,25 @@ export function DriverPoolSidebar({
     // This is the fundamental rule - regardless of time gaps, only one block per day
     const occupiedDates = new Set<string>(existingAssignments.map(a => a.date));
 
-    // Additionally track time windows for Solo2 48-hour / Solo1 24-hour spacing
-    const minGapHours = isSolo2 ? 48 : 24;
-    const minGapMs = minGapHours * 60 * 60 * 1000;
+    // DOT requires 10 hours minimum rest between shifts
+    // Block durations vary by contract type:
+    // - Solo1: 12hr block + 10hr rest = 22 hours from start to next start
+    // - Solo2: 24hr block (leave Day 1, return Day 2) + 10hr rest = 34 hours from start to next start
+    //   Amazon builds Solo2 for consistency: Wed 16:30 → Thu 16:30 return → 10hr rest → Fri 16:30 valid
+    //   Example: Wed 16:30 + 24hr = Thu 16:30 return + 10hr rest = Fri 02:30 earliest, so Fri 16:30 works
+    const SOLO1_BLOCK_HOURS = 12;
+    const SOLO2_BLOCK_HOURS = 24; // Solo2 is 24hr (overnight route), allowing Wed/Fri pattern with 10hr rest between
+    const REST_HOURS = 10;
+
+    // Calculate min gap based on THIS driver's contract type
+    const blockDurationHours = isSolo2 ? SOLO2_BLOCK_HOURS : SOLO1_BLOCK_HOURS;
+    const minGapFromStartMs = (blockDurationHours + REST_HOURS) * 60 * 60 * 1000;
 
     // Build blocked time windows from existing assignments
+    // A block starting at time T blocks new blocks from T to T+(blockDuration+rest) hours
     const blockedWindows: { start: Date; end: Date }[] = existingAssignments.map(a => ({
-      start: new Date(a.datetime.getTime() - minGapMs),
-      end: new Date(a.datetime.getTime() + minGapMs),
+      start: a.datetime, // Can't start during this block
+      end: new Date(a.datetime.getTime() + minGapFromStartMs), // Can't start until block ends + rest
     }));
 
     // Strategy: For each available date, pick the block closest to driver's preferred time
@@ -935,7 +1013,9 @@ export function DriverPoolSidebar({
       for (const match of matchesForDate) {
         const blockStart = match.datetime;
 
-        // Check DOT time window compliance (48hr for Solo2, 24hr for Solo1)
+        // Check DOT time window compliance
+        // Solo1: 12hr block + 10hr rest = 22hr from start to start
+        // Solo2: 24hr block + 10hr rest = 34hr from start to start (allows Wed/Fri pattern)
         const isInBlockedWindow = blockedWindows.some(window =>
           blockStart >= window.start && blockStart <= window.end
         );
@@ -950,10 +1030,10 @@ export function DriverPoolSidebar({
         // Mark this date as occupied
         occupiedDates.add(date);
 
-        // Add new blocked time window
+        // Add new blocked time window (block START to START + blockDuration + rest)
         blockedWindows.push({
-          start: new Date(blockStart.getTime() - minGapMs),
-          end: new Date(blockStart.getTime() + minGapMs),
+          start: blockStart,
+          end: new Date(blockStart.getTime() + minGapFromStartMs),
         });
 
         break; // Move to next date - we found the best block for this date
@@ -1014,7 +1094,77 @@ export function DriverPoolSidebar({
     <div className="w-[360px] border-r bg-card flex flex-col h-full overflow-visible">
       {/* Header */}
       <div className="p-4 border-b">
-        <h2 className="text-lg font-semibold mb-2">Driver Pool</h2>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-semibold">Driver Pool</h2>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => analyzeMutation.mutate()}
+                  disabled={analyzeMutation.isPending}
+                  className="h-8 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white border-0"
+                >
+                  {analyzeMutation.isPending ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="w-3.5 h-3.5" />
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                <p className="text-xs">Re-analyze driver patterns</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
+
+        {/* Analysis Accuracy Slider */}
+        <div className="mb-3 p-2 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700">
+          <div className="flex items-center gap-2">
+            <Settings2 className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+            <div className="flex-1">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px] text-muted-foreground">Analysis Accuracy</span>
+                <span className={cn("text-xs font-bold", getAccuracyColor(analysisAccuracy))}>
+                  {analysisAccuracy}%
+                </span>
+              </div>
+              <Slider
+                value={[analysisAccuracy]}
+                onValueChange={([value]) => setAnalysisAccuracy(value)}
+                min={0}
+                max={100}
+                step={5}
+                className="w-full"
+              />
+              <span className={cn("text-[9px] block text-center mt-0.5", getAccuracyColor(analysisAccuracy))}>
+                {getAccuracyLabel(analysisAccuracy)}
+              </span>
+            </div>
+          </div>
+          {/* Re-analyze Button */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full mt-2 h-7 text-xs bg-blue-500 hover:bg-blue-600 text-white border-0"
+            onClick={() => analyzeMutation.mutate()}
+            disabled={analyzeMutation.isPending}
+          >
+            {analyzeMutation.isPending ? (
+              <>
+                <RefreshCw className="w-3 h-3 mr-1.5 animate-spin" />
+                Analyzing...
+              </>
+            ) : (
+              <>
+                <RefreshCw className="w-3 h-3 mr-1.5" />
+                Re-analyze Driver Patterns
+              </>
+            )}
+          </Button>
+        </div>
 
         {/* Block Coverage Stats */}
         {blockCoverageStats.total > 0 && (
@@ -1040,12 +1190,12 @@ export function DriverPoolSidebar({
             {autoMatchMutation.isPending ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Claude Thinking...
+                Matching...
               </>
             ) : (
               <>
                 <Sparkles className="w-4 h-4 mr-2" />
-                Auto-Match with Claude
+                Auto-Match
               </>
             )}
           </Button>

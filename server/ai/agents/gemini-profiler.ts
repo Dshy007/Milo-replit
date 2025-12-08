@@ -135,9 +135,10 @@ export class GeminiProfiler {
   private initialized: boolean = false;
 
   constructor() {
-    const apiKey = process.env.GEMINI_API_KEY || "";
+    // Check both possible env var names
+    const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY || "";
     if (!apiKey) {
-      console.warn("[GeminiProfiler] No GEMINI_API_KEY found - AI summaries will be disabled");
+      console.warn("[GeminiProfiler] No GEMINI_API_KEY or GOOGLE_AI_API_KEY found - AI summaries will be disabled");
     }
     this.client = new GoogleGenerativeAI(apiKey);
   }

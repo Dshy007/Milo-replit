@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -6,7 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
-import { format } from "date-fns";
+import { format, startOfWeek, endOfWeek } from "date-fns";
 import {
   Dna,
   RefreshCw,
@@ -22,6 +22,8 @@ import {
   Loader2,
   Settings2,
   Filter,
+  Target,
+  ArrowRight,
 } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
 import {
@@ -33,6 +35,8 @@ import {
 import { cn, getMatchColor } from "@/lib/utils";
 import { MiloInline } from "@/components/MiloInline";
 import { ContractTypeBadge } from "@/components/ContractTypeBadge";
+import { calculateBlockMatch, type BlockMatchResult, type StrictnessLevel } from "@/components/DriverPoolSidebar";
+import type { DriverDnaProfile } from "@shared/schema";
 
 // Types
 interface DNAProfile {
@@ -65,6 +69,39 @@ interface DNAResponse {
   profiles: DNAProfile[];
   stats: FleetStats;
 }
+
+// ShiftOccurrence type for block matching
+type ShiftOccurrence = {
+  occurrenceId: string;
+  serviceDate: string;
+  startTime: string;
+  blockId: string;
+  driverName: string | null;
+  driverId: string | null;
+  contractType: string | null;
+  status: string;
+  tractorId: string | null;
+  assignmentId: string | null;
+  bumpMinutes: number;
+  isCarryover: boolean;
+};
+
+type CalendarResponse = {
+  range: { start: string; end: string };
+  occurrences: ShiftOccurrence[];
+};
+
+// Block analysis result - each block with its top matching drivers
+type BlockAnalysis = {
+  occurrence: ShiftOccurrence;
+  topMatches: Array<{
+    driverId: string;
+    driverName: string;
+    score: number;
+    matchResult: BlockMatchResult;
+    dnaProfile: DriverDnaProfile;
+  }>;
+};
 
 // Helpers
 const DAY_ORDER = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
@@ -589,6 +626,95 @@ export default function ScheduleIntelligence() {
   const stats = data?.stats;
   const hasProfiles = stats && stats.totalProfiles > 0;
 
+  // Fetch current week's calendar for block analysis
+  const currentWeekStart = startOfWeek(new Date(), { weekStartsOn: 0 });
+  const currentWeekEnd = endOfWeek(new Date(), { weekStartsOn: 0 });
+  const weekStartStr = format(currentWeekStart, "yyyy-MM-dd");
+  const weekEndStr = format(currentWeekEnd, "yyyy-MM-dd");
+
+  const { data: calendarData, isLoading: calendarLoading } = useQuery<CalendarResponse>({
+    queryKey: ["/api/calendar", weekStartStr, weekEndStr],
+    queryFn: async () => {
+      const res = await fetch(`/api/calendar?start=${weekStartStr}&end=${weekEndStr}`);
+      return res.json();
+    },
+  });
+
+  // Fetch DNA profiles for matching
+  const { data: dnaProfilesData } = useQuery<{ profiles: Record<string, DriverDnaProfile> }>({
+    queryKey: ["/api/driver-dna/profiles"],
+    queryFn: async () => {
+      const res = await fetch("/api/driver-dna/profiles");
+      return res.json();
+    },
+  });
+
+  // Get unassigned blocks from current week
+  const unassignedOccurrences = useMemo(() => {
+    if (!calendarData?.occurrences) return [];
+    return calendarData.occurrences.filter(occ => !occ.driverId && !occ.assignmentId);
+  }, [calendarData]);
+
+  // Analyze each block against all drivers with DNA profiles
+  const blockAnalysis = useMemo<BlockAnalysis[]>(() => {
+    if (!unassignedOccurrences.length || !dnaProfilesData?.profiles || !data?.profiles) return [];
+
+    return unassignedOccurrences.map(occurrence => {
+      // Find top 5 matching drivers for this block
+      const matches: BlockAnalysis['topMatches'] = [];
+
+      for (const profile of data.profiles) {
+        const dnaProfile = dnaProfilesData.profiles[profile.driverId];
+        if (!dnaProfile) continue;
+
+        // Skip if contract types don't match
+        const blockContract = (occurrence.contractType || 'solo1').toLowerCase();
+        const driverContract = (dnaProfile.preferredContractType || 'solo1').toLowerCase();
+        if (blockContract !== driverContract) continue;
+
+        const matchResult = calculateBlockMatch(occurrence, dnaProfile, 'flexible');
+        if (matchResult.score > 0) {
+          matches.push({
+            driverId: profile.driverId,
+            driverName: profile.driverName,
+            score: matchResult.score,
+            matchResult,
+            dnaProfile,
+          });
+        }
+      }
+
+      // Sort by score descending and take top 5
+      matches.sort((a, b) => b.score - a.score);
+      return {
+        occurrence,
+        topMatches: matches.slice(0, 5),
+      };
+    });
+  }, [unassignedOccurrences, dnaProfilesData, data?.profiles]);
+
+  // Assignment mutation
+  const assignMutation = useMutation({
+    mutationFn: async ({ occurrenceId, driverId }: { occurrenceId: string; driverId: string }) => {
+      const res = await apiRequest("POST", "/api/assignments", {
+        occurrenceId,
+        driverId,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/calendar"] });
+      toast({ title: "Driver Assigned", description: "Block assignment saved successfully." });
+    },
+    onError: (error: any) => {
+      toast({ title: "Assignment Failed", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const handleAssign = (occurrenceId: string, driverId: string) => {
+    assignMutation.mutate({ occurrenceId, driverId });
+  };
+
   return (
     <div className="container mx-auto p-6 max-w-6xl">
       {/* Header */}
@@ -735,6 +861,108 @@ export default function ScheduleIntelligence() {
         <div className="mb-6">
           <MiloInline placeholder="Ask Milo about driver patterns, scheduling insights, or fleet analysis..." />
         </div>
+      )}
+
+      {/* Block Analyzer Section */}
+      {hasProfiles && !analyzeMutation.isPending && blockAnalysis.length > 0 && (
+        <Card className="mb-6 border-purple-200 dark:border-purple-800">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-purple-500 to-purple-600 flex items-center justify-center shadow-lg">
+                  <Target className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-foreground">Block Analyzer</h3>
+                  <p className="text-sm text-muted-foreground">
+                    {unassignedOccurrences.length} unassigned blocks for {format(currentWeekStart, "MMM d")} - {format(currentWeekEnd, "MMM d")}
+                  </p>
+                </div>
+              </div>
+              {calendarLoading && (
+                <Loader2 className="w-5 h-5 animate-spin text-purple-500" />
+              )}
+            </div>
+
+            {/* Block Analysis Table */}
+            <div className="max-h-[400px] overflow-y-auto border rounded-lg">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-slate-100 dark:bg-slate-800">
+                  <tr className="border-b">
+                    <th className="text-left p-2 font-medium">Block</th>
+                    <th className="text-left p-2 font-medium">Day</th>
+                    <th className="text-left p-2 font-medium">Time</th>
+                    <th className="text-left p-2 font-medium">Type</th>
+                    <th className="text-left p-2 font-medium">Best Matches</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {blockAnalysis.map(({ occurrence, topMatches }) => {
+                    const date = new Date(occurrence.serviceDate + 'T00:00:00');
+                    const dayName = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][date.getDay()];
+                    const dateStr = format(date, "MMM d");
+
+                    return (
+                      <tr key={occurrence.occurrenceId} className="border-b hover:bg-slate-50 dark:hover:bg-slate-900/50">
+                        <td className="p-2 font-mono text-xs">{occurrence.blockId}</td>
+                        <td className="p-2">
+                          <span className="text-xs">{dayName} {dateStr}</span>
+                        </td>
+                        <td className="p-2 text-xs">{occurrence.startTime}</td>
+                        <td className="p-2">
+                          <Badge variant="outline" className={cn("text-[10px]",
+                            occurrence.contractType?.toLowerCase() === 'solo2'
+                              ? 'bg-blue-100 text-blue-700 border-blue-300'
+                              : 'bg-cyan-100 text-cyan-700 border-cyan-300'
+                          )}>
+                            {occurrence.contractType?.toUpperCase() || 'S1'}
+                          </Badge>
+                        </td>
+                        <td className="p-2">
+                          {topMatches.length > 0 ? (
+                            <div className="flex flex-wrap gap-1">
+                              {topMatches.slice(0, 3).map((match, idx) => (
+                                <button
+                                  key={match.driverId}
+                                  onClick={() => handleAssign(occurrence.occurrenceId, match.driverId)}
+                                  disabled={assignMutation.isPending}
+                                  className={cn(
+                                    "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium transition-colors",
+                                    "border hover:bg-green-100 hover:border-green-400 hover:text-green-700 dark:hover:bg-green-900/40",
+                                    idx === 0
+                                      ? "bg-purple-100 border-purple-300 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300"
+                                      : "bg-slate-100 border-slate-300 text-slate-600 dark:bg-slate-800 dark:text-slate-400"
+                                  )}
+                                >
+                                  <span className="truncate max-w-[80px]">{match.driverName.split(' ')[0]}</span>
+                                  <span className={cn("font-bold", getMatchColor(Math.round(match.score * 100)))}>{Math.round(match.score * 100)}%</span>
+                                  <ArrowRight className="w-3 h-3 opacity-0 group-hover:opacity-100" />
+                                </button>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-xs text-muted-foreground italic">No matches</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Summary */}
+            <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
+              <span>
+                {blockAnalysis.filter(b => b.topMatches.length > 0).length} blocks with matches,{' '}
+                {blockAnalysis.filter(b => b.topMatches.length === 0).length} without
+              </span>
+              <span className="text-purple-600 dark:text-purple-400">
+                Click a driver name to assign
+              </span>
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {/* Empty State */}

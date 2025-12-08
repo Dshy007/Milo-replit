@@ -1,20 +1,17 @@
 /**
- * Claude Schedule Optimizer
+ * Gemini Schedule Optimizer
  *
- * Uses Anthropic's Claude AI to intelligently match drivers to blocks.
- * Unlike the Gemini scheduler, this PROPERLY uses DNA profile preferences.
+ * Uses Google's Gemini AI to intelligently match drivers to blocks.
+ * Similar to how DNA Analysis works - let AI figure out the best matches.
  *
- * Key differences from Gemini:
- * - Includes preferredDays and preferredStartTimes in the prompt
- * - Uses Claude's superior pattern recognition
- * - No quota issues with paid API key
+ * "I see the drivers. I see the blocks. I find the perfect match."
  */
 
-import Anthropic from "@anthropic-ai/sdk";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { db } from "./db";
 import { blocks, drivers, driverDnaProfiles, blockAssignments } from "@shared/schema";
-import { eq, and, gte, lte } from "drizzle-orm";
-import { format, endOfWeek } from "date-fns";
+import { eq, and, gte, lte, isNull } from "drizzle-orm";
+import { format, startOfWeek, endOfWeek } from "date-fns";
 
 // Canonical start times - the Holy Grail lookup
 const CANONICAL_START_TIMES: Record<string, string> = {
@@ -44,7 +41,7 @@ interface DriverInfo {
   name: string;
   contractType: string;
   preferredDays: string[];
-  preferredStartTimes: string[];  // ALL preferred times
+  preferredTime: string;
 }
 
 interface BlockInfo {
@@ -72,25 +69,42 @@ interface ScheduleSuggestion {
 }
 
 /**
- * ClaudeScheduler - AI-powered schedule optimization using Anthropic Claude
+ * GeminiScheduler - AI-powered schedule optimization
  */
-class ClaudeScheduler {
-  private client: Anthropic;
+class GeminiScheduler {
+  private client: GoogleGenerativeAI;
+  private model: any;
   private initialized: boolean = false;
 
   constructor() {
-    const apiKey = process.env.ANTHROPIC_API_KEY || "";
+    // Check both possible env var names
+    const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY || "";
     if (!apiKey) {
-      console.warn("[ClaudeScheduler] No ANTHROPIC_API_KEY found");
+      console.warn("[GeminiScheduler] No GEMINI_API_KEY or GOOGLE_AI_API_KEY found");
     } else {
-      console.log("[ClaudeScheduler] API key found, length:", apiKey.length);
+      console.log("[GeminiScheduler] API key found, length:", apiKey.length);
     }
-    this.client = new Anthropic({ apiKey });
-    this.initialized = true;
+    this.client = new GoogleGenerativeAI(apiKey);
+  }
+
+  async initialize(): Promise<void> {
+    if (this.initialized) return;
+
+    try {
+      // Use gemini-1.5-flash - more stable quota than experimental models
+      this.model = this.client.getGenerativeModel({
+        model: "gemini-1.5-flash"
+      });
+      this.initialized = true;
+      console.log("[GeminiScheduler] Initialized with gemini-1.5-flash");
+    } catch (error) {
+      console.error("[GeminiScheduler] Failed to initialize:", error);
+      throw error;
+    }
   }
 
   /**
-   * Main optimization function - uses Claude to match drivers to blocks
+   * Main optimization function - uses Gemini to match drivers to blocks
    */
   async optimizeSchedule(
     driversData: DriverInfo[],
@@ -108,6 +122,10 @@ class ClaudeScheduler {
       solverStatus: string;
     };
   }> {
+    if (!this.model) {
+      throw new Error("Gemini model not initialized");
+    }
+
     if (blocksData.length === 0) {
       return {
         suggestions: [],
@@ -122,16 +140,16 @@ class ClaudeScheduler {
       };
     }
 
-    console.log(`[ClaudeScheduler] Processing ${driversData.length} drivers, ${blocksData.length} blocks`);
+    console.log(`[GeminiScheduler] Processing ${driversData.length} drivers, ${blocksData.length} blocks`);
 
-    // Group by contract type
+    // Group by contract type for cleaner processing
     const solo1Drivers = driversData.filter(d => d.contractType === "solo1");
     const solo2Drivers = driversData.filter(d => d.contractType === "solo2");
     const solo1Blocks = blocksData.filter(b => b.contractType.toLowerCase() === "solo1");
     const solo2Blocks = blocksData.filter(b => b.contractType.toLowerCase() === "solo2");
 
-    console.log(`[ClaudeScheduler] Solo1: ${solo1Drivers.length} drivers, ${solo1Blocks.length} blocks`);
-    console.log(`[ClaudeScheduler] Solo2: ${solo2Drivers.length} drivers, ${solo2Blocks.length} blocks`);
+    console.log(`[GeminiScheduler] Solo1: ${solo1Drivers.length} drivers, ${solo1Blocks.length} blocks`);
+    console.log(`[GeminiScheduler] Solo2: ${solo2Drivers.length} drivers, ${solo2Blocks.length} blocks`);
 
     const allSuggestions: ScheduleSuggestion[] = [];
     const allUnassigned: string[] = [];
@@ -162,14 +180,13 @@ class ClaudeScheduler {
         totalDrivers: driversData.length,
         assigned: allSuggestions.length,
         unassigned: allUnassigned.length,
-        solverStatus: "CLAUDE_OPTIMAL"
+        solverStatus: "GEMINI_OPTIMAL"
       }
     };
   }
 
   /**
-   * Match drivers to blocks for one contract type using Claude
-   * KEY DIFFERENCE: Includes DNA preferences in the prompt!
+   * Match drivers to blocks for one contract type using Gemini
    */
   private async matchContractType(
     ctDrivers: DriverInfo[],
@@ -179,120 +196,77 @@ class ClaudeScheduler {
     contractType: string
   ): Promise<{ suggestions: ScheduleSuggestion[]; unassigned: string[] }> {
 
-    // Build COMPLETE driver info including DNA preferences and history
-    const driverSummaries = ctDrivers.map(driver => {
-      // Get historical slots worked
+    // Build history summary for each driver
+    const driverHistorySummary = ctDrivers.map(driver => {
       const historySlots: string[] = [];
-      for (const [slot, driverCounts] of Object.entries(slotHistory)) {
-        const count = driverCounts[driver.id] || 0;
+      for (const [slot, drivers] of Object.entries(slotHistory)) {
+        const count = drivers[driver.id] || 0;
         if (count > 0) {
-          historySlots.push(`${slot}(${count}x)`);
+          historySlots.push(`${slot}:${count}x`);
         }
       }
-
       return {
         id: driver.id,
         name: driver.name,
-        // DNA PREFERENCES - the key data that was missing!
-        preferredDays: driver.preferredDays.length > 0 ? driver.preferredDays.join(", ") : "none specified",
-        preferredTimes: driver.preferredStartTimes.length > 0 ? driver.preferredStartTimes.join(", ") : "any time",
-        // Historical patterns
-        history: historySlots.slice(0, 8).join(", ") || "new driver"
+        history: historySlots.slice(0, 10).join(", ") || "no history"
       };
     });
 
-    // Group blocks by day for cleaner display
+    // Group blocks by day for cleaner output
     const blocksByDay: Record<string, BlockInfo[]> = {};
     for (const block of ctBlocks) {
       if (!blocksByDay[block.day]) blocksByDay[block.day] = [];
       blocksByDay[block.day].push(block);
     }
 
+    // Build unique dates
     const uniqueDates = [...new Set(ctBlocks.map(b => b.serviceDate))].sort();
 
-    // Build the prompt - Claude gets ALL the context
-    const prompt = `You are an expert schedule optimizer for Amazon delivery drivers. Your task is to match drivers to delivery blocks optimally.
+    const prompt = `You are a schedule optimizer for Amazon delivery drivers. Match drivers to blocks fairly.
 
-## CONTRACT TYPE: ${contractType.toUpperCase()}
+CONTRACT TYPE: ${contractType.toUpperCase()}
 
-## DRIVERS (${ctDrivers.length} total)
-Each driver has:
-- DNA Profile preferences (preferred days and start times from their historical patterns)
-- Historical slot data (showing which day_time slots they've worked and how many times)
+DRIVERS (${ctDrivers.length}):
+${driverHistorySummary.map(d => `- ${d.name} (ID: ${d.id.slice(0,8)}): ${d.history}`).join("\n")}
 
-${driverSummaries.map(d => `
-**${d.name}** (ID: ${d.id.slice(0, 8)}...)
-  - Preferred Days: ${d.preferredDays}
-  - Preferred Times: ${d.preferredTimes}
-  - Historical Slots: ${d.history}
-`).join("\n")}
-
-## BLOCKS TO ASSIGN (${ctBlocks.length} total across ${uniqueDates.length} days)
-${Object.entries(blocksByDay).map(([day, dayBlocks]) =>
-  `**${day.toUpperCase()}**: ${dayBlocks.length} blocks at times [${[...new Set(dayBlocks.map(b => b.time))].join(", ")}]`
+BLOCKS TO ASSIGN (${ctBlocks.length} blocks across ${uniqueDates.length} days):
+${Object.entries(blocksByDay).map(([day, blocks]) =>
+  `${day.toUpperCase()}: ${blocks.length} blocks at times [${[...new Set(blocks.map(b => b.time))].join(", ")}]`
 ).join("\n")}
 
-## OPTIMIZATION RULES (in priority order)
-1. **Contract Type Match**: HARD CONSTRAINT - Only ${contractType} drivers can be assigned to ${contractType} blocks (already filtered)
-2. **One Block Per Day**: HARD CONSTRAINT - Each driver can work AT MOST ONE block per calendar date
-3. **DAY MATCH IS PRIMARY**: PRIORITY 1 - If a driver's preferred days include "sunday, monday, saturday", they should be assigned to blocks on ANY of those days. DAY match is more important than TIME match!
-4. **Time Match Secondary**: PRIORITY 2 - Once a driver is matched to their preferred DAY, try to assign a block at their preferred time
-5. **Historical Pattern Match**: PRIORITY 3 - Assign drivers to slots they've historically worked (shown as day_time(Nx))
-6. **Fair Distribution**: Each driver should get ${minDays === 5 ? "equal blocks (5 each if possible)" : minDays === 4 ? "4-6 blocks" : "3-7 blocks"}
-7. **Complete Coverage**: ALL ${ctBlocks.length} blocks must be assigned
+CONSTRAINTS:
+1. Each driver can work AT MOST ONE block per day
+2. Fair distribution: each driver should get ${minDays === 5 ? "equal blocks" : minDays === 4 ? "4-6 blocks" : "3-7 blocks"}
+3. Prefer matching drivers to slots they've worked before (history shows "day_time:Nx" = N times worked)
+4. ALL ${ctBlocks.length} blocks must be assigned
 
-CRITICAL: A driver with preferred days "sunday, monday, saturday" and preferred time "17:30" should be assigned to blocks on Sunday, Monday, AND Saturday - NOT just blocks at 17:30. The DAY is the primary match criteria!
-
-## FULL BLOCK LIST (use exact IDs)
-${ctBlocks.map(b => `${b.id} | ${b.day} | ${b.time} | ${b.serviceDate}`).join("\n")}
-
-## FULL DRIVER LIST (use exact IDs)
-${ctDrivers.map(d => `${d.id} | ${d.name}`).join("\n")}
-
-## RESPONSE FORMAT
-Return ONLY a JSON array with this exact structure:
+Respond with a JSON array of assignments. Format:
 [
-  {
-    "blockId": "full-uuid-here",
-    "driverId": "full-uuid-here",
-    "driverName": "Driver Name",
-    "reason": "brief explanation (e.g., 'preferred day + historical match')"
-  }
+  {"blockId": "full-block-uuid", "driverId": "full-driver-uuid", "driverName": "Name", "reason": "brief reason"}
 ]
 
 IMPORTANT:
-- Use the COMPLETE UUIDs exactly as shown above
+- Use FULL UUIDs, not shortened versions
 - Assign EVERY block exactly once
-- Each driver works max 1 block per DATE
-- Prioritize DNA preferences over historical patterns
+- Each driver works max 1 block per DATE (${uniqueDates.join(", ")})
 
-Return ONLY the JSON array, no other text or explanation.`;
+BLOCKS (with full IDs):
+${ctBlocks.map(b => `${b.id} - ${b.day} ${b.time} (${b.serviceDate})`).join("\n")}
+
+DRIVERS (with full IDs):
+${ctDrivers.map(d => `${d.id} - ${d.name}`).join("\n")}
+
+Return ONLY the JSON array, no other text.`;
 
     try {
-      console.log(`[ClaudeScheduler] Calling Claude for ${contractType}...`);
-
-      const response = await this.client.messages.create({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 8192,
-        messages: [{
-          role: "user",
-          content: prompt
-        }]
-      });
-
-      // Extract text response
-      const textBlock = response.content.find(block => block.type === "text");
-      if (!textBlock || textBlock.type !== "text") {
-        throw new Error("No text response from Claude");
-      }
-
-      const responseText = textBlock.text;
+      const result = await this.model.generateContent(prompt);
+      const responseText = result.response.text();
 
       // Parse JSON from response
       const jsonMatch = responseText.match(/\[[\s\S]*\]/);
       if (!jsonMatch) {
-        console.error("[ClaudeScheduler] No JSON array in response:", responseText.slice(0, 500));
-        throw new Error("No JSON array found in Claude response");
+        console.error("[GeminiScheduler] No JSON array in response:", responseText.slice(0, 500));
+        throw new Error("No JSON array found in Gemini response");
       }
 
       const assignments = JSON.parse(jsonMatch[0]) as Array<{
@@ -302,67 +276,42 @@ Return ONLY the JSON array, no other text or explanation.`;
         reason: string;
       }>;
 
-      console.log(`[ClaudeScheduler] Claude returned ${assignments.length} assignments for ${contractType}`);
+      console.log(`[GeminiScheduler] Gemini returned ${assignments.length} assignments for ${contractType}`);
 
       // Convert to suggestions format
       const suggestions: ScheduleSuggestion[] = [];
       const assignedBlockIds = new Set<string>();
-      const driverDateAssignments: Record<string, Set<string>> = {}; // driverId -> Set of dates
 
       for (const assignment of assignments) {
+        // Validate the assignment
         const block = ctBlocks.find(b => b.id === assignment.blockId);
         const driver = ctDrivers.find(d => d.id === assignment.driverId);
 
         if (!block || !driver) {
-          console.warn(`[ClaudeScheduler] Invalid assignment: block=${assignment.blockId?.slice(0, 8)}, driver=${assignment.driverId?.slice(0, 8)}`);
+          console.warn(`[GeminiScheduler] Invalid assignment: block=${assignment.blockId}, driver=${assignment.driverId}`);
           continue;
         }
 
         if (assignedBlockIds.has(block.id)) {
-          console.warn(`[ClaudeScheduler] Block ${block.id.slice(0, 8)} already assigned, skipping`);
+          console.warn(`[GeminiScheduler] Block ${block.id} already assigned, skipping duplicate`);
           continue;
         }
 
-        // Check driver hasn't been assigned to this date already
-        if (!driverDateAssignments[driver.id]) {
-          driverDateAssignments[driver.id] = new Set();
-        }
-        if (driverDateAssignments[driver.id].has(block.serviceDate)) {
-          console.warn(`[ClaudeScheduler] Driver ${driver.name} already assigned on ${block.serviceDate}, skipping`);
-          continue;
-        }
-
-        // Calculate confidence based on match quality
+        // Check history for confidence score
         const slot = `${block.day}_${block.time}`;
         const historyCount = slotHistory[slot]?.[driver.id] || 0;
-        const preferredDayMatch = driver.preferredDays.includes(block.day);
-        const preferredTimeMatch = driver.preferredStartTimes.includes(block.time);
-
-        let confidence = 0.5;
-        let matchType = "assigned";
-
-        if (preferredDayMatch && preferredTimeMatch) {
-          confidence = 1.0;
-          matchType = "perfect_match";
-        } else if (preferredDayMatch || preferredTimeMatch) {
-          confidence = 0.85;
-          matchType = "preference_match";
-        } else if (historyCount > 0) {
-          confidence = 0.7 + Math.min(0.2, historyCount * 0.05);
-          matchType = "historical";
-        }
+        const confidence = historyCount > 0 ? Math.min(1.0, 0.7 + historyCount * 0.1) : 0.6;
 
         suggestions.push({
           blockId: block.id,
           driverId: driver.id,
           driverName: driver.name,
           confidence,
-          matchType,
-          reason: assignment.reason || "Claude assignment"
+          matchType: historyCount > 0 ? "historical" : "optimal",
+          reason: assignment.reason || "Gemini assignment"
         });
 
         assignedBlockIds.add(block.id);
-        driverDateAssignments[driver.id].add(block.serviceDate);
       }
 
       // Find unassigned blocks
@@ -371,44 +320,48 @@ Return ONLY the JSON array, no other text or explanation.`;
         .map(b => b.id);
 
       if (unassigned.length > 0) {
-        console.warn(`[ClaudeScheduler] ${unassigned.length} blocks unassigned for ${contractType}`);
+        console.warn(`[GeminiScheduler] ${unassigned.length} blocks could not be assigned for ${contractType}`);
       }
 
       return { suggestions, unassigned };
 
-    } catch (error: any) {
-      console.error("[ClaudeScheduler] Claude API error:", error.message || error);
-      // Fallback to simple round-robin
+    } catch (error) {
+      console.error("[GeminiScheduler] Gemini API error:", error);
+      // Fallback to simple round-robin assignment
       return this.fallbackAssignment(ctDrivers, ctBlocks, slotHistory);
     }
   }
 
   /**
-   * Fallback assignment when Claude fails
+   * Fallback assignment when Gemini fails - simple round-robin
    */
   private fallbackAssignment(
     ctDrivers: DriverInfo[],
     ctBlocks: BlockInfo[],
     slotHistory: SlotHistory
   ): { suggestions: ScheduleSuggestion[]; unassigned: string[] } {
-    console.log("[ClaudeScheduler] Using fallback round-robin assignment");
+    console.log("[GeminiScheduler] Using fallback round-robin assignment");
 
     const suggestions: ScheduleSuggestion[] = [];
-    const driverAssignmentsByDate: Record<string, Set<string>> = {};
+    const driverAssignmentsByDate: Record<string, Set<string>> = {}; // date -> Set of driverIds
 
+    // Sort blocks by date
     const sortedBlocks = [...ctBlocks].sort((a, b) => a.serviceDate.localeCompare(b.serviceDate));
 
     let driverIndex = 0;
     for (const block of sortedBlocks) {
+      // Find next available driver for this date
       let attempts = 0;
       while (attempts < ctDrivers.length) {
         const driver = ctDrivers[driverIndex % ctDrivers.length];
 
+        // Check if driver already has a block on this date
         if (!driverAssignmentsByDate[block.serviceDate]) {
           driverAssignmentsByDate[block.serviceDate] = new Set();
         }
 
         if (!driverAssignmentsByDate[block.serviceDate].has(driver.id)) {
+          // Assign this block to this driver
           const slot = `${block.day}_${block.time}`;
           const historyCount = slotHistory[slot]?.[driver.id] || 0;
 
@@ -439,19 +392,20 @@ Return ONLY the JSON array, no other text or explanation.`;
 }
 
 // Singleton instance
-let schedulerInstance: ClaudeScheduler | null = null;
+let schedulerInstance: GeminiScheduler | null = null;
 
-async function getClaudeScheduler(): Promise<ClaudeScheduler> {
+async function getGeminiScheduler(): Promise<GeminiScheduler> {
   if (!schedulerInstance) {
-    schedulerInstance = new ClaudeScheduler();
+    schedulerInstance = new GeminiScheduler();
+    await schedulerInstance.initialize();
   }
   return schedulerInstance;
 }
 
 /**
- * Main export - optimize a week's schedule using Claude
+ * Main export - optimize a week's schedule using Gemini
  */
-export async function optimizeWithClaude(
+export async function optimizeWithGemini(
   tenantId: string,
   weekStart: Date,
   contractTypeFilter?: "solo1" | "solo2" | "team",
@@ -477,9 +431,9 @@ export async function optimizeWithClaude(
 }> {
   const weekEnd = endOfWeek(weekStart, { weekStartsOn: 0 });
 
-  console.log(`[ClaudeScheduler] Optimizing ${format(weekStart, "yyyy-MM-dd")} to ${format(weekEnd, "yyyy-MM-dd")}`);
+  console.log(`[GeminiScheduler] Optimizing ${format(weekStart, "yyyy-MM-dd")} to ${format(weekEnd, "yyyy-MM-dd")}`);
 
-  // Get drivers with DNA profiles - INCLUDING PREFERENCES
+  // Get drivers with DNA profiles
   const allDrivers = await db
     .select({
       id: drivers.id,
@@ -487,7 +441,7 @@ export async function optimizeWithClaude(
       lastName: drivers.lastName,
       contractType: driverDnaProfiles.preferredContractType,
       preferredDays: driverDnaProfiles.preferredDays,
-      preferredStartTimes: driverDnaProfiles.preferredStartTimes,
+      preferredTime: driverDnaProfiles.preferredStartTimes,
     })
     .from(drivers)
     .leftJoin(driverDnaProfiles, eq(drivers.id, driverDnaProfiles.driverId))
@@ -502,14 +456,9 @@ export async function optimizeWithClaude(
     id: d.id,
     name: `${d.firstName} ${d.lastName}`,
     contractType: (d.contractType || "solo1").toLowerCase(),
-    // ACTUALLY USE THE DNA PREFERENCES!
     preferredDays: (d.preferredDays as string[]) || [],
-    preferredStartTimes: (d.preferredStartTimes as string[]) || []
+    preferredTime: ((d.preferredTime as string[]) || [])[0] || ""
   }));
-
-  // Log DNA profile stats
-  const driversWithPrefs = driverInputs.filter(d => d.preferredDays.length > 0 || d.preferredStartTimes.length > 0);
-  console.log(`[ClaudeScheduler] ${driversWithPrefs.length}/${driverInputs.length} drivers have DNA preferences`);
 
   // Get unassigned blocks
   const weekEndPlusOne = new Date(weekEnd);
@@ -561,7 +510,7 @@ export async function optimizeWithClaude(
   // Get 8-week slot history
   const slotHistory = await get8WeekSlotHistory(tenantId, weekStart);
 
-  console.log(`[ClaudeScheduler] Found ${driverInputs.length} drivers, ${blockInputs.length} unassigned blocks`);
+  console.log(`[GeminiScheduler] Found ${driverInputs.length} drivers, ${blockInputs.length} unassigned blocks`);
 
   if (driverInputs.length === 0 || blockInputs.length === 0) {
     return {
@@ -577,8 +526,8 @@ export async function optimizeWithClaude(
     };
   }
 
-  // Call Claude scheduler
-  const scheduler = await getClaudeScheduler();
+  // Call Gemini scheduler
+  const scheduler = await getGeminiScheduler();
   const result = await scheduler.optimizeSchedule(driverInputs, blockInputs, slotHistory, minDays);
 
   // Convert to expected format
@@ -603,7 +552,7 @@ export async function optimizeWithClaude(
 }
 
 /**
- * Get 8-week slot history for pattern matching
+ * Get 8-week slot history for historical pattern matching
  */
 async function get8WeekSlotHistory(tenantId: string, currentWeekStart: Date): Promise<SlotHistory> {
   const eightWeeksAgo = new Date(currentWeekStart);
@@ -659,14 +608,14 @@ async function get8WeekSlotHistory(tenantId: string, currentWeekStart: Date): Pr
     }
   }
 
-  console.log(`[ClaudeScheduler] Built history: ${Object.keys(slotHistory).length} unique slots`);
+  console.log(`[GeminiScheduler] Built history: ${Object.keys(slotHistory).length} slots`);
   return slotHistory;
 }
 
 /**
- * Apply Claude-optimized assignments to database
+ * Apply Gemini-optimized assignments to database
  */
-export async function applyClaudeSchedule(
+export async function applyGeminiSchedule(
   tenantId: string,
   assignments: Array<{ blockId: string; driverId: string }>
 ): Promise<{ applied: number; errors: string[] }> {
@@ -706,6 +655,5 @@ export async function applyClaudeSchedule(
     }
   }
 
-  console.log(`[ClaudeScheduler] Applied ${applied} assignments, ${errors.length} errors`);
   return { applied, errors };
 }

@@ -2,8 +2,10 @@ import { useState, useRef, useEffect } from "react";
 import { Home, Users, Calendar, Route, Truck, FileText, Upload, Sparkles, Settings, LogOut, MessageSquare, Brain, FileSpreadsheet, CalendarCheck, GitBranch, Send, Loader2, ChevronDown, ChevronUp, User, Trash2, RotateCcw, Dna } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
+import { apiRequest } from "@/lib/queryClient";
+import ReactMarkdown from "react-markdown";
 import {
   Sidebar,
   SidebarContent,
@@ -99,15 +101,12 @@ export function AppSidebar() {
   const [location] = useLocation();
   const { user, logout } = useAuth();
   const { toast } = useToast();
-  const queryClient = useQueryClient();
 
-  // Chat state
+  // MILO Chat state
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [streamingMessage, setStreamingMessage] = useState("");
-  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Resizable chat panel state
@@ -139,38 +138,48 @@ export function AppSidebar() {
     document.removeEventListener('mouseup', handleResizeEnd);
   };
 
-  // Create session mutation
-  const createSessionMutation = useMutation({
-    mutationFn: async () => {
-      const response = await fetch("/api/chat/sessions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({}),
+  // MILO Chat mutation - uses the schedule-aware MILO endpoint
+  const chatMutation = useMutation({
+    mutationFn: async (message: string) => {
+      const response = await apiRequest("POST", "/api/milo/chat", {
+        message,
+        sessionId,
       });
-      if (!response.ok) throw new Error("Failed to create session");
       return response.json();
     },
-    onSuccess: (newSession) => {
-      queryClient.invalidateQueries({ queryKey: ["chatSessions"] });
-      setCurrentSessionId(newSession.id);
+    onSuccess: (data) => {
+      if (data.success) {
+        setSessionId(data.sessionId);
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: data.response },
+        ]);
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: `Error: ${data.message}` },
+        ]);
+      }
+    },
+    onError: (error: Error) => {
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: `Error: ${error.message}` },
+      ]);
     },
   });
 
-  // Save message mutation
-  const saveMessageMutation = useMutation({
-    mutationFn: async ({ sessionId, role, content }: { sessionId: string; role: string; content: string }) => {
-      const response = await fetch(`/api/chat/sessions/${sessionId}/messages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ role, content }),
+  // Clear chat mutation
+  const clearMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest("POST", "/api/milo/chat/clear", {
+        sessionId,
       });
-      if (!response.ok) throw new Error("Failed to save message");
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["chatSessions"] });
+      setMessages([]);
+      setSessionId(null);
     },
   });
 
@@ -179,107 +188,20 @@ export function AppSidebar() {
     if (scrollRef.current) {
       scrollRef.current.scrollIntoView({ behavior: "smooth" });
     }
-  }, [messages, streamingMessage]);
+  }, [messages]);
 
   const getUserInitials = () => {
     if (!user?.username) return "U";
     return user.username.substring(0, 2).toUpperCase();
   };
 
-  const handleSend = async () => {
-    if (!input.trim() || isStreaming) return;
+  const handleSend = () => {
+    if (!input.trim() || chatMutation.isPending) return;
 
     const userMessage = input.trim();
-    setInput("");
-
-    // Create session if needed
-    let sessionId = currentSessionId;
-    if (!sessionId) {
-      try {
-        const session = await createSessionMutation.mutateAsync();
-        sessionId = session.id;
-      } catch (error) {
-        toast({
-          variant: "destructive",
-          title: "Error",
-          description: "Failed to start conversation",
-        });
-        return;
-      }
-    }
-
     setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
-    saveMessageMutation.mutate({ sessionId: sessionId!, role: "user", content: userMessage });
-
-    setIsStreaming(true);
-    setStreamingMessage("");
-
-    try {
-      const response = await fetch("/api/chat/claude", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          message: userMessage,
-          history: messages.slice(-10),
-        }),
-      });
-
-      if (!response.ok) throw new Error("Failed to get AI response");
-      if (!response.body) throw new Error("No response body");
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let accumulatedMessage = "";
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const lineData = line.slice(6).trim();
-              if (!lineData) continue;
-              const data = JSON.parse(lineData);
-
-              if (data.error) throw new Error(data.error);
-
-              if (data.done) {
-                saveMessageMutation.mutate({ sessionId: sessionId!, role: "assistant", content: accumulatedMessage });
-                setMessages((prev) => [...prev, { role: "assistant", content: accumulatedMessage }]);
-                setStreamingMessage("");
-                setIsStreaming(false);
-                await reader.cancel();
-                return;
-              }
-
-              if (data.content) {
-                accumulatedMessage += data.content;
-                setStreamingMessage(accumulatedMessage);
-              }
-            } catch (parseError) {
-              console.error("Failed to parse SSE data:", line, parseError);
-            }
-          }
-        }
-      }
-      await reader.cancel();
-    } catch (error: any) {
-      console.error("Chat error:", error);
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: error.message || "Failed to get AI response",
-      });
-      setIsStreaming(false);
-      setStreamingMessage("");
-    }
+    setInput("");
+    chatMutation.mutate(userMessage);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -290,16 +212,14 @@ export function AppSidebar() {
   };
 
   const quickActions = [
-    "Who's available today?",
-    "Unassigned blocks this week",
-    "Workload summary",
+    "Who worked last Sunday?",
+    "Show me all solo2 drivers",
+    "What drivers prefer 16:30?",
   ];
 
   // Clear conversation
   const handleClearChat = () => {
-    setMessages([]);
-    setStreamingMessage("");
-    setCurrentSessionId(null);
+    clearMutation.mutate();
   };
 
   // Delete a single message
@@ -338,7 +258,7 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {/* Milo Quick Chat Section */}
+        {/* MILO Schedule Chat Section */}
         <SidebarGroup className="mt-auto border-t border-border">
           <div className="flex items-center justify-between px-3 py-2">
             <button
@@ -347,7 +267,7 @@ export function AppSidebar() {
             >
               <Sparkles className="w-4 h-4 text-primary" />
               <span>Ask Milo</span>
-              {isStreaming && <Loader2 className="w-3 h-3 animate-spin text-primary" />}
+              {chatMutation.isPending && <Loader2 className="w-3 h-3 animate-spin text-primary" />}
               {isChatOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
             </button>
             {isChatOpen && messages.length > 0 && (
@@ -355,8 +275,9 @@ export function AppSidebar() {
                 onClick={handleClearChat}
                 className="p-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-destructive"
                 title="Clear conversation"
+                disabled={clearMutation.isPending}
               >
-                <RotateCcw className="w-3.5 h-3.5" />
+                <RotateCcw className={`w-3.5 h-3.5 ${clearMutation.isPending ? 'animate-spin' : ''}`} />
               </button>
             )}
           </div>
@@ -376,7 +297,7 @@ export function AppSidebar() {
                 style={{ height: `${chatHeight}px` }}
               >
                 <div className="p-2 space-y-2">
-                  {messages.length === 0 && !streamingMessage ? (
+                  {messages.length === 0 ? (
                     <div className="text-center py-3">
                       <p className="text-xs text-muted-foreground mb-2">Quick questions:</p>
                       <div className="space-y-1">
@@ -403,7 +324,29 @@ export function AppSidebar() {
                           <div className={`relative max-w-[85%] rounded p-1.5 text-xs ${
                             msg.role === "user" ? "bg-primary/10" : "bg-muted"
                           }`}>
-                            <p className="whitespace-pre-wrap break-words pr-4">{msg.content}</p>
+                            {msg.role === "assistant" ? (
+                              <div className="prose prose-xs dark:prose-invert max-w-none pr-4 overflow-x-auto">
+                                <ReactMarkdown
+                                  components={{
+                                    table: ({ children }) => (
+                                      <div className="overflow-x-auto">
+                                        <table className="text-[10px]">{children}</table>
+                                      </div>
+                                    ),
+                                    th: ({ children }) => (
+                                      <th className="px-1 py-0.5 border text-left whitespace-nowrap">{children}</th>
+                                    ),
+                                    td: ({ children }) => (
+                                      <td className="px-1 py-0.5 border whitespace-nowrap">{children}</td>
+                                    ),
+                                  }}
+                                >
+                                  {msg.content}
+                                </ReactMarkdown>
+                              </div>
+                            ) : (
+                              <p className="whitespace-pre-wrap break-words pr-4">{msg.content}</p>
+                            )}
                             <button
                               onClick={() => handleDeleteMessage(idx)}
                               className="absolute top-0.5 right-0.5 p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-destructive/20 transition-opacity"
@@ -420,19 +363,7 @@ export function AppSidebar() {
                         </div>
                       ))}
 
-                      {isStreaming && streamingMessage && (
-                        <div className="flex gap-1.5 justify-start">
-                          <div className="flex-shrink-0 w-5 h-5 rounded-full bg-primary/10 flex items-center justify-center">
-                            <Sparkles className="w-2.5 h-2.5 text-primary" />
-                          </div>
-                          <div className="max-w-[85%] rounded p-1.5 text-xs bg-muted">
-                            <p className="whitespace-pre-wrap break-words">{streamingMessage}</p>
-                            <span className="inline-block w-1 h-2.5 bg-primary ml-0.5 animate-pulse" />
-                          </div>
-                        </div>
-                      )}
-
-                      {isStreaming && !streamingMessage && (
+                      {chatMutation.isPending && (
                         <div className="flex gap-1.5 justify-start">
                           <div className="flex-shrink-0 w-5 h-5 rounded-full bg-primary/10 flex items-center justify-center">
                             <Sparkles className="w-2.5 h-2.5 text-primary" />
@@ -455,13 +386,13 @@ export function AppSidebar() {
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  placeholder="Ask Milo..."
+                  placeholder="Ask about schedules..."
                   className="min-h-[32px] max-h-[60px] resize-none text-xs"
-                  disabled={isStreaming}
+                  disabled={chatMutation.isPending}
                 />
                 <Button
                   onClick={handleSend}
-                  disabled={!input.trim() || isStreaming}
+                  disabled={!input.trim() || chatMutation.isPending}
                   size="sm"
                   className="h-8 w-8 p-0 flex-shrink-0"
                 >

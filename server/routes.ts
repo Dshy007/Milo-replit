@@ -42,6 +42,8 @@ import {
 import { optimizeWeekSchedule, applyOptimizedSchedule } from "./ortools-matcher";
 import { optimizeWithGemini, applyGeminiSchedule } from "./gemini-scheduler";
 import { optimizeWithClaude, applyClaudeSchedule } from "./claude-scheduler";
+import { optimizeWithMilo, applyMiloSchedule } from "./milo-scheduler";
+import { matchDeterministic, applyDeterministicMatches } from "./deterministic-matcher";
 
 // Require SESSION_SECRET
 const SESSION_SECRET = process.env.SESSION_SECRET!;
@@ -2356,6 +2358,60 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // POST /api/assignments/clear-week - Clear driver assignments only (keeps blocks intact)
+  app.post("/api/assignments/clear-week", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { weekStart, weekEnd } = req.body;
+
+      if (!weekStart || !weekEnd) {
+        return res.status(400).json({ message: "Missing required fields: weekStart, weekEnd" });
+      }
+
+      // Use UTC dates to match how blocks are stored (at noon UTC)
+      const startDate = new Date(weekStart as string);
+      const endDate = new Date(weekEnd as string);
+      endDate.setUTCHours(23, 59, 59, 999);
+
+      console.log(`[ASSIGNMENTS CLEAR] Date range: ${startDate.toISOString()} to ${endDate.toISOString()}`);
+
+      // Get blocks in date range
+      const blocksInRange = await db
+        .select({ id: blocks.id })
+        .from(blocks)
+        .where(and(
+          eq(blocks.tenantId, tenantId),
+          gte(blocks.serviceDate, startDate),
+          lte(blocks.serviceDate, endDate)
+        ));
+
+      let deletedCount = 0;
+
+      if (blocksInRange.length > 0) {
+        const blockIds = blocksInRange.map(b => b.id);
+
+        // Delete only the assignments, keep the blocks
+        const result = await db.delete(blockAssignments)
+          .where(and(
+            eq(blockAssignments.tenantId, tenantId),
+            inArray(blockAssignments.blockId, blockIds)
+          ));
+
+        deletedCount = blocksInRange.length;
+      }
+
+      console.log(`[ASSIGNMENTS] Cleared assignments for ${deletedCount} blocks for ${weekStart} to ${weekEnd}`);
+
+      res.json({
+        message: `Cleared assignments for ${deletedCount} blocks`,
+        count: deletedCount
+      });
+    } catch (error: any) {
+      console.error("Error clearing assignments:", error);
+      res.status(500).json({ message: "Failed to clear assignments", error: error.message });
+    }
+  });
+
   // PATCH /api/shift-occurrences/:id/assignment - Update driver assignment for a shift occurrence OR imported block
   app.patch("/api/shift-occurrences/:id/assignment", requireAuth, async (req, res) => {
     try {
@@ -4196,6 +4252,205 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
         success: false,
         message: "Failed to apply assignments",
         error: error.message
+      });
+    }
+  });
+
+  // ==================== DETERMINISTIC MATCHER (Fast, No AI) ====================
+
+  // POST /api/matching/deterministic - Calculate matches using scoring algorithm
+  // Fast, predictable, no API calls - uses DNA profiles + scoring
+  app.post("/api/matching/deterministic", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { weekStart, contractType, minDays } = req.body;
+
+      const weekStartDate = weekStart
+        ? parseISO(weekStart)
+        : startOfWeek(new Date(), { weekStartsOn: 0 });
+
+      const validMinDays = [3, 4, 5].includes(minDays) ? minDays : 3;
+
+      console.log(`[Deterministic API] Calculating matches for week starting ${format(weekStartDate, "yyyy-MM-dd")}`);
+
+      const result = await matchDeterministic(
+        tenantId,
+        weekStartDate,
+        contractType as "solo1" | "solo2" | undefined,
+        validMinDays
+      );
+
+      res.json({
+        success: true,
+        suggestions: result.suggestions,
+        unassigned: result.unassigned,
+        stats: result.stats,
+      });
+    } catch (error: any) {
+      console.error("Deterministic matching error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to calculate matches",
+        error: error.message
+      });
+    }
+  });
+
+  // POST /api/matching/deterministic/apply - Apply deterministic assignments
+  app.post("/api/matching/deterministic/apply", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { assignments } = req.body;
+
+      if (!Array.isArray(assignments) || assignments.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "No assignments provided"
+        });
+      }
+
+      console.log(`[Deterministic API] Applying ${assignments.length} assignments`);
+
+      const result = await applyDeterministicMatches(tenantId, assignments);
+
+      res.json({
+        success: true,
+        applied: result.applied,
+        errors: result.errors,
+      });
+    } catch (error: any) {
+      console.error("Apply deterministic assignments error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to apply assignments",
+        error: error.message
+      });
+    }
+  });
+
+  // ==================== MILO SCHEDULER (Enhanced Claude) ====================
+
+  // POST /api/matching/milo - Calculate matches using MILO enhanced prompt
+  // Features: DOT compliance, 6-tier scoring, 12/8/3/2/1 week lookback
+  app.post("/api/matching/milo", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { weekStart, contractType, minDays } = req.body;
+
+      const weekStartDate = weekStart
+        ? parseISO(weekStart)
+        : startOfWeek(new Date(), { weekStartsOn: 0 });
+
+      const validMinDays = [3, 4, 5].includes(minDays) ? minDays : 3;
+
+      console.log(`[MILO API] Calculating matches for week starting ${format(weekStartDate, "yyyy-MM-dd")}`);
+
+      const result = await optimizeWithMilo(
+        tenantId,
+        weekStartDate,
+        contractType as "solo1" | "solo2" | undefined,
+        validMinDays
+      );
+
+      res.json({
+        success: true,
+        suggestions: result.suggestions,
+        unassigned: result.unassigned,
+        stats: result.stats,
+        validation: result.validation,
+      });
+    } catch (error: any) {
+      console.error("MILO matching error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to calculate matches with MILO",
+        error: error.message
+      });
+    }
+  });
+
+  // POST /api/matching/milo/apply - Apply MILO-optimized assignments
+  app.post("/api/matching/milo/apply", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { assignments } = req.body;
+
+      if (!Array.isArray(assignments) || assignments.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "No assignments provided"
+        });
+      }
+
+      console.log(`[MILO API] Applying ${assignments.length} assignments`);
+
+      const result = await applyMiloSchedule(tenantId, assignments);
+
+      res.json({
+        success: true,
+        applied: result.applied,
+        errors: result.errors,
+      });
+    } catch (error: any) {
+      console.error("Apply MILO assignments error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to apply MILO assignments",
+        error: error.message
+      });
+    }
+  });
+
+  // POST /api/milo/chat - Conversational MILO chat
+  app.post("/api/milo/chat", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { message, sessionId } = req.body;
+
+      if (!message) {
+        return res.status(400).json({
+          success: false,
+          message: "Message is required"
+        });
+      }
+
+      // Generate session ID if not provided
+      const chatSessionId = sessionId || `milo-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+      const { chatWithMilo } = await import("./milo-chat");
+      const result = await chatWithMilo(tenantId, chatSessionId, message);
+
+      res.json({
+        success: true,
+        response: result.response,
+        sessionId: result.sessionId
+      });
+    } catch (error: any) {
+      console.error("MILO chat error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to process chat message",
+        error: error.message
+      });
+    }
+  });
+
+  // POST /api/milo/chat/clear - Clear MILO chat history
+  app.post("/api/milo/chat/clear", requireAuth, async (req, res) => {
+    try {
+      const { sessionId } = req.body;
+
+      if (sessionId) {
+        const { clearMiloChatHistory } = await import("./milo-chat");
+        clearMiloChatHistory(sessionId);
+      }
+
+      res.json({ success: true, message: "Chat history cleared" });
+    } catch (error: any) {
+      console.error("Clear MILO chat error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to clear chat history"
       });
     }
   });
@@ -6093,32 +6348,6 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
       res.status(500).json({
         success: false,
         message: "Gemini chat failed",
-        error: error.message,
-      });
-    }
-  });
-
-  // POST /api/milo/chat - Milo AI agent with action execution (uses Gemini)
-  app.post("/api/milo/chat", requireAuth, async (req: Request, res: Response) => {
-    try {
-      const tenantId = req.session.tenantId!;
-      const { message, history } = req.body;
-
-      if (!message) {
-        return res.status(400).json({ message: "Missing required field: message" });
-      }
-
-      const { getMiloAgent } = await import("./ai/agents/milo-agent");
-      const milo = await getMiloAgent();
-
-      const result = await milo.processMessage(tenantId, message, history || []);
-
-      res.json(result);
-    } catch (error: any) {
-      console.error("[Milo Chat] Error:", error);
-      res.status(500).json({
-        success: false,
-        message: "Milo encountered an error. Please try again.",
         error: error.message,
       });
     }
