@@ -563,3 +563,171 @@
   );
   border-color: rgba(245, 158, 11, 0.5) !important;
 }
+
+/* ========================================
+ * ELEGANT DASHBOARD STYLES
+ * Subtle, classy, professional analytics
+ * ======================================== */
+
+/* Elegant card with soft elevation */
+.elegant-card {
+  background: linear-gradient(145deg, #1a1f26 0%, #151a20 100%);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  box-shadow:
+    0 4px 6px -1px rgba(0, 0, 0, 0.3),
+    0 2px 4px -1px rgba(0, 0, 0, 0.2);
+  transition: all 0.3s ease-out;
+}
+
+.elegant-card:hover {
+  border-color: rgba(20, 184, 166, 0.2);
+  box-shadow:
+    0 10px 15px -3px rgba(0, 0, 0, 0.3),
+    0 0 20px rgba(20, 184, 166, 0.08);
+}
+
+/* Stat card with accent border */
+.stat-card {
+  background: linear-gradient(145deg, #1a1f26 0%, #161b21 100%);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-left: 3px solid #14b8a6;
+  border-radius: 8px;
+  padding: 1rem;
+  transition: all 0.3s ease-out;
+}
+
+.stat-card:hover {
+  border-left-color: #10b981;
+  box-shadow: 0 4px 12px rgba(20, 184, 166, 0.1);
+}
+
+/* Stat card color variants */
+.stat-card-emerald { border-left-color: #10b981; }
+.stat-card-teal { border-left-color: #14b8a6; }
+.stat-card-violet { border-left-color: #8b5cf6; }
+.stat-card-amber { border-left-color: #f59e0b; }
+.stat-card-slate { border-left-color: #64748b; }
+
+/* Subtle gradient text for headers */
+.gradient-text {
+  background: linear-gradient(135deg, #e2e8f0 0%, #94a3b8 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Dashboard background */
+.dashboard-bg {
+  background: linear-gradient(180deg, #0f1419 0%, #111820 100%);
+  min-height: 100vh;
+}
+
+/* Chart container with subtle styling */
+.chart-container {
+  background: linear-gradient(145deg, #1a1f26 0%, #151a20 100%);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  padding: 1.25rem;
+}
+
+/* Progress ring animations */
+@keyframes progress-fill {
+  from {
+    stroke-dashoffset: 283;
+  }
+}
+
+.progress-ring-animated {
+  animation: progress-fill 1s ease-out forwards;
+}
+
+/* Elegant table styling */
+.elegant-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.elegant-table thead tr {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.elegant-table th {
+  padding: 0.75rem 1rem;
+  text-align: left;
+  font-weight: 500;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #64748b;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.elegant-table td {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.elegant-table tbody tr {
+  transition: background-color 0.2s ease;
+}
+
+.elegant-table tbody tr:hover {
+  background: rgba(20, 184, 166, 0.05);
+}
+
+/* Heatmap cell styles */
+.heatmap-cell {
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.heatmap-cell:hover {
+  transform: scale(1.1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+/* Score color utilities */
+.score-excellent { color: #10b981; }
+.score-good { color: #14b8a6; }
+.score-fair { color: #f59e0b; }
+.score-low { color: #64748b; }
+
+.bg-score-excellent { background-color: rgba(16, 185, 129, 0.15); }
+.bg-score-good { background-color: rgba(20, 184, 166, 0.15); }
+.bg-score-fair { background-color: rgba(245, 158, 11, 0.15); }
+.bg-score-low { background-color: rgba(100, 116, 139, 0.15); }
+
+/* Pattern group colors */
+.pattern-sunWed { color: #8b5cf6; }
+.pattern-wedSat { color: #06b6d4; }
+.pattern-mixed { color: #64748b; }
+.pattern-new { color: #475569; }
+
+.bg-pattern-sunWed { background-color: rgba(139, 92, 246, 0.15); }
+.bg-pattern-wedSat { background-color: rgba(6, 182, 212, 0.15); }
+.bg-pattern-mixed { background-color: rgba(100, 116, 139, 0.15); }
+.bg-pattern-new { background-color: rgba(71, 85, 105, 0.15); }
+
+/* Smooth fade in animation */
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.4s ease-out forwards;
+}
+
+/* Staggered animation delays */
+.delay-100 { animation-delay: 100ms; }
+.delay-200 { animation-delay: 200ms; }
+.delay-300 { animation-delay: 300ms; }
+.delay-400 { animation-delay: 400ms; }

@@ -12,7 +12,7 @@ This module can be used standalone or integrated with schedule_optimizer.py
 import json
 import sys
 import numpy as np
-from collections import defaultdict
+import pandas as pd
 from typing import Dict, List, Tuple, Any, Optional
 
 # sklearn imports - these are the battle-tested ML algorithms
@@ -75,47 +75,36 @@ class PatternAnalyzer:
         if not assignments:
             return features
 
-        # Count days
-        day_counts = np.zeros(7)
-        time_counts = np.zeros(4)  # night (0-6), morning (6-12), afternoon (12-18), evening (18-24)
+        # Convert to DataFrame for cleaner processing
+        df = pd.DataFrame(assignments)
+        total = len(df)
 
-        weeks_seen = set()
-        week_days = defaultdict(set)  # week_key -> set of days worked
+        # Day frequency: get dayOfWeek or convert dayName to index
+        if 'dayOfWeek' in df.columns:
+            df['day_idx'] = df['dayOfWeek']
+        else:
+            df['day_idx'] = df['dayName'].str.lower().map(DAY_TO_INDEX).fillna(0).astype(int)
 
-        for a in assignments:
-            # Day frequency
-            day_idx = a.get('dayOfWeek', DAY_TO_INDEX.get(a.get('dayName', '').lower(), 0))
-            day_counts[day_idx] += 1
+        day_counts = df['day_idx'].value_counts().reindex(range(7), fill_value=0).sort_index().values
 
-            # Time bucket
-            start_time = a.get('startTime', '12:00')
+        # Time bucket: convert startTime to bucket (0-3)
+        def time_to_bucket(time_str):
             try:
-                hour = int(start_time.split(':')[0])
-                time_bucket = min(3, hour // 6)  # 0-5=0, 6-11=1, 12-17=2, 18-23=3
-                time_counts[time_bucket] += 1
-            except (ValueError, IndexError):
-                time_counts[2] += 1  # Default to afternoon
+                hour = int(str(time_str).split(':')[0])
+                return min(3, hour // 6)
+            except (ValueError, IndexError, TypeError):
+                return 2  # Default to afternoon
 
-            # Track weeks for consistency
-            service_date = a.get('serviceDate', '')
-            if service_date:
-                # Extract week key (simplified - just use first 7 chars of date)
-                week_key = service_date[:7] if len(service_date) >= 7 else service_date
-                weeks_seen.add(week_key)
-                day_name = a.get('dayName', DAY_NAMES[day_idx]).lower()
-                week_days[week_key].add(day_name)
+        df['time_bucket'] = df['startTime'].fillna('12:00').apply(time_to_bucket)
+        time_counts = df['time_bucket'].value_counts().reindex(range(4), fill_value=0).sort_index().values
 
-        total = len(assignments)
-        if total > 0:
-            # Normalize day frequencies
-            features[0:7] = day_counts / total
-            # Normalize time frequencies
-            features[7:11] = time_counts / total
+        # Normalize frequencies
+        features[0:7] = day_counts / total
+        features[7:11] = time_counts / total
 
         # Consistency score: coefficient of variation of day counts
-        # Higher = more spread out, lower = more concentrated on specific days
-        if np.mean(day_counts) > 0:
-            features[11] = np.std(day_counts) / (np.mean(day_counts) + 0.01)
+        if day_counts.mean() > 0:
+            features[11] = day_counts.std() / (day_counts.mean() + 0.01)
 
         return features
 
@@ -231,34 +220,40 @@ class PatternAnalyzer:
 
     def _analyze_cluster_profiles(self, X: np.ndarray, labels: np.ndarray) -> Dict[int, str]:
         """
-        Analyze clusters to determine pattern group labels.
+        Analyze clusters to determine pattern group labels using Pandas.
 
         Looks at day frequency patterns to classify:
         - sunWed: Primarily Sun-Mon-Tue-Wed
         - wedSat: Primarily Wed-Thu-Fri-Sat
         - mixed: No clear pattern
         """
+        # Create DataFrame with day frequencies and cluster labels
+        day_cols = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+        df = pd.DataFrame(X[:, 0:7], columns=day_cols)
+        df['cluster'] = labels
+
+        n_clusters = int(max(labels)) + 1
+        print(f"[K-Means DEBUG] Analyzing {n_clusters} clusters", file=sys.stderr)
+
+        # Group by cluster and compute mean day frequencies
+        cluster_means = df.groupby('cluster')[day_cols].mean()
+
         cluster_profiles = {}
-
-        print(f"[K-Means DEBUG] Analyzing {max(labels) + 1} clusters", file=sys.stderr)
-
-        for cluster_id in range(max(labels) + 1):
-            mask = labels == cluster_id
-            if not np.any(mask):
+        for cluster_id in range(n_clusters):
+            if cluster_id not in cluster_means.index:
                 cluster_profiles[cluster_id] = 'mixed'
                 continue
 
-            # Average day frequencies for this cluster (features 0-6)
-            avg_days = X[mask, 0:7].mean(axis=0)
+            avg_days = cluster_means.loc[cluster_id]
+            driver_count = (df['cluster'] == cluster_id).sum()
 
-            # Debug: show day distribution for this cluster
-            day_names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-            day_pcts = [f"{day_names[i]}:{avg_days[i]:.2f}" for i in range(7)]
-            print(f"[K-Means DEBUG] Cluster {cluster_id} ({np.sum(mask)} drivers): {' '.join(day_pcts)}", file=sys.stderr)
+            # Debug: show day distribution
+            day_pcts = ' '.join([f"{day}:{avg_days[day]:.2f}" for day in day_cols])
+            print(f"[K-Means DEBUG] Cluster {cluster_id} ({driver_count} drivers): {day_pcts}", file=sys.stderr)
 
             # Calculate sun-wed vs wed-sat scores
-            sun_wed_score = avg_days[0] + avg_days[1] + avg_days[2] + avg_days[3] * 0.5  # Sun, Mon, Tue, half Wed
-            wed_sat_score = avg_days[3] * 0.5 + avg_days[4] + avg_days[5] + avg_days[6]  # half Wed, Thu, Fri, Sat
+            sun_wed_score = avg_days['Sun'] + avg_days['Mon'] + avg_days['Tue'] + avg_days['Wed'] * 0.5
+            wed_sat_score = avg_days['Wed'] * 0.5 + avg_days['Thu'] + avg_days['Fri'] + avg_days['Sat']
 
             total = sun_wed_score + wed_sat_score
             if total > 0:
@@ -282,7 +277,7 @@ class PatternAnalyzer:
 
     def _calculate_preferences(self, assignments: List[Dict]) -> Dict:
         """
-        Calculate driver preferences from assignment history.
+        Calculate driver preferences from assignment history using Pandas.
         """
         if not assignments:
             return {
@@ -292,50 +287,38 @@ class PatternAnalyzer:
                 'consistency': 0.0
             }
 
-        # Count frequencies
-        day_freq = defaultdict(int)
-        time_freq = defaultdict(int)
-        contract_freq = defaultdict(int)
-
-        for a in assignments:
-            day_name = a.get('dayName', '').lower()
-            if day_name:
-                day_freq[day_name] += 1
-
-            start_time = a.get('startTime', '')
-            if start_time:
-                time_freq[start_time] += 1
-
-            contract = a.get('soloType', a.get('contractType', 'solo1'))
-            if contract:
-                contract_freq[contract.lower()] += 1
-
-        # Get top preferences
-        total = len(assignments)
-
-        # Days that appear in at least 25% of assignments
+        df = pd.DataFrame(assignments)
+        total = len(df)
         threshold = total * 0.25
-        preferred_days = [
-            day for day, count in sorted(day_freq.items(), key=lambda x: -x[1])
-            if count >= threshold
-        ]
-        if not preferred_days:
-            preferred_days = [day for day, _ in sorted(day_freq.items(), key=lambda x: -x[1])[:3]]
 
-        # Top 3 times
-        preferred_times = [
-            time for time, _ in sorted(time_freq.items(), key=lambda x: -x[1])[:3]
-        ]
+        # Day frequency
+        if 'dayName' in df.columns:
+            day_freq = df['dayName'].str.lower().value_counts()
+            preferred_days = day_freq[day_freq >= threshold].index.tolist()
+            if not preferred_days:
+                preferred_days = day_freq.head(3).index.tolist()
+        else:
+            preferred_days = []
 
-        # Most common contract type
-        contract_type = max(contract_freq.items(), key=lambda x: x[1])[0] if contract_freq else 'solo1'
+        # Time frequency - top 3
+        if 'startTime' in df.columns:
+            time_freq = df['startTime'].dropna().value_counts()
+            preferred_times = time_freq.head(3).index.tolist()
+        else:
+            preferred_times = []
 
-        # Consistency: what fraction of weeks had the same days?
-        # Simplified: use std of day frequencies
-        if day_freq:
-            counts = list(day_freq.values())
+        # Contract type - mode (most common)
+        contract_col = df['soloType'] if 'soloType' in df.columns else df.get('contractType')
+        if contract_col is not None and len(contract_col.dropna()) > 0:
+            contract_type = contract_col.str.lower().mode().iloc[0]
+        else:
+            contract_type = 'solo1'
+
+        # Consistency score from day frequency variance
+        if 'dayName' in df.columns and len(day_freq) > 0:
+            counts = day_freq.values
             consistency = 1.0 - (np.std(counts) / (np.mean(counts) + 0.01))
-            consistency = max(0, min(1, consistency))
+            consistency = max(0.0, min(1.0, consistency))
         else:
             consistency = 0.0
 
