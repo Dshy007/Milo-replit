@@ -1,0 +1,15 @@
+# Python dependencies for Milo scheduling system
+# Install with: pip install -r requirements.txt
+
+# OR-Tools - Google's constraint programming solver
+# Used by schedule_optimizer.py for optimal driver-block matching
+ortools>=9.7.0
+
+# scikit-learn - Machine learning library
+# Used by pattern_analyzer.py for:
+#   - K-Means clustering (driver pattern groups)
+#   - RandomForest (driver-block fit prediction)
+scikit-learn>=1.3.0
+
+# NumPy - Required by scikit-learn, also used directly
+numpy>=1.24.0

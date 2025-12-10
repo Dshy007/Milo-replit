@@ -52,6 +52,7 @@ interface ImportWizardProps {
   onPasteImport?: (blocks: ParsedBlock[], importType: "new_week" | "actuals") => void;
   onImportComplete?: (dominantWeekStart?: Date) => void; // Called after successful import to refresh calendar and navigate to imported week
   currentWeekStart: Date;
+  skipDriverAssignments?: boolean; // If true, clear primaryDriver so blocks import unassigned (for AI optimization)
 }
 
 // Parse pasted Amazon block data
@@ -201,7 +202,7 @@ function parseOperatorId(operatorId: string): { soloType: string; tractor: strin
   return { soloType, tractor, contractKey };
 }
 
-export function ImportWizard({ open, onOpenChange, onImport, onPasteImport, onImportComplete, currentWeekStart }: ImportWizardProps) {
+export function ImportWizard({ open, onOpenChange, onImport, onPasteImport, onImportComplete, currentWeekStart, skipDriverAssignments }: ImportWizardProps) {
   const [step, setStep] = useState<"upload" | "identify" | "confirm" | "reconstruct">("upload");
   const [inputMode, setInputMode] = useState<"file" | "paste">("file");
   const [files, setFiles] = useState<ImportFile[]>([]);
@@ -672,11 +673,17 @@ Respond ONLY with the JSON object, no other text.`;
     setImportResult(null);
 
     try {
+      // If skipDriverAssignments is true, clear primaryDriver so blocks import unassigned
+      // This is used by AI Scheduler to let OR-Tools optimize driver assignments
+      const blocksToImport = skipDriverAssignments
+        ? filteredBlocks.map(block => ({ ...block, primaryDriver: '', relayDrivers: [] }))
+        : filteredBlocks;
+
       const response = await fetch("/api/schedules/import-reconstructed", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ blocks: filteredBlocks }),
+        body: JSON.stringify({ blocks: blocksToImport }),
       });
 
       const data = await response.json();

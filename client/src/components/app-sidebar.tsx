@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Home, Users, Calendar, Route, Truck, FileText, Upload, Sparkles, Settings, LogOut, MessageSquare, Brain, FileSpreadsheet, CalendarCheck, GitBranch, Send, Loader2, ChevronDown, ChevronUp, User, Trash2, RotateCcw, Dna } from "lucide-react";
+import { Home, Users, Calendar, Route, Truck, FileText, Upload, Sparkles, Settings, LogOut, MessageSquare, Brain, FileSpreadsheet, CalendarCheck, GitBranch, Send, Loader2, ChevronDown, ChevronUp, User, Trash2, RotateCcw, Dna, Cpu } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useMutation } from "@tanstack/react-query";
@@ -89,6 +89,12 @@ const navItems = [
     url: "/driver-availability",
     icon: CalendarCheck,
     testId: "nav-driver-availability",
+  },
+  {
+    title: "AI Scheduler",
+    url: "/ai-scheduler",
+    icon: Cpu,
+    testId: "nav-ai-scheduler",
   },
 ];
 

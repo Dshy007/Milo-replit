@@ -1,6 +1,6 @@
 """
-Schedule Optimizer - Using Google OR-Tools CP-SAT Solver
-(Same algorithm used in hospital nurse scheduling)
+Schedule Optimizer - Using Google OR-Tools CP-SAT Solver + scikit-learn Pattern Analysis
+(Same algorithm used in hospital nurse scheduling, enhanced with ML)
 
 CONSTRAINTS:
   1. Each block assigned to exactly one driver (hard)
@@ -9,33 +9,73 @@ CONSTRAINTS:
   4. Fair distribution: min/max days per driver (configurable via slider)
 
 OBJECTIVE:
-  Maximize historical preference score (drivers get slots they've worked before)
+  Maximize ML-predicted fit scores (combines day/time preferences + historical patterns)
 
 SLIDER (minDays):
   3 = Allow 3-7 days per driver (flexible, more coverage)
   4 = Allow 4-6 days per driver (balanced)
   5 = Allow 5-5 days per driver (strict, equal distribution)
+
+INTEGRATION:
+  Uses pattern_analyzer.py for:
+  - K-Means clustering (driver pattern groups: sunWed, wedSat, mixed)
+  - ML fit score prediction (0-1 score for driver-block compatibility)
 """
 
 import json
 import sys
+import os
 from collections import defaultdict
 from ortools.sat.python import cp_model
 
+# Add script directory to path for sibling imports (works from any CWD)
+script_dir = os.path.dirname(os.path.abspath(__file__))
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
 
-def optimize_schedule(drivers: list, blocks: list, slot_history: dict, min_days: int = 3) -> dict:
+# Import pattern analyzer for ML-based scoring
+try:
+    from pattern_analyzer import PatternAnalyzer
+    ML_AVAILABLE = True
+except ImportError:
+    ML_AVAILABLE = False
+    print("[Optimizer] WARNING: pattern_analyzer not available, using raw history scores", file=sys.stderr)
+
+
+def optimize_schedule(drivers: list, blocks: list, slot_history: dict, min_days: int = 3,
+                      driver_histories: dict = None) -> dict:
     """
-    Match blocks to drivers using CP-SAT constraint solver.
+    Match blocks to drivers using CP-SAT constraint solver + ML scoring.
 
     Args:
         drivers: List of {id, name, contractType}
         blocks: List of {id, day, time, contractType, serviceDate}
         slot_history: {slot: {driverId: count}} - 8-week history
         min_days: Minimum days per driver (3, 4, or 5)
+        driver_histories: {driver_id: [assignments]} - for ML pattern analysis (optional)
     """
 
-    print(f"=== CP-SAT SOLVER (minDays={min_days}) ===", file=sys.stderr)
+    print(f"=== CP-SAT SOLVER + ML (minDays={min_days}) ===", file=sys.stderr)
     print(f"Input: {len(drivers)} drivers, {len(blocks)} blocks", file=sys.stderr)
+
+    # Initialize ML components if available and histories provided
+    ml_profiles = {}
+    ml_scores = {}
+    if ML_AVAILABLE and driver_histories:
+        print(f"[ML] Analyzing patterns for {len(driver_histories)} drivers...", file=sys.stderr)
+        analyzer = PatternAnalyzer()
+        ml_profiles = analyzer.cluster_drivers(driver_histories)
+        ml_scores = analyzer.predict_fit_scores(drivers, blocks, ml_profiles, slot_history)
+
+        # Log pattern distribution
+        pattern_counts = defaultdict(int)
+        for profile in ml_profiles.values():
+            pattern_counts[profile.get('patternGroup', 'unknown')] += 1
+        print(f"[ML] Pattern groups: {dict(pattern_counts)}", file=sys.stderr)
+    elif not ML_AVAILABLE:
+        print("[ML] Pattern analyzer not available, using raw history", file=sys.stderr)
+    else:
+        print("[ML] No driver histories provided, using raw history", file=sys.stderr)
 
     if not blocks:
         return {
@@ -89,7 +129,8 @@ def optimize_schedule(drivers: list, blocks: list, slot_history: dict, min_days:
         print(f"\n  === Solving {contract_type}: {len(ct_drivers)} drivers, {len(ct_blocks)} blocks ===", file=sys.stderr)
 
         assignments, unassigned, status = solve_contract_type(
-            ct_drivers, ct_blocks, slot_history, min_days, driver_map
+            ct_drivers, ct_blocks, slot_history, min_days, driver_map,
+            ml_profiles=ml_profiles, ml_scores=ml_scores
         )
 
         all_assignments.extend(assignments)
@@ -121,11 +162,18 @@ def optimize_schedule(drivers: list, blocks: list, slot_history: dict, min_days:
 
 
 def solve_contract_type(drivers: list, blocks: list, slot_history: dict,
-                        min_days: int, driver_map: dict) -> tuple:
+                        min_days: int, driver_map: dict,
+                        ml_profiles: dict = None, ml_scores: dict = None) -> tuple:
     """
-    Solve scheduling for one contract type using CP-SAT.
+    Solve scheduling for one contract type using CP-SAT + ML scores.
     Returns (assignments, unassigned_block_ids, status)
+
+    Args:
+        ml_profiles: {driver_id: {patternGroup, preferredDays, ...}} from PatternAnalyzer
+        ml_scores: {(driver_id, block_id): float} fit scores 0-1
     """
+    ml_profiles = ml_profiles or {}
+    ml_scores = ml_scores or {}
 
     model = cp_model.CpModel()
 
@@ -197,28 +245,42 @@ def solve_contract_type(drivers: list, blocks: list, slot_history: dict,
         model.add(total_assigned >= driver_min)
         model.add(total_assigned <= driver_max)
 
-    # ============ OBJECTIVE: Maximize historical preferences ============
+    # ============ OBJECTIVE: Maximize ML fit scores (or fallback to history) ============
 
-    # Build preference scores from 8-week history
-    # Higher score = driver has worked this slot more often
+    # Build preference scores - use ML scores if available, else raw history
     preference_score = {}
+    use_ml = bool(ml_scores)
+
     for d, driver in enumerate(drivers):
         driver_id = driver["id"]
         for b, block in enumerate(blocks):
-            slot = f"{block['day']}_{block['time']}"
-            # Get history count (how many times this driver worked this slot)
-            history_count = slot_history.get(slot, {}).get(driver_id, 0)
-            preference_score[(d, b)] = history_count
+            block_id = block["id"]
+
+            if use_ml:
+                # Use ML-predicted fit score (0-1)
+                # Convert tuple key or string key format
+                ml_key = (driver_id, block_id)
+                score = ml_scores.get(ml_key, 0.0)
+
+                # Scale to integer for CP-SAT (multiply by 1000)
+                preference_score[(d, b)] = int(score * 1000)
+            else:
+                # Fallback: use raw history count
+                slot = f"{block['day']}_{block['time']}"
+                history_count = slot_history.get(slot, {}).get(driver_id, 0)
+                preference_score[(d, b)] = history_count
 
     # Log top preferences
     top_prefs = sorted(preference_score.items(), key=lambda x: -x[1])[:10]
     if top_prefs and top_prefs[0][1] > 0:
-        print(f"    Top preferences:", file=sys.stderr)
+        score_type = "ML fit" if use_ml else "history"
+        print(f"    Top preferences ({score_type}):", file=sys.stderr)
         for (d, b), score in top_prefs[:5]:
             if score > 0:
                 driver_name = drivers[d]["name"]
                 block = blocks[b]
-                print(f"      {driver_name} -> {block['day']}_{block['time']}: {score}x", file=sys.stderr)
+                display_score = score / 1000 if use_ml else score
+                print(f"      {driver_name} -> {block['day']}_{block['time']}: {display_score}", file=sys.stderr)
 
     # Objective: maximize sum of preference scores for assigned blocks
     model.maximize(
@@ -257,22 +319,44 @@ def solve_contract_type(drivers: list, blocks: list, slot_history: dict,
                 if solver.value(assign[(d, b)]) == 1:
                     driver = drivers[d]
                     block = blocks[b]
+                    driver_id = driver["id"]
+                    block_id = block["id"]
                     slot = f"{block['day']}_{block['time']}"
-                    history_count = slot_history.get(slot, {}).get(driver["id"], 0)
+                    history_count = slot_history.get(slot, {}).get(driver_id, 0)
+
+                    # Get ML info if available
+                    ml_score = ml_scores.get((driver_id, block_id), 0.0) if use_ml else 0.0
+                    driver_profile = ml_profiles.get(driver_id, {})
+                    pattern_group = driver_profile.get('patternGroup', 'unknown')
+
+                    # Determine match type based on ML score
+                    if use_ml:
+                        if ml_score >= 0.8:
+                            match_type = "ml_excellent"
+                        elif ml_score >= 0.6:
+                            match_type = "ml_good"
+                        elif ml_score >= 0.4:
+                            match_type = "ml_fair"
+                        else:
+                            match_type = "ml_assigned"
+                    else:
+                        match_type = "optimal" if history_count > 0 else "assigned"
 
                     assignments.append({
-                        "blockId": block["id"],
-                        "driverId": driver["id"],
+                        "blockId": block_id,
+                        "driverId": driver_id,
                         "driverName": driver.get("name", "Unknown"),
-                        "matchType": "optimal" if history_count > 0 else "assigned",
+                        "matchType": match_type,
                         "preferredTime": block["time"],
                         "actualTime": block["time"],
                         "serviceDate": block["serviceDate"],
                         "day": block["day"],
                         "historyCount": history_count,
-                        "contractType": block.get("contractType", "solo1")
+                        "contractType": block.get("contractType", "solo1"),
+                        "mlScore": round(ml_score, 3) if use_ml else None,
+                        "patternGroup": pattern_group if use_ml else None
                     })
-                    assigned_blocks.add(block["id"])
+                    assigned_blocks.add(block_id)
 
     unassigned = [b["id"] for b in blocks if b["id"] not in assigned_blocks]
 
@@ -282,7 +366,7 @@ def solve_contract_type(drivers: list, blocks: list, slot_history: dict,
 def main():
     # Read from stdin (handles large data that exceeds command line limits)
     try:
-        input_data = sys.stdin.read()
+        input_data = sys.stdin.read().strip()
         if not input_data:
             print(json.dumps({"error": "No input provided"}))
             sys.exit(1)
@@ -298,7 +382,8 @@ def main():
             drivers=data.get("drivers", []),
             blocks=data.get("blocks", []),
             slot_history=data.get("slotHistory", {}),
-            min_days=data.get("minDays", 3)
+            min_days=data.get("minDays", 3),
+            driver_histories=data.get("driverHistories", None)  # NEW: for ML analysis
         )
         print(json.dumps(result))
     else:

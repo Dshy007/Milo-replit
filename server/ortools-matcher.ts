@@ -10,8 +10,8 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { db } from "./db";
 import { blocks, drivers, driverDnaProfiles, blockAssignments } from "@shared/schema";
-import { eq, and, gte, lte, isNull } from "drizzle-orm";
-import { format, startOfWeek, endOfWeek } from "date-fns";
+import { eq, and, gte, lte } from "drizzle-orm";
+import { format, endOfWeek } from "date-fns";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -63,11 +63,19 @@ interface ORToolsAssignment {
   blockId: string;
   driverId: string;
   driverName: string;
-  matchType: "exact" | "close" | "fallback" | "default";
+  matchType: string;
   preferredTime: string;
   actualTime: string;
   serviceDate: string;
   day: string;
+  historyCount?: number;
+  mlScore?: number | null;
+  patternGroup?: string | null;
+}
+
+interface DriverHistoryEntry {
+  day: string;
+  time: string;
 }
 
 interface ORToolsResult {
@@ -85,13 +93,35 @@ interface ORToolsResult {
 const DAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 
 /**
+ * Convert ML match type to confidence score for UI display
+ */
+function getConfidenceFromMatchType(matchType: string, mlScore?: number | null): number {
+  // If we have an ML score, use it directly (already 0-1)
+  if (mlScore !== null && mlScore !== undefined) {
+    return mlScore;
+  }
+
+  // Fallback: convert match type to confidence
+  switch (matchType) {
+    case "ml_excellent": return 0.95;
+    case "ml_good": return 0.75;
+    case "ml_fair": return 0.55;
+    case "ml_assigned": return 0.35;
+    case "optimal": return 0.8;  // Legacy: had history match
+    case "assigned": return 0.5; // Legacy: no history
+    default: return 0.5;
+  }
+}
+
+/**
  * Call Python OR-Tools solver
  */
 async function callORToolsSolver(
   drivers: DriverInput[],
   blocks: BlockInput[],
   slotHistory: Record<string, Record<string, number>> = {},
-  minDays: number = 3
+  minDays: number = 3,
+  driverHistories: Record<string, DriverHistoryEntry[]> = {}
 ): Promise<ORToolsResult> {
   return new Promise((resolve, reject) => {
     const pythonPath = process.env.PYTHON_PATH || "python";
@@ -102,7 +132,8 @@ async function callORToolsSolver(
       drivers,
       blocks,
       slotHistory,
-      minDays
+      minDays,
+      driverHistories  // NEW: for ML pattern analysis
     });
 
     // Pass data via stdin instead of command line args (avoids ENAMETOOLONG error)
@@ -351,6 +382,92 @@ async function get8WeekSlotHistory(tenantId: string, currentWeekStart: Date): Pr
 }
 
 /**
+ * Get driver assignment histories for ML pattern analysis
+ * Returns: { driverId: [{day, time}, ...] } for the past 8 weeks
+ */
+async function getDriverHistories(
+  tenantId: string,
+  currentWeekStart: Date
+): Promise<Record<string, DriverHistoryEntry[]>> {
+  // Calculate 8 weeks ago
+  const eightWeeksAgo = new Date(currentWeekStart);
+  eightWeeksAgo.setDate(eightWeeksAgo.getDate() - 56);
+
+  const historyEnd = new Date(currentWeekStart);
+  historyEnd.setDate(historyEnd.getDate() - 1);
+
+  console.log(`[OR-Tools] Getting driver histories for ML from ${format(eightWeeksAgo, "yyyy-MM-dd")} to ${format(historyEnd, "yyyy-MM-dd")}`);
+
+  // Get all blocks with their assignments from the history period
+  const historyData = await db
+    .select({
+      blockId: blocks.id,
+      serviceDate: blocks.serviceDate,
+      soloType: blocks.soloType,
+      tractorId: blocks.tractorId,
+      driverId: blockAssignments.driverId
+    })
+    .from(blocks)
+    .innerJoin(blockAssignments, eq(blocks.id, blockAssignments.blockId))
+    .where(
+      and(
+        eq(blocks.tenantId, tenantId),
+        eq(blockAssignments.isActive, true),
+        gte(blocks.serviceDate, eightWeeksAgo),
+        lte(blocks.serviceDate, historyEnd)
+      )
+    );
+
+  // Build driver histories: { driverId: [{day, time}, ...] }
+  const driverHistories: Record<string, DriverHistoryEntry[]> = {};
+
+  for (const row of historyData) {
+    if (!row.driverId) continue;
+
+    const serviceDate = new Date(row.serviceDate);
+    const dayIndex = serviceDate.getDay();
+    const dayName = DAY_NAMES[dayIndex];
+
+    // Use canonical time from lookup
+    const soloType = (row.soloType || "solo1").toLowerCase();
+    const tractorId = row.tractorId || "Tractor_1";
+    const lookupKey = `${soloType}_${tractorId}`;
+    const time = CANONICAL_START_TIMES[lookupKey] || "00:00";
+
+    if (!driverHistories[row.driverId]) {
+      driverHistories[row.driverId] = [];
+    }
+    driverHistories[row.driverId].push({ day: dayName, time });
+  }
+
+  const driverCount = Object.keys(driverHistories).length;
+  const totalEntries = Object.values(driverHistories).reduce((sum, h) => sum + h.length, 0);
+  console.log(`[OR-Tools] Built ML histories: ${driverCount} drivers, ${totalEntries} total assignments`);
+
+  // DEBUG: Show day distribution for K-Means
+  const dayDistribution: Record<string, number> = {
+    sunday: 0, monday: 0, tuesday: 0, wednesday: 0, thursday: 0, friday: 0, saturday: 0
+  };
+  for (const entries of Object.values(driverHistories)) {
+    for (const entry of entries) {
+      const dayLower = entry.day.toLowerCase();
+      if (dayDistribution[dayLower] !== undefined) {
+        dayDistribution[dayLower]++;
+      }
+    }
+  }
+  console.log(`[K-Means Data] Day distribution from 8-week history:`);
+  console.log(`  Sun: ${dayDistribution.sunday} | Mon: ${dayDistribution.monday} | Tue: ${dayDistribution.tuesday} | Wed: ${dayDistribution.wednesday}`);
+  console.log(`  Thu: ${dayDistribution.thursday} | Fri: ${dayDistribution.friday} | Sat: ${dayDistribution.saturday}`);
+
+  const sunWedTotal = dayDistribution.sunday + dayDistribution.monday + dayDistribution.tuesday + dayDistribution.wednesday;
+  const wedSatTotal = dayDistribution.wednesday + dayDistribution.thursday + dayDistribution.friday + dayDistribution.saturday;
+  console.log(`[K-Means Data] Sun-Wed total: ${sunWedTotal} | Wed-Sat total: ${wedSatTotal}`);
+
+  return driverHistories;
+}
+
+/**
  * Main optimization function - matches drivers to blocks using OR-Tools
  *
  * @param minDays - Minimum days per week a driver should work (3, 4, or 5)
@@ -370,6 +487,10 @@ export async function optimizeWeekSchedule(
     matchType: string;
     preferredTime: string;
     actualTime: string;
+    serviceDate: string;
+    day: string;
+    mlScore?: number | null;
+    patternGroup?: string | null;
   }>;
   unassigned: string[];
   stats: {
@@ -391,6 +512,9 @@ export async function optimizeWeekSchedule(
   // Get 8-week slot history for pattern matching
   const slotHistory = await get8WeekSlotHistory(tenantId, weekStart);
 
+  // Get driver histories for ML pattern analysis
+  const driverHistories = await getDriverHistories(tenantId, weekStart);
+
   console.log(`[OR-Tools] Found ${driverInputs.length} drivers and ${blockInputs.length} unassigned blocks`);
 
   if (driverInputs.length === 0 || blockInputs.length === 0) {
@@ -407,24 +531,29 @@ export async function optimizeWeekSchedule(
     };
   }
 
-  // Call OR-Tools solver with historical data
+  // Call OR-Tools solver with historical data + ML histories
   console.log("[OR-Tools] Calling Python with:", {
     driversCount: driverInputs.length,
     blocksCount: blockInputs.length,
     slotHistoryCount: Object.keys(slotHistory).length,
+    driverHistoriesCount: Object.keys(driverHistories).length,
     minDays,
   });
-  const result = await callORToolsSolver(driverInputs, blockInputs, slotHistory, minDays);
+  const result = await callORToolsSolver(driverInputs, blockInputs, slotHistory, minDays, driverHistories);
 
-  // Convert to website format
+  // Convert to website format with ML info
   const suggestions = result.assignments.map(a => ({
     blockId: a.blockId,
     driverId: a.driverId,
     driverName: a.driverName,
-    confidence: a.matchType === "exact" ? 1.0 : a.matchType === "close" ? 0.8 : 0.5,
+    confidence: getConfidenceFromMatchType(a.matchType, a.mlScore),
     matchType: a.matchType,
     preferredTime: a.preferredTime,
-    actualTime: a.actualTime
+    actualTime: a.actualTime,
+    serviceDate: a.serviceDate,
+    day: a.day,
+    mlScore: a.mlScore,
+    patternGroup: a.patternGroup
   }));
 
   return {

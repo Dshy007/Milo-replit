@@ -25,6 +25,7 @@ import SpecialRequests from "@/pages/SpecialRequests";
 import ScheduleIntelligence from "@/pages/ScheduleIntelligence";
 import AutoBuild from "@/pages/AutoBuild";
 import DriverAvailability from "@/pages/DriverAvailability";
+import AIScheduler from "@/pages/AIScheduler";
 import NotFound from "@/pages/not-found";
 
 function ProtectedLayout({ children }: { children: ReactNode }) {
@@ -144,6 +145,13 @@ function Router() {
         <ProtectedRoute>
           <ProtectedLayout>
             <DriverAvailability />
+          </ProtectedLayout>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/ai-scheduler">
+        <ProtectedRoute>
+          <ProtectedLayout>
+            <AIScheduler />
           </ProtectedLayout>
         </ProtectedRoute>
       </Route>
