@@ -4044,10 +4044,11 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
   // POST /api/matching/calculate - Calculate driver-block matches using OR-Tools
   // This replaces the client-side calculateBlockMatch() function
   // minDays slider: 3 = part-time OK, 4 = prefer full-time, 5 = full-time only
+  // lookbackWeeks slider: 1, 2, 4, or 8 weeks to look back for pattern matching
   app.post("/api/matching/calculate", requireAuth, async (req, res) => {
     try {
       const tenantId = req.session.tenantId!;
-      const { weekStart, contractType, minDays } = req.body;
+      const { weekStart, contractType, minDays, lookbackWeeks } = req.body;
 
       // Default to current week if no weekStart provided
       const weekStartDate = weekStart
@@ -4057,13 +4058,17 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
       // Validate minDays (3, 4, or 5)
       const validMinDays = [3, 4, 5].includes(minDays) ? minDays : 3;
 
-      console.log(`[OR-Tools API] Calculating matches for week starting ${format(weekStartDate, "yyyy-MM-dd")}, contract type: ${contractType || "all"}, minDays: ${validMinDays}`);
+      // Validate lookbackWeeks (1, 2, 4, or 8)
+      const validLookbackWeeks = [1, 2, 4, 8].includes(lookbackWeeks) ? lookbackWeeks : 8;
+
+      console.log(`[OR-Tools API] Calculating matches for week starting ${format(weekStartDate, "yyyy-MM-dd")}, contract type: ${contractType || "all"}, minDays: ${validMinDays}, lookbackWeeks: ${validLookbackWeeks}`);
 
       const result = await optimizeWeekSchedule(
         tenantId,
         weekStartDate,
         contractType as "solo1" | "solo2" | "team" | undefined,
-        validMinDays
+        validMinDays,
+        validLookbackWeeks
       );
 
       res.json({
@@ -4071,6 +4076,7 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
         suggestions: result.suggestions,
         unassigned: result.unassigned,
         stats: result.stats,
+        historyRange: result.historyRange,
       });
     } catch (error: any) {
       console.error("OR-Tools matching error:", error);

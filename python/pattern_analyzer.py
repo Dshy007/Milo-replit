@@ -79,15 +79,19 @@ class PatternAnalyzer:
         df = pd.DataFrame(assignments)
         total = len(df)
 
-        # Day frequency: get dayOfWeek or convert dayName to index
+        # Day frequency: get dayOfWeek or convert day/dayName to index
         if 'dayOfWeek' in df.columns:
             df['day_idx'] = df['dayOfWeek']
-        else:
+        elif 'day' in df.columns:
+            df['day_idx'] = df['day'].str.lower().map(DAY_TO_INDEX).fillna(0).astype(int)
+        elif 'dayName' in df.columns:
             df['day_idx'] = df['dayName'].str.lower().map(DAY_TO_INDEX).fillna(0).astype(int)
+        else:
+            df['day_idx'] = 0
 
         day_counts = df['day_idx'].value_counts().reindex(range(7), fill_value=0).sort_index().values
 
-        # Time bucket: convert startTime to bucket (0-3)
+        # Time bucket: convert startTime/time to bucket (0-3)
         def time_to_bucket(time_str):
             try:
                 hour = int(str(time_str).split(':')[0])
@@ -95,7 +99,11 @@ class PatternAnalyzer:
             except (ValueError, IndexError, TypeError):
                 return 2  # Default to afternoon
 
-        df['time_bucket'] = df['startTime'].fillna('12:00').apply(time_to_bucket)
+        time_col = 'time' if 'time' in df.columns else ('startTime' if 'startTime' in df.columns else None)
+        if time_col:
+            df['time_bucket'] = df[time_col].fillna('12:00').apply(time_to_bucket)
+        else:
+            df['time_bucket'] = 2  # Default to afternoon
         time_counts = df['time_bucket'].value_counts().reindex(range(4), fill_value=0).sort_index().values
 
         # Normalize frequencies
@@ -291,18 +299,21 @@ class PatternAnalyzer:
         total = len(df)
         threshold = total * 0.25
 
-        # Day frequency
-        if 'dayName' in df.columns:
-            day_freq = df['dayName'].str.lower().value_counts()
+        # Day frequency - check for 'day' (from Node.js) or 'dayName'
+        day_col = 'day' if 'day' in df.columns else ('dayName' if 'dayName' in df.columns else None)
+        if day_col:
+            day_freq = df[day_col].str.lower().value_counts()
             preferred_days = day_freq[day_freq >= threshold].index.tolist()
             if not preferred_days:
                 preferred_days = day_freq.head(3).index.tolist()
         else:
+            day_freq = pd.Series(dtype=float)
             preferred_days = []
 
-        # Time frequency - top 3
-        if 'startTime' in df.columns:
-            time_freq = df['startTime'].dropna().value_counts()
+        # Time frequency - top 3 (check for 'time' from Node.js or 'startTime')
+        time_col = 'time' if 'time' in df.columns else ('startTime' if 'startTime' in df.columns else None)
+        if time_col:
+            time_freq = df[time_col].dropna().value_counts()
             preferred_times = time_freq.head(3).index.tolist()
         else:
             preferred_times = []
@@ -315,7 +326,7 @@ class PatternAnalyzer:
             contract_type = 'solo1'
 
         # Consistency score from day frequency variance
-        if 'dayName' in df.columns and len(day_freq) > 0:
+        if day_col and len(day_freq) > 0:
             counts = day_freq.values
             consistency = 1.0 - (np.std(counts) / (np.mean(counts) + 0.01))
             consistency = max(0.0, min(1.0, consistency))

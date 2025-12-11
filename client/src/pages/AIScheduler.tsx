@@ -20,6 +20,8 @@ import {
   Filter,
   Play,
   Upload,
+  History,
+  CheckCircle,
 } from "lucide-react";
 import { ImportWizard } from "@/components/ImportWizard";
 import { Slider } from "@/components/ui/slider";
@@ -61,11 +63,19 @@ interface ScheduleStats {
   solverStatus: string;
 }
 
+interface HistoryRange {
+  start: string;
+  end: string;
+  weeks: number;
+  totalAssignments: number;
+}
+
 interface ScheduleResult {
   success: boolean;
   suggestions: MatchSuggestion[];
   unassigned: string[];
   stats: ScheduleStats;
+  historyRange?: HistoryRange;
 }
 
 // Score color utilities
@@ -97,10 +107,22 @@ const getSliderLabel = (value: number): string => {
   }
 };
 
+// Lookback weeks slider labels
+const getLookbackLabel = (weeks: number): string => {
+  switch (weeks) {
+    case 1: return "1 week (last week only)";
+    case 2: return "2 weeks";
+    case 4: return "4 weeks";
+    case 8: return "8 weeks (default)";
+    default: return `${weeks} weeks`;
+  }
+};
+
 export default function AIScheduler() {
   const [weekOffset, setWeekOffset] = useState(0);
   const [contractFilter, setContractFilter] = useState<"all" | "solo1" | "solo2">("all");
   const [minDays, setMinDays] = useState(3);
+  const [lookbackWeeks, setLookbackWeeks] = useState(8);
   const [isImportWizardOpen, setIsImportWizardOpen] = useState(false);
   const { toast } = useToast();
 
@@ -115,12 +137,13 @@ export default function AIScheduler() {
 
   // Fetch schedule optimization
   const { data, isLoading, refetch, isFetching } = useQuery<ScheduleResult>({
-    queryKey: ["/api/matching/calculate", weekStartStr, contractFilter, minDays],
+    queryKey: ["/api/matching/calculate", weekStartStr, contractFilter, minDays, lookbackWeeks],
     queryFn: async () => {
       const res = await apiRequest("POST", "/api/matching/calculate", {
         weekStart: weekStartStr,
         contractType: contractFilter === "all" ? undefined : contractFilter,
         minDays,
+        lookbackWeeks,
       });
       return res.json();
     },
@@ -394,6 +417,39 @@ export default function AIScheduler() {
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
+
+            {/* Lookback Weeks Slider */}
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="flex items-center gap-4 bg-slate-800/50 rounded-lg px-4 py-2 min-w-[200px] border border-slate-700/50">
+                    <History className="w-4 h-4 text-slate-500 flex-shrink-0" />
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between text-xs mb-1">
+                        <span className="text-slate-500">Lookback</span>
+                        <span className="font-medium text-cyan-400">
+                          {getLookbackLabel(lookbackWeeks)}
+                        </span>
+                      </div>
+                      <Slider
+                        value={[lookbackWeeks === 1 ? 0 : lookbackWeeks === 2 ? 1 : lookbackWeeks === 4 ? 2 : 3]}
+                        onValueChange={([idx]) => setLookbackWeeks([1, 2, 4, 8][idx])}
+                        min={0}
+                        max={3}
+                        step={1}
+                        className="w-full"
+                      />
+                    </div>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="bg-slate-800 border-slate-700">
+                  <p className="font-medium mb-1 text-slate-100">History Lookback</p>
+                  <p className="text-xs text-slate-400">1 = Only last week's patterns</p>
+                  <p className="text-xs text-slate-400">2-4 = Recent patterns</p>
+                  <p className="text-xs text-slate-400">8 = Full 8-week history (default)</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
         </div>
 
@@ -459,6 +515,39 @@ export default function AIScheduler() {
                 sublabel="Unassigned"
               />
               <p className="text-xs text-slate-500 mt-2">{stats.totalDrivers} drivers</p>
+            </div>
+          </div>
+        )}
+
+        {/* History Verification Banner - Shows what date range was analyzed */}
+        {data?.historyRange && (
+          <div className="elegant-card p-4 mb-6 border-l-4 border-l-cyan-500 bg-cyan-500/5">
+            <div className="flex items-start gap-3">
+              <CheckCircle className="w-5 h-5 text-cyan-500 mt-0.5" />
+              <div className="flex-1">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="font-medium text-cyan-400">History Analyzed</span>
+                  <Badge className="bg-cyan-500/20 text-cyan-300 border-cyan-500/30 text-xs">
+                    {data.historyRange.weeks} week{data.historyRange.weeks > 1 ? 's' : ''} lookback
+                  </Badge>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
+                  <div>
+                    <span className="text-slate-500">Date Range:</span>
+                    <div className="font-medium text-slate-200">
+                      {data.historyRange.start} → {data.historyRange.end}
+                    </div>
+                  </div>
+                  <div>
+                    <span className="text-slate-500">Assignments Found:</span>
+                    <div className="font-medium text-slate-200">{data.historyRange.totalAssignments}</div>
+                  </div>
+                  <div>
+                    <span className="text-slate-500">Drivers Analyzed:</span>
+                    <div className="font-medium text-emerald-400">{stats?.totalDrivers || 0}</div>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         )}

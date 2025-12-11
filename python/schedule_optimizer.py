@@ -20,6 +20,11 @@ INTEGRATION:
   Uses pattern_analyzer.py for:
   - K-Means clustering (driver pattern groups: sunWed, wedSat, mixed)
   - ML fit score prediction (0-1 score for driver-block compatibility)
+
+MINIMUM HISTORY REQUIREMENT:
+  Drivers MUST have at least 1 assignment in their 8-week history to be
+  eligible for AI assignment. Drivers with zero history are EXCLUDED.
+  This prevents brand new drivers from being auto-assigned to blocks.
 """
 
 import json
@@ -27,6 +32,10 @@ import sys
 import os
 from collections import defaultdict
 from ortools.sat.python import cp_model
+
+# Minimum history threshold: drivers need at least this many assignments in 8 weeks
+# to be eligible for AI scheduling. Drivers with zero history are EXCLUDED.
+MIN_HISTORY_FOR_ASSIGNMENT = 1
 
 # Add script directory to path for sibling imports (works from any CWD)
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -57,6 +66,34 @@ def optimize_schedule(drivers: list, blocks: list, slot_history: dict, min_days:
 
     print(f"=== CP-SAT SOLVER + ML (minDays={min_days}) ===", file=sys.stderr)
     print(f"Input: {len(drivers)} drivers, {len(blocks)} blocks", file=sys.stderr)
+
+    # ============ FILTER DRIVERS BY HISTORY ============
+    # Exclude drivers with zero history - they should not be auto-assigned
+    driver_histories = driver_histories or {}
+
+    original_count = len(drivers)
+    eligible_drivers = []
+    excluded_drivers = []
+
+    for d in drivers:
+        driver_id = d["id"]
+        history_count = len(driver_histories.get(driver_id, []))
+        if history_count >= MIN_HISTORY_FOR_ASSIGNMENT:
+            eligible_drivers.append(d)
+        else:
+            excluded_drivers.append(d["name"])
+
+    if excluded_drivers:
+        print(f"[FILTER] Excluded {len(excluded_drivers)} drivers with <{MIN_HISTORY_FOR_ASSIGNMENT} history assignments:", file=sys.stderr)
+        for name in excluded_drivers[:10]:  # Show first 10
+            print(f"  - {name} (0 history)", file=sys.stderr)
+        if len(excluded_drivers) > 10:
+            print(f"  ... and {len(excluded_drivers) - 10} more", file=sys.stderr)
+
+    print(f"[FILTER] {original_count} total drivers -> {len(eligible_drivers)} eligible for assignment", file=sys.stderr)
+
+    # Use filtered drivers for optimization
+    drivers = eligible_drivers
 
     # Initialize ML components if available and histories provided
     ml_profiles = {}
@@ -123,7 +160,7 @@ def optimize_schedule(drivers: list, blocks: list, slot_history: dict, min_days:
         if not ct_drivers:
             # No drivers for this contract type - all blocks unassigned
             all_unassigned.extend([b["id"] for b in ct_blocks])
-            print(f"  {contract_type}: 0 drivers, {len(ct_blocks)} blocks -> all unassigned", file=sys.stderr)
+            print(f"  {contract_type}: 0 eligible drivers, {len(ct_blocks)} blocks -> all unassigned", file=sys.stderr)
             continue
 
         print(f"\n  === Solving {contract_type}: {len(ct_drivers)} drivers, {len(ct_blocks)} blocks ===", file=sys.stderr)

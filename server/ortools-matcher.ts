@@ -287,25 +287,32 @@ async function getUnassignedBlocks(tenantId: string, weekStart: Date, weekEnd: D
 }
 
 /**
- * Get 8-week slot history for historical pattern matching
+ * Get slot history for historical pattern matching
  * Maps SLOT (dayOfWeek_canonicalTime) -> { driverId: count }
  * Example: "monday_16:30" -> { "driver-123": 5, "driver-456": 3 }
  *
  * This allows matching based on who has historically worked each slot
- * A driver who worked monday_16:30 five times in 8 weeks gets priority
+ * A driver who worked monday_16:30 five times gets priority
+ *
+ * @param lookbackWeeks - How many weeks to look back (1, 2, 4, or 8)
  */
-async function get8WeekSlotHistory(tenantId: string, currentWeekStart: Date): Promise<Record<string, Record<string, number>>> {
-  // Calculate 8 weeks ago
-  const eightWeeksAgo = new Date(currentWeekStart);
-  eightWeeksAgo.setDate(eightWeeksAgo.getDate() - 56); // 8 weeks = 56 days
+async function getSlotHistory(
+  tenantId: string,
+  currentWeekStart: Date,
+  lookbackWeeks: number = 8
+): Promise<{ slotHistory: Record<string, Record<string, number>>; historyStart: Date; historyEnd: Date }> {
+  // Calculate lookback period
+  const lookbackDays = lookbackWeeks * 7;
+  const historyStart = new Date(currentWeekStart);
+  historyStart.setDate(historyStart.getDate() - lookbackDays);
 
   // End at the day before current week starts
   const historyEnd = new Date(currentWeekStart);
   historyEnd.setDate(historyEnd.getDate() - 1);
 
-  console.log(`[OR-Tools] Getting 8-week history from ${format(eightWeeksAgo, "yyyy-MM-dd")} to ${format(historyEnd, "yyyy-MM-dd")}`);
+  console.log(`[OR-Tools] Getting ${lookbackWeeks}-week history from ${format(historyStart, "yyyy-MM-dd")} to ${format(historyEnd, "yyyy-MM-dd")}`);
 
-  // Get all blocks from the 8-week history period
+  // Get all blocks from the history period
   const historyBlocks = await db
     .select({
       id: blocks.id,
@@ -317,10 +324,24 @@ async function get8WeekSlotHistory(tenantId: string, currentWeekStart: Date): Pr
     .where(
       and(
         eq(blocks.tenantId, tenantId),
-        gte(blocks.serviceDate, eightWeeksAgo),
+        gte(blocks.serviceDate, historyStart),
         lte(blocks.serviceDate, historyEnd)
       )
     );
+
+  // DEBUG: Show first and last blocks in the query window
+  if (historyBlocks.length > 0) {
+    const sortedByDate = [...historyBlocks].sort((a, b) =>
+      new Date(a.serviceDate).getTime() - new Date(b.serviceDate).getTime()
+    );
+    const firstBlock = sortedByDate[0];
+    const lastBlock = sortedByDate[sortedByDate.length - 1];
+    console.log(`[OR-Tools DEBUG] Total blocks in ${lookbackWeeks}-week window: ${historyBlocks.length}`);
+    console.log(`[OR-Tools DEBUG] First block: ${firstBlock.id} on ${format(new Date(firstBlock.serviceDate), "yyyy-MM-dd (EEEE)")}`);
+    console.log(`[OR-Tools DEBUG] Last block: ${lastBlock.id} on ${format(new Date(lastBlock.serviceDate), "yyyy-MM-dd (EEEE)")}`);
+  } else {
+    console.log(`[OR-Tools DEBUG] No blocks found in ${lookbackWeeks}-week window`);
+  }
 
   // Build a map of blockId -> SLOT
   const blockIdToSlot: Record<string, string> = {};
@@ -378,25 +399,29 @@ async function get8WeekSlotHistory(tenantId: string, currentWeekStart: Date): Pr
     console.log(`[OR-Tools]   ${slot}: ${Object.keys(drivers).length} drivers (top: ${topDriver?.[1] || 0} times)`);
   }
 
-  return slotHistory;
+  return { slotHistory, historyStart, historyEnd };
 }
 
 /**
  * Get driver assignment histories for ML pattern analysis
- * Returns: { driverId: [{day, time}, ...] } for the past 8 weeks
+ * Returns: { driverId: [{day, time}, ...] } for the specified lookback period
+ *
+ * @param lookbackWeeks - How many weeks to look back (1, 2, 4, or 8)
  */
 async function getDriverHistories(
   tenantId: string,
-  currentWeekStart: Date
+  currentWeekStart: Date,
+  lookbackWeeks: number = 8
 ): Promise<Record<string, DriverHistoryEntry[]>> {
-  // Calculate 8 weeks ago
-  const eightWeeksAgo = new Date(currentWeekStart);
-  eightWeeksAgo.setDate(eightWeeksAgo.getDate() - 56);
+  // Calculate lookback period
+  const lookbackDays = lookbackWeeks * 7;
+  const historyStart = new Date(currentWeekStart);
+  historyStart.setDate(historyStart.getDate() - lookbackDays);
 
   const historyEnd = new Date(currentWeekStart);
   historyEnd.setDate(historyEnd.getDate() - 1);
 
-  console.log(`[OR-Tools] Getting driver histories for ML from ${format(eightWeeksAgo, "yyyy-MM-dd")} to ${format(historyEnd, "yyyy-MM-dd")}`);
+  console.log(`[OR-Tools] Getting driver histories for ML from ${format(historyStart, "yyyy-MM-dd")} to ${format(historyEnd, "yyyy-MM-dd")} (${lookbackWeeks} weeks)`);
 
   // Get all blocks with their assignments from the history period
   const historyData = await db
@@ -413,10 +438,24 @@ async function getDriverHistories(
       and(
         eq(blocks.tenantId, tenantId),
         eq(blockAssignments.isActive, true),
-        gte(blocks.serviceDate, eightWeeksAgo),
+        gte(blocks.serviceDate, historyStart),
         lte(blocks.serviceDate, historyEnd)
       )
     );
+
+  // DEBUG: Show first and last assignments in the ML history window
+  if (historyData.length > 0) {
+    const sortedByDate = [...historyData].sort((a, b) =>
+      new Date(a.serviceDate).getTime() - new Date(b.serviceDate).getTime()
+    );
+    const firstEntry = sortedByDate[0];
+    const lastEntry = sortedByDate[sortedByDate.length - 1];
+    console.log(`[OR-Tools DEBUG] Total assignments in ${lookbackWeeks}-week ML window: ${historyData.length}`);
+    console.log(`[OR-Tools DEBUG] First assignment: block ${firstEntry.blockId} on ${format(new Date(firstEntry.serviceDate), "yyyy-MM-dd (EEEE)")} to driver ${firstEntry.driverId}`);
+    console.log(`[OR-Tools DEBUG] Last assignment: block ${lastEntry.blockId} on ${format(new Date(lastEntry.serviceDate), "yyyy-MM-dd (EEEE)")} to driver ${lastEntry.driverId}`);
+  } else {
+    console.log(`[OR-Tools DEBUG] No assignments found in ${lookbackWeeks}-week ML history window`);
+  }
 
   // Build driver histories: { driverId: [{day, time}, ...] }
   const driverHistories: Record<string, DriverHistoryEntry[]> = {};
@@ -456,7 +495,7 @@ async function getDriverHistories(
       }
     }
   }
-  console.log(`[K-Means Data] Day distribution from 8-week history:`);
+  console.log(`[K-Means Data] Day distribution from ${lookbackWeeks}-week history:`);
   console.log(`  Sun: ${dayDistribution.sunday} | Mon: ${dayDistribution.monday} | Tue: ${dayDistribution.tuesday} | Wed: ${dayDistribution.wednesday}`);
   console.log(`  Thu: ${dayDistribution.thursday} | Fri: ${dayDistribution.friday} | Sat: ${dayDistribution.saturday}`);
 
@@ -472,12 +511,14 @@ async function getDriverHistories(
  *
  * @param minDays - Minimum days per week a driver should work (3, 4, or 5)
  *                  Slider: 3 = part-time OK, 4 = prefer full-time, 5 = full-time only
+ * @param lookbackWeeks - How many weeks to look back for pattern matching (1, 2, 4, or 8)
  */
 export async function optimizeWeekSchedule(
   tenantId: string,
   weekStart: Date,
   contractTypeFilter?: "solo1" | "solo2" | "team",
-  minDays: number = 3
+  minDays: number = 3,
+  lookbackWeeks: number = 8
 ): Promise<{
   suggestions: Array<{
     blockId: string;
@@ -500,20 +541,29 @@ export async function optimizeWeekSchedule(
     unassigned: number;
     solverStatus: string;
   };
+  historyRange: {
+    start: string;
+    end: string;
+    weeks: number;
+    totalAssignments: number;
+  };
 }> {
   const weekEnd = endOfWeek(weekStart, { weekStartsOn: 0 });
 
-  console.log(`[OR-Tools] Optimizing schedule for ${format(weekStart, "yyyy-MM-dd")} to ${format(weekEnd, "yyyy-MM-dd")}`);
+  console.log(`[OR-Tools] Optimizing schedule for ${format(weekStart, "yyyy-MM-dd")} to ${format(weekEnd, "yyyy-MM-dd")} (lookback: ${lookbackWeeks} weeks)`);
 
   // Get drivers and blocks
   const driverInputs = await getDriversForOptimization(tenantId, contractTypeFilter);
   const blockInputs = await getUnassignedBlocks(tenantId, weekStart, weekEnd, contractTypeFilter);
 
-  // Get 8-week slot history for pattern matching
-  const slotHistory = await get8WeekSlotHistory(tenantId, weekStart);
+  // Get slot history for pattern matching (with variable lookback)
+  const { slotHistory, historyStart, historyEnd } = await getSlotHistory(tenantId, weekStart, lookbackWeeks);
 
-  // Get driver histories for ML pattern analysis
-  const driverHistories = await getDriverHistories(tenantId, weekStart);
+  // Get driver histories for ML pattern analysis (with variable lookback)
+  const driverHistories = await getDriverHistories(tenantId, weekStart, lookbackWeeks);
+
+  // Count total assignments in history
+  const totalHistoryAssignments = Object.values(driverHistories).reduce((sum, h) => sum + h.length, 0);
 
   console.log(`[OR-Tools] Found ${driverInputs.length} drivers and ${blockInputs.length} unassigned blocks`);
 
@@ -527,6 +577,12 @@ export async function optimizeWeekSchedule(
         assigned: 0,
         unassigned: blockInputs.length,
         solverStatus: "NO_DATA"
+      },
+      historyRange: {
+        start: format(historyStart, "yyyy-MM-dd"),
+        end: format(historyEnd, "yyyy-MM-dd"),
+        weeks: lookbackWeeks,
+        totalAssignments: totalHistoryAssignments
       }
     };
   }
@@ -538,6 +594,7 @@ export async function optimizeWeekSchedule(
     slotHistoryCount: Object.keys(slotHistory).length,
     driverHistoriesCount: Object.keys(driverHistories).length,
     minDays,
+    lookbackWeeks,
   });
   const result = await callORToolsSolver(driverInputs, blockInputs, slotHistory, minDays, driverHistories);
 
@@ -559,7 +616,13 @@ export async function optimizeWeekSchedule(
   return {
     suggestions,
     unassigned: result.unassigned,
-    stats: result.stats
+    stats: result.stats,
+    historyRange: {
+      start: format(historyStart, "yyyy-MM-dd"),
+      end: format(historyEnd, "yyyy-MM-dd"),
+      weeks: lookbackWeeks,
+      totalAssignments: totalHistoryAssignments
+    }
   };
 }
 
