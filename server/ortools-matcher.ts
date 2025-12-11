@@ -78,6 +78,12 @@ interface DriverHistoryEntry {
   time: string;
 }
 
+interface DriverSchedulingPreference {
+  minDays?: number;          // Minimum days per week (e.g., 1 for part-time)
+  maxDays?: number;          // Maximum days per week (e.g., 3 for part-time)
+  allowedDays?: string[];    // Specific days only (e.g., ["saturday"] for "just Saturday")
+}
+
 /**
  * Complete driver profile derived from actual work history
  * This is THE source of truth - no DNA profiles!
@@ -144,7 +150,8 @@ async function callORToolsSolver(
   blocks: BlockInput[],
   slotHistory: Record<string, Record<string, number>> = {},
   minDays: number = 3,
-  driverHistories: Record<string, DriverHistoryEntry[]> = {}
+  driverHistories: Record<string, DriverHistoryEntry[]> = {},
+  driverPreferences: Record<string, DriverSchedulingPreference> = {}
 ): Promise<ORToolsResult> {
   return new Promise((resolve, reject) => {
     const pythonPath = process.env.PYTHON_PATH || "python";
@@ -156,7 +163,8 @@ async function callORToolsSolver(
       blocks,
       slotHistory,
       minDays,
-      driverHistories  // NEW: for ML pattern analysis
+      driverHistories,    // for ML pattern analysis
+      driverPreferences   // per-driver min/max/allowedDays overrides
     });
 
     // Pass data via stdin instead of command line args (avoids ENAMETOOLONG error)
@@ -228,6 +236,7 @@ async function getAllDriverProfiles(
   profiles: Record<string, DriverProfile>;
   slotHistory: Record<string, Record<string, number>>;
   driverHistories: Record<string, DriverHistoryEntry[]>;
+  driverPreferences: Record<string, DriverSchedulingPreference>;
   totalAssignments: number;
 }> {
   const daysDiff = Math.ceil((historyEndDate.getTime() - historyStartDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
@@ -362,10 +371,42 @@ async function getAllDriverProfiles(
     console.log(`[History]   ${driverId.slice(0, 8)}...: ${profile.contractType}, primary=${profile.primaryTime}, days=${profile.preferredDays.slice(0, 3).join(",")}`);
   }
 
+  // ============ FETCH DRIVER SCHEDULING PREFERENCES ============
+  // Query driver preferences from the drivers table (new fields)
+  const driversWithPrefs = await db
+    .select({
+      id: drivers.id,
+      schedulingMinDays: drivers.schedulingMinDays,
+      schedulingMaxDays: drivers.schedulingMaxDays,
+      schedulingAllowedDays: drivers.schedulingAllowedDays,
+    })
+    .from(drivers)
+    .where(eq(drivers.tenantId, tenantId));
+
+  const driverPreferences: Record<string, DriverSchedulingPreference> = {};
+  let prefsCount = 0;
+  for (const d of driversWithPrefs) {
+    // Only add if driver has at least one preference set
+    if (d.schedulingMinDays !== null || d.schedulingMaxDays !== null ||
+        (d.schedulingAllowedDays && d.schedulingAllowedDays.length > 0)) {
+      driverPreferences[d.id] = {
+        minDays: d.schedulingMinDays ?? undefined,
+        maxDays: d.schedulingMaxDays ?? undefined,
+        allowedDays: d.schedulingAllowedDays ?? undefined,
+      };
+      prefsCount++;
+    }
+  }
+
+  if (prefsCount > 0) {
+    console.log(`[History] Found ${prefsCount} drivers with custom scheduling preferences`);
+  }
+
   return {
     profiles,
     slotHistory: globalSlotHistory,
     driverHistories: driverHistoryEntries,
+    driverPreferences,
     totalAssignments: rawHistory.length
   };
 }
@@ -539,7 +580,7 @@ export async function optimizeWeekSchedule(
 
   // ============ SINGLE SOURCE OF TRUTH ============
   // ONE query to get ALL history, then derive EVERYTHING from it
-  const { profiles, slotHistory, driverHistories, totalAssignments: totalHistoryAssignments } =
+  const { profiles, slotHistory, driverHistories, driverPreferences, totalAssignments: totalHistoryAssignments } =
     await getAllDriverProfiles(tenantId, historyStart, historyEnd);
 
   // Get drivers with history-derived profiles, and unassigned blocks
@@ -568,16 +609,17 @@ export async function optimizeWeekSchedule(
     };
   }
 
-  // Call OR-Tools solver with historical data + ML histories
+  // Call OR-Tools solver with historical data + ML histories + driver preferences
   console.log("[OR-Tools] Calling Python with:", {
     driversCount: driverInputs.length,
     blocksCount: blockInputs.length,
     slotHistoryCount: Object.keys(slotHistory).length,
     driverHistoriesCount: Object.keys(driverHistories).length,
+    driverPreferencesCount: Object.keys(driverPreferences).length,
     minDays,
     historyDays: daysDiff,
   });
-  const result = await callORToolsSolver(driverInputs, blockInputs, slotHistory, minDays, driverHistories);
+  const result = await callORToolsSolver(driverInputs, blockInputs, slotHistory, minDays, driverHistories, driverPreferences);
 
   // Convert to website format with ML info
   const suggestions = result.assignments.map(a => ({

@@ -52,7 +52,7 @@ except ImportError:
 
 
 def optimize_schedule(drivers: list, blocks: list, slot_history: dict, min_days: int = 3,
-                      driver_histories: dict = None) -> dict:
+                      driver_histories: dict = None, driver_preferences: dict = None) -> dict:
     """
     Match blocks to drivers using CP-SAT constraint solver + ML scoring.
 
@@ -60,8 +60,9 @@ def optimize_schedule(drivers: list, blocks: list, slot_history: dict, min_days:
         drivers: List of {id, name, contractType}
         blocks: List of {id, day, time, contractType, serviceDate}
         slot_history: {slot: {driverId: count}} - 8-week history
-        min_days: Minimum days per driver (3, 4, or 5)
+        min_days: Minimum days per driver (3, 4, or 5) - global default
         driver_histories: {driver_id: [assignments]} - for ML pattern analysis (optional)
+        driver_preferences: {driver_id: {minDays, maxDays, allowedDays}} - per-driver overrides (optional)
     """
 
     print(f"=== CP-SAT SOLVER + ML (minDays={min_days}) ===", file=sys.stderr)
@@ -178,7 +179,8 @@ def optimize_schedule(drivers: list, blocks: list, slot_history: dict, min_days:
 
         assignments, unassigned, status = solve_contract_type(
             ct_drivers, ct_blocks, slot_history, min_days, driver_map,
-            ml_profiles=ml_profiles, ml_scores=ml_scores
+            ml_profiles=ml_profiles, ml_scores=ml_scores,
+            driver_preferences=driver_preferences or {}
         )
 
         all_assignments.extend(assignments)
@@ -223,7 +225,8 @@ def optimize_schedule(drivers: list, blocks: list, slot_history: dict, min_days:
 
 def solve_contract_type(drivers: list, blocks: list, slot_history: dict,
                         min_days: int, driver_map: dict,
-                        ml_profiles: dict = None, ml_scores: dict = None) -> tuple:
+                        ml_profiles: dict = None, ml_scores: dict = None,
+                        driver_preferences: dict = None) -> tuple:
     """
     Solve scheduling for one contract type using CP-SAT + ML scores.
     Returns (assignments, unassigned_block_ids, status)
@@ -231,9 +234,11 @@ def solve_contract_type(drivers: list, blocks: list, slot_history: dict,
     Args:
         ml_profiles: {driver_id: {patternGroup, preferredDays, ...}} from PatternAnalyzer
         ml_scores: {(driver_id, block_id): float} fit scores 0-1
+        driver_preferences: {driver_id: {minDays, maxDays, allowedDays}} - per-driver overrides
     """
     ml_profiles = ml_profiles or {}
     ml_scores = ml_scores or {}
+    driver_preferences = driver_preferences or {}
 
     model = cp_model.CpModel()
 
@@ -267,9 +272,9 @@ def solve_contract_type(drivers: list, blocks: list, slot_history: dict,
         for date, block_indices in date_to_blocks.items():
             model.add_at_most_one(assign[(d, b)] for b in block_indices)
 
-    # ============ FAIR DISTRIBUTION (based on slider) ============
+    # ============ FAIR DISTRIBUTION (per-driver preferences + slider fallback) ============
 
-    # Calculate min/max days per driver based on slider
+    # Calculate DEFAULT min/max days per driver based on slider
     # Slider 3: allow 3-7 days (flexible)
     # Slider 4: allow 4-6 days (balanced)
     # Slider 5: allow 5-5 days (strict equal)
@@ -277,33 +282,66 @@ def solve_contract_type(drivers: list, blocks: list, slot_history: dict,
     total_blocks = n_blocks
     num_dates = len(dates)
 
-    # Fair distribution: ensure reasonable spread
-    # min_shifts = floor(total_blocks / n_drivers)
-    # max_shifts = ceil(total_blocks / n_drivers)
-
+    # Fair distribution baseline
     base_min = total_blocks // n_drivers
     base_max = base_min + (1 if total_blocks % n_drivers != 0 else 0)
 
-    # Adjust based on slider
+    # Default range based on slider
     if min_days == 5:
-        # Strict: everyone gets same (or +1)
-        driver_min = base_min
-        driver_max = base_max
+        default_driver_min = base_min
+        default_driver_max = base_max
     elif min_days == 4:
-        # Balanced: allow some variance
-        driver_min = max(1, base_min - 1)
-        driver_max = min(num_dates, base_max + 1)
+        default_driver_min = max(1, base_min - 1)
+        default_driver_max = min(num_dates, base_max + 1)
     else:  # min_days == 3
-        # Flexible: allow more variance for coverage
-        driver_min = max(1, base_min - 2)
-        driver_max = min(num_dates, base_max + 2)
+        default_driver_min = max(1, base_min - 2)
+        default_driver_max = min(num_dates, base_max + 2)
 
-    print(f"    Fair distribution: {driver_min}-{driver_max} blocks per driver", file=sys.stderr)
+    print(f"    Default distribution: {default_driver_min}-{default_driver_max} blocks per driver", file=sys.stderr)
 
-    for d in range(n_drivers):
+    # Build map of block indices by day for day restrictions
+    day_to_blocks = defaultdict(list)
+    for b, block in enumerate(blocks):
+        day_to_blocks[block["day"].lower()].append(b)
+
+    # Apply per-driver constraints (with preferences override)
+    drivers_with_prefs = []
+    for d, driver in enumerate(drivers):
+        driver_id = driver["id"]
+        prefs = driver_preferences.get(driver_id, {})
+
+        # Get per-driver min/max (or use defaults)
+        d_min = prefs.get("minDays") if prefs.get("minDays") is not None else default_driver_min
+        d_max = prefs.get("maxDays") if prefs.get("maxDays") is not None else default_driver_max
+
+        # Ensure min <= max and within bounds
+        d_min = max(0, min(d_min, num_dates))
+        d_max = max(d_min, min(d_max, num_dates))
+
         total_assigned = sum(assign[(d, b)] for b in range(n_blocks))
-        model.add(total_assigned >= driver_min)
-        model.add(total_assigned <= driver_max)
+        model.add(total_assigned >= d_min)
+        model.add(total_assigned <= d_max)
+
+        # If driver has allowedDays restriction, block them from other days
+        allowed_days = prefs.get("allowedDays")
+        if allowed_days and len(allowed_days) > 0:
+            allowed_days_lower = [day.lower() for day in allowed_days]
+            # For each day NOT in allowed days, forbid assignment
+            for day, block_indices in day_to_blocks.items():
+                if day not in allowed_days_lower:
+                    for b in block_indices:
+                        model.add(assign[(d, b)] == 0)
+            drivers_with_prefs.append((driver["name"], d_min, d_max, allowed_days))
+        elif d_min != default_driver_min or d_max != default_driver_max:
+            drivers_with_prefs.append((driver["name"], d_min, d_max, None))
+
+    if drivers_with_prefs:
+        print(f"    Drivers with custom preferences:", file=sys.stderr)
+        for name, d_min, d_max, allowed in drivers_with_prefs[:10]:
+            days_str = f", only {allowed}" if allowed else ""
+            print(f"      {name}: {d_min}-{d_max} days{days_str}", file=sys.stderr)
+        if len(drivers_with_prefs) > 10:
+            print(f"      ... and {len(drivers_with_prefs) - 10} more", file=sys.stderr)
 
     # ============ OBJECTIVE: Maximize ML fit scores (or fallback to history) ============
 
@@ -443,7 +481,8 @@ def main():
             blocks=data.get("blocks", []),
             slot_history=data.get("slotHistory", {}),
             min_days=data.get("minDays", 3),
-            driver_histories=data.get("driverHistories", None)  # NEW: for ML analysis
+            driver_histories=data.get("driverHistories", None),  # for ML analysis
+            driver_preferences=data.get("driverPreferences", None)  # per-driver min/max/allowedDays
         )
         print(json.dumps(result))
     else:

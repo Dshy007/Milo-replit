@@ -48,6 +48,11 @@ export const drivers = pgTable("drivers", {
   loadEligible: boolean("load_eligible").default(true), // Whether driver is eligible for loads
   status: text("status").notNull().default("active"), // active, inactive, on_leave
   certifications: text("certifications").array(),
+  // AI Scheduler Preferences - Control how many days per week driver works
+  schedulingMinDays: integer("scheduling_min_days"), // Minimum days per week (e.g., 1 for part-time)
+  schedulingMaxDays: integer("scheduling_max_days"), // Maximum days per week (e.g., 3 for part-time)
+  schedulingAllowedDays: text("scheduling_allowed_days").array(), // Specific days only (e.g., ["saturday"] for "just Saturday")
+  schedulingNotes: text("scheduling_notes"), // Free-form notes like "Part-time student" or "Only weekends"
   // DOT Compliance Fields - Optional for tracking, validated if provided
   requiresDotCompliance: boolean("requires_dot_compliance").default(false), // If true, DOT fields become mandatory
   cdlClass: text("cdl_class"), // A, B, or C
