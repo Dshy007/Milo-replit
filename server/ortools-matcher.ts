@@ -9,7 +9,7 @@ import { spawn } from "child_process";
 import path from "path";
 import { fileURLToPath } from "url";
 import { db } from "./db";
-import { blocks, drivers, driverDnaProfiles, blockAssignments } from "@shared/schema";
+import { blocks, drivers, blockAssignments } from "@shared/schema";
 import { eq, and, gte, lte } from "drizzle-orm";
 import { format, endOfWeek } from "date-fns";
 
@@ -76,6 +76,29 @@ interface ORToolsAssignment {
 interface DriverHistoryEntry {
   day: string;
   time: string;
+}
+
+/**
+ * Complete driver profile derived from actual work history
+ * This is THE source of truth - no DNA profiles!
+ */
+interface DriverProfile {
+  contractType: string;           // Derived from majority of assignments
+  primaryTime: string;            // Most frequent time worked
+  preferredTimes: string[];       // All times worked, sorted by frequency
+  preferredDays: string[];        // Days worked, sorted by frequency
+  slotHistory: Record<string, number>;  // "monday_16:30" -> count
+  totalAssignments: number;
+}
+
+/**
+ * Raw history row from single database query
+ */
+interface RawHistoryRow {
+  driverId: string;
+  serviceDate: Date;
+  soloType: string;
+  tractorId: string;
 }
 
 interface ORToolsResult {
@@ -185,21 +208,186 @@ async function callORToolsSolver(
 }
 
 /**
- * Get ALL active drivers with their contract types from DNA profiles
+ * ============================================================================
+ * SINGLE SOURCE OF TRUTH: getAllDriverProfiles()
+ * ============================================================================
+ * ONE database query to get ALL history data, then derive EVERYTHING in memory:
+ * - Contract type per driver (from solo type frequency)
+ * - Primary time (most frequent time worked)
+ * - Preferred days (days worked, sorted by frequency)
+ * - Slot history (day_time -> count)
+ *
+ * This replaces the old separate functions that each queried the DB.
+ * ============================================================================
  */
-async function getDriversForOptimization(tenantId: string, contractTypeFilter?: string): Promise<DriverInput[]> {
-  console.log("[OR-Tools] Getting active drivers with contract types");
+async function getAllDriverProfiles(
+  tenantId: string,
+  historyStartDate: Date,
+  historyEndDate: Date
+): Promise<{
+  profiles: Record<string, DriverProfile>;
+  slotHistory: Record<string, Record<string, number>>;
+  driverHistories: Record<string, DriverHistoryEntry[]>;
+  totalAssignments: number;
+}> {
+  const daysDiff = Math.ceil((historyEndDate.getTime() - historyStartDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+  console.log(`[History] Fetching ALL driver history from ${format(historyStartDate, "yyyy-MM-dd")} to ${format(historyEndDate, "yyyy-MM-dd")} (${daysDiff} days)`);
 
-  // Get drivers with their DNA profiles (for contract type)
+  // ============ ONE QUERY TO RULE THEM ALL ============
+  const rawHistory = await db
+    .select({
+      driverId: blockAssignments.driverId,
+      serviceDate: blocks.serviceDate,
+      soloType: blocks.soloType,
+      tractorId: blocks.tractorId,
+    })
+    .from(blockAssignments)
+    .innerJoin(blocks, eq(blockAssignments.blockId, blocks.id))
+    .where(
+      and(
+        eq(blocks.tenantId, tenantId),
+        eq(blockAssignments.isActive, true),
+        gte(blocks.serviceDate, historyStartDate),
+        lte(blocks.serviceDate, historyEndDate)
+      )
+    );
+
+  console.log(`[History] Found ${rawHistory.length} total assignments in history window`);
+
+  // ============ BUILD EVERYTHING IN MEMORY ============
+
+  // Intermediate structures for counting
+  const driverSoloCounts: Record<string, { solo1: number; solo2: number; team: number }> = {};
+  const driverTimeCounts: Record<string, Record<string, number>> = {};  // driverId -> { "16:30": 5, "23:30": 3 }
+  const driverDayCounts: Record<string, Record<string, number>> = {};   // driverId -> { "monday": 4, "tuesday": 2 }
+  const driverSlotCounts: Record<string, Record<string, number>> = {};  // driverId -> { "monday_16:30": 3 }
+  const globalSlotHistory: Record<string, Record<string, number>> = {}; // "monday_16:30" -> { driverId: count }
+  const driverHistoryEntries: Record<string, DriverHistoryEntry[]> = {};
+
+  for (const row of rawHistory) {
+    if (!row.driverId) continue;
+
+    const driverId = row.driverId;
+    const serviceDate = new Date(row.serviceDate);
+    const dayIndex = serviceDate.getDay();
+    const dayName = DAY_NAMES[dayIndex];
+    const soloType = (row.soloType || "solo1").toLowerCase();
+    const tractorId = row.tractorId || "Tractor_1";
+    const lookupKey = `${soloType}_${tractorId}`;
+    const time = CANONICAL_START_TIMES[lookupKey] || "00:00";
+    const slot = `${dayName}_${time}`;
+
+    // 1. Count solo types
+    if (!driverSoloCounts[driverId]) {
+      driverSoloCounts[driverId] = { solo1: 0, solo2: 0, team: 0 };
+    }
+    if (soloType === "solo1") driverSoloCounts[driverId].solo1++;
+    else if (soloType === "solo2") driverSoloCounts[driverId].solo2++;
+    else if (soloType === "team") driverSoloCounts[driverId].team++;
+
+    // 2. Count times per driver
+    if (!driverTimeCounts[driverId]) driverTimeCounts[driverId] = {};
+    driverTimeCounts[driverId][time] = (driverTimeCounts[driverId][time] || 0) + 1;
+
+    // 3. Count days per driver
+    if (!driverDayCounts[driverId]) driverDayCounts[driverId] = {};
+    driverDayCounts[driverId][dayName] = (driverDayCounts[driverId][dayName] || 0) + 1;
+
+    // 4. Count slots per driver
+    if (!driverSlotCounts[driverId]) driverSlotCounts[driverId] = {};
+    driverSlotCounts[driverId][slot] = (driverSlotCounts[driverId][slot] || 0) + 1;
+
+    // 5. Global slot history (for Python)
+    if (!globalSlotHistory[slot]) globalSlotHistory[slot] = {};
+    globalSlotHistory[slot][driverId] = (globalSlotHistory[slot][driverId] || 0) + 1;
+
+    // 6. Driver history entries (for Python ML)
+    if (!driverHistoryEntries[driverId]) driverHistoryEntries[driverId] = [];
+    driverHistoryEntries[driverId].push({ day: dayName, time });
+  }
+
+  // ============ BUILD FINAL PROFILES ============
+  const profiles: Record<string, DriverProfile> = {};
+
+  for (const [driverId, soloCounts] of Object.entries(driverSoloCounts)) {
+    const total = soloCounts.solo1 + soloCounts.solo2 + soloCounts.team;
+
+    // Determine contract type (60% threshold, then majority)
+    let contractType: string;
+    if (soloCounts.solo2 / total >= 0.6) {
+      contractType = "solo2";
+    } else if (soloCounts.solo1 / total >= 0.6) {
+      contractType = "solo1";
+    } else if (soloCounts.team / total >= 0.6) {
+      contractType = "team";
+    } else if (soloCounts.solo2 >= soloCounts.solo1 && soloCounts.solo2 >= soloCounts.team) {
+      contractType = "solo2";
+    } else if (soloCounts.solo1 >= soloCounts.team) {
+      contractType = "solo1";
+    } else {
+      contractType = "team";
+    }
+
+    // Sort times by frequency (most frequent first)
+    const timeCounts = driverTimeCounts[driverId] || {};
+    const preferredTimes = Object.entries(timeCounts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([time]) => time);
+    const primaryTime = preferredTimes[0] || "";
+
+    // Sort days by frequency
+    const dayCounts = driverDayCounts[driverId] || {};
+    const preferredDays = Object.entries(dayCounts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([day]) => day);
+
+    profiles[driverId] = {
+      contractType,
+      primaryTime,
+      preferredTimes,
+      preferredDays,
+      slotHistory: driverSlotCounts[driverId] || {},
+      totalAssignments: total
+    };
+  }
+
+  // Log summary
+  const solo1Count = Object.values(profiles).filter(p => p.contractType === "solo1").length;
+  const solo2Count = Object.values(profiles).filter(p => p.contractType === "solo2").length;
+  console.log(`[History] Built profiles for ${Object.keys(profiles).length} drivers: ${solo1Count} solo1, ${solo2Count} solo2`);
+
+  // Log sample profiles
+  const sampleDrivers = Object.entries(profiles).slice(0, 3);
+  for (const [driverId, profile] of sampleDrivers) {
+    console.log(`[History]   ${driverId.slice(0, 8)}...: ${profile.contractType}, primary=${profile.primaryTime}, days=${profile.preferredDays.slice(0, 3).join(",")}`);
+  }
+
+  return {
+    profiles,
+    slotHistory: globalSlotHistory,
+    driverHistories: driverHistoryEntries,
+    totalAssignments: rawHistory.length
+  };
+}
+
+/**
+ * Get ALL active drivers with their data DERIVED FROM HISTORY profiles
+ */
+async function getDriversForOptimization(
+  tenantId: string,
+  profiles: Record<string, DriverProfile>,
+  contractTypeFilter?: string
+): Promise<DriverInput[]> {
+  console.log("[OR-Tools] Getting active drivers with history-derived profiles");
+
+  // Get all active drivers (no DNA profile join!)
   const allDrivers = await db
     .select({
       id: drivers.id,
       firstName: drivers.firstName,
       lastName: drivers.lastName,
-      contractType: driverDnaProfiles.preferredContractType,
     })
     .from(drivers)
-    .leftJoin(driverDnaProfiles, eq(drivers.id, driverDnaProfiles.driverId))
     .where(
       and(
         eq(drivers.tenantId, tenantId),
@@ -207,22 +395,31 @@ async function getDriversForOptimization(tenantId: string, contractTypeFilter?: 
       )
     );
 
-  const result: DriverInput[] = allDrivers.map(driver => ({
-    id: driver.id,
-    name: `${driver.firstName} ${driver.lastName}`,
-    preferredDays: [],
-    preferredTime: "",
-    contractType: (driver.contractType || "solo1").toLowerCase(),
-  }));
+  const result: DriverInput[] = allDrivers.map(driver => {
+    const profile = profiles[driver.id];
+    return {
+      id: driver.id,
+      name: `${driver.firstName} ${driver.lastName}`,
+      // Use profile data if available, otherwise defaults for new drivers
+      preferredDays: profile?.preferredDays || [],
+      preferredTime: profile?.primaryTime || "",
+      contractType: profile?.contractType || "solo1",
+    };
+  });
+
+  // Filter by contract type if specified (skip if "all" or undefined)
+  const filtered = (contractTypeFilter && contractTypeFilter.toLowerCase() !== "all")
+    ? result.filter(d => d.contractType === contractTypeFilter.toLowerCase())
+    : result;
 
   // Count by contract type
   const byCT: Record<string, number> = {};
-  for (const d of result) {
+  for (const d of filtered) {
     byCT[d.contractType] = (byCT[d.contractType] || 0) + 1;
   }
-  console.log(`[OR-Tools] Found ${result.length} drivers:`, byCT);
+  console.log(`[OR-Tools] Found ${filtered.length} drivers (from ${result.length} total):`, byCT);
 
-  return result;
+  return filtered;
 }
 
 /**
@@ -261,7 +458,7 @@ async function getUnassignedBlocks(tenantId: string, weekStart: Date, weekEnd: D
   return allBlocks
     .filter(b => !assignedBlockIds.has(b.id))
     .filter(b => {
-      if (!contractTypeFilter) return true;
+      if (!contractTypeFilter || contractTypeFilter.toLowerCase() === "all") return true;
       return b.soloType?.toLowerCase() === contractTypeFilter.toLowerCase();
     })
     .map(b => {
@@ -287,238 +484,20 @@ async function getUnassignedBlocks(tenantId: string, weekStart: Date, weekEnd: D
 }
 
 /**
- * Get slot history for historical pattern matching
- * Maps SLOT (dayOfWeek_canonicalTime) -> { driverId: count }
- * Example: "monday_16:30" -> { "driver-123": 5, "driver-456": 3 }
- *
- * This allows matching based on who has historically worked each slot
- * A driver who worked monday_16:30 five times gets priority
- *
- * @param lookbackWeeks - How many weeks to look back (1, 2, 4, or 8)
- */
-async function getSlotHistory(
-  tenantId: string,
-  currentWeekStart: Date,
-  lookbackWeeks: number = 8
-): Promise<{ slotHistory: Record<string, Record<string, number>>; historyStart: Date; historyEnd: Date }> {
-  // Calculate lookback period
-  const lookbackDays = lookbackWeeks * 7;
-  const historyStart = new Date(currentWeekStart);
-  historyStart.setDate(historyStart.getDate() - lookbackDays);
-
-  // End at the day before current week starts
-  const historyEnd = new Date(currentWeekStart);
-  historyEnd.setDate(historyEnd.getDate() - 1);
-
-  console.log(`[OR-Tools] Getting ${lookbackWeeks}-week history from ${format(historyStart, "yyyy-MM-dd")} to ${format(historyEnd, "yyyy-MM-dd")}`);
-
-  // Get all blocks from the history period
-  const historyBlocks = await db
-    .select({
-      id: blocks.id,
-      serviceDate: blocks.serviceDate,
-      soloType: blocks.soloType,
-      tractorId: blocks.tractorId
-    })
-    .from(blocks)
-    .where(
-      and(
-        eq(blocks.tenantId, tenantId),
-        gte(blocks.serviceDate, historyStart),
-        lte(blocks.serviceDate, historyEnd)
-      )
-    );
-
-  // DEBUG: Show first and last blocks in the query window
-  if (historyBlocks.length > 0) {
-    const sortedByDate = [...historyBlocks].sort((a, b) =>
-      new Date(a.serviceDate).getTime() - new Date(b.serviceDate).getTime()
-    );
-    const firstBlock = sortedByDate[0];
-    const lastBlock = sortedByDate[sortedByDate.length - 1];
-    console.log(`[OR-Tools DEBUG] Total blocks in ${lookbackWeeks}-week window: ${historyBlocks.length}`);
-    console.log(`[OR-Tools DEBUG] First block: ${firstBlock.id} on ${format(new Date(firstBlock.serviceDate), "yyyy-MM-dd (EEEE)")}`);
-    console.log(`[OR-Tools DEBUG] Last block: ${lastBlock.id} on ${format(new Date(lastBlock.serviceDate), "yyyy-MM-dd (EEEE)")}`);
-  } else {
-    console.log(`[OR-Tools DEBUG] No blocks found in ${lookbackWeeks}-week window`);
-  }
-
-  // Build a map of blockId -> SLOT
-  const blockIdToSlot: Record<string, string> = {};
-  for (const b of historyBlocks) {
-    const serviceDate = new Date(b.serviceDate);
-    const dayIndex = serviceDate.getDay();
-    const dayName = DAY_NAMES[dayIndex];
-
-    // Use canonical time from Holy Grail lookup
-    const soloType = (b.soloType || "solo1").toLowerCase();
-    const tractorId = b.tractorId || "Tractor_1";
-    const lookupKey = `${soloType}_${tractorId}`;
-    const canonicalTime = CANONICAL_START_TIMES[lookupKey] || "00:00";
-
-    // SLOT = dayOfWeek_canonicalTime (e.g., "monday_16:30")
-    const slot = `${dayName}_${canonicalTime}`;
-    blockIdToSlot[b.id] = slot;
-  }
-
-  // Get all active assignments
-  const assignments = await db
-    .select({
-      blockId: blockAssignments.blockId,
-      driverId: blockAssignments.driverId
-    })
-    .from(blockAssignments)
-    .where(eq(blockAssignments.isActive, true));
-
-  // Build slot history: SLOT -> { driverId: count }
-  const slotHistory: Record<string, Record<string, number>> = {};
-
-  for (const a of assignments) {
-    if (!a.blockId) continue;
-    const slot = blockIdToSlot[a.blockId];
-    if (slot) {
-      if (!slotHistory[slot]) {
-        slotHistory[slot] = {};
-      }
-      slotHistory[slot][a.driverId] = (slotHistory[slot][a.driverId] || 0) + 1;
-    }
-  }
-
-  // Log summary
-  const totalSlots = Object.keys(slotHistory).length;
-  const totalAssignments = Object.values(slotHistory).reduce(
-    (sum, drivers) => sum + Object.values(drivers).reduce((s, c) => s + c, 0),
-    0
-  );
-  console.log(`[OR-Tools] Built history: ${totalSlots} slots, ${totalAssignments} total assignments`);
-
-  // Log sample
-  const sampleSlots = Object.entries(slotHistory).slice(0, 3);
-  for (const [slot, drivers] of sampleSlots) {
-    const topDriver = Object.entries(drivers).sort((a, b) => b[1] - a[1])[0];
-    console.log(`[OR-Tools]   ${slot}: ${Object.keys(drivers).length} drivers (top: ${topDriver?.[1] || 0} times)`);
-  }
-
-  return { slotHistory, historyStart, historyEnd };
-}
-
-/**
- * Get driver assignment histories for ML pattern analysis
- * Returns: { driverId: [{day, time}, ...] } for the specified lookback period
- *
- * @param lookbackWeeks - How many weeks to look back (1, 2, 4, or 8)
- */
-async function getDriverHistories(
-  tenantId: string,
-  currentWeekStart: Date,
-  lookbackWeeks: number = 8
-): Promise<Record<string, DriverHistoryEntry[]>> {
-  // Calculate lookback period
-  const lookbackDays = lookbackWeeks * 7;
-  const historyStart = new Date(currentWeekStart);
-  historyStart.setDate(historyStart.getDate() - lookbackDays);
-
-  const historyEnd = new Date(currentWeekStart);
-  historyEnd.setDate(historyEnd.getDate() - 1);
-
-  console.log(`[OR-Tools] Getting driver histories for ML from ${format(historyStart, "yyyy-MM-dd")} to ${format(historyEnd, "yyyy-MM-dd")} (${lookbackWeeks} weeks)`);
-
-  // Get all blocks with their assignments from the history period
-  const historyData = await db
-    .select({
-      blockId: blocks.id,
-      serviceDate: blocks.serviceDate,
-      soloType: blocks.soloType,
-      tractorId: blocks.tractorId,
-      driverId: blockAssignments.driverId
-    })
-    .from(blocks)
-    .innerJoin(blockAssignments, eq(blocks.id, blockAssignments.blockId))
-    .where(
-      and(
-        eq(blocks.tenantId, tenantId),
-        eq(blockAssignments.isActive, true),
-        gte(blocks.serviceDate, historyStart),
-        lte(blocks.serviceDate, historyEnd)
-      )
-    );
-
-  // DEBUG: Show first and last assignments in the ML history window
-  if (historyData.length > 0) {
-    const sortedByDate = [...historyData].sort((a, b) =>
-      new Date(a.serviceDate).getTime() - new Date(b.serviceDate).getTime()
-    );
-    const firstEntry = sortedByDate[0];
-    const lastEntry = sortedByDate[sortedByDate.length - 1];
-    console.log(`[OR-Tools DEBUG] Total assignments in ${lookbackWeeks}-week ML window: ${historyData.length}`);
-    console.log(`[OR-Tools DEBUG] First assignment: block ${firstEntry.blockId} on ${format(new Date(firstEntry.serviceDate), "yyyy-MM-dd (EEEE)")} to driver ${firstEntry.driverId}`);
-    console.log(`[OR-Tools DEBUG] Last assignment: block ${lastEntry.blockId} on ${format(new Date(lastEntry.serviceDate), "yyyy-MM-dd (EEEE)")} to driver ${lastEntry.driverId}`);
-  } else {
-    console.log(`[OR-Tools DEBUG] No assignments found in ${lookbackWeeks}-week ML history window`);
-  }
-
-  // Build driver histories: { driverId: [{day, time}, ...] }
-  const driverHistories: Record<string, DriverHistoryEntry[]> = {};
-
-  for (const row of historyData) {
-    if (!row.driverId) continue;
-
-    const serviceDate = new Date(row.serviceDate);
-    const dayIndex = serviceDate.getDay();
-    const dayName = DAY_NAMES[dayIndex];
-
-    // Use canonical time from lookup
-    const soloType = (row.soloType || "solo1").toLowerCase();
-    const tractorId = row.tractorId || "Tractor_1";
-    const lookupKey = `${soloType}_${tractorId}`;
-    const time = CANONICAL_START_TIMES[lookupKey] || "00:00";
-
-    if (!driverHistories[row.driverId]) {
-      driverHistories[row.driverId] = [];
-    }
-    driverHistories[row.driverId].push({ day: dayName, time });
-  }
-
-  const driverCount = Object.keys(driverHistories).length;
-  const totalEntries = Object.values(driverHistories).reduce((sum, h) => sum + h.length, 0);
-  console.log(`[OR-Tools] Built ML histories: ${driverCount} drivers, ${totalEntries} total assignments`);
-
-  // DEBUG: Show day distribution for K-Means
-  const dayDistribution: Record<string, number> = {
-    sunday: 0, monday: 0, tuesday: 0, wednesday: 0, thursday: 0, friday: 0, saturday: 0
-  };
-  for (const entries of Object.values(driverHistories)) {
-    for (const entry of entries) {
-      const dayLower = entry.day.toLowerCase();
-      if (dayDistribution[dayLower] !== undefined) {
-        dayDistribution[dayLower]++;
-      }
-    }
-  }
-  console.log(`[K-Means Data] Day distribution from ${lookbackWeeks}-week history:`);
-  console.log(`  Sun: ${dayDistribution.sunday} | Mon: ${dayDistribution.monday} | Tue: ${dayDistribution.tuesday} | Wed: ${dayDistribution.wednesday}`);
-  console.log(`  Thu: ${dayDistribution.thursday} | Fri: ${dayDistribution.friday} | Sat: ${dayDistribution.saturday}`);
-
-  const sunWedTotal = dayDistribution.sunday + dayDistribution.monday + dayDistribution.tuesday + dayDistribution.wednesday;
-  const wedSatTotal = dayDistribution.wednesday + dayDistribution.thursday + dayDistribution.friday + dayDistribution.saturday;
-  console.log(`[K-Means Data] Sun-Wed total: ${sunWedTotal} | Wed-Sat total: ${wedSatTotal}`);
-
-  return driverHistories;
-}
-
-/**
  * Main optimization function - matches drivers to blocks using OR-Tools
  *
  * @param minDays - Minimum days per week a driver should work (3, 4, or 5)
  *                  Slider: 3 = part-time OK, 4 = prefer full-time, 5 = full-time only
- * @param lookbackWeeks - How many weeks to look back for pattern matching (1, 2, 4, or 8)
+ * @param historyStartDate - Custom start date for history lookback
+ * @param historyEndDate - Custom end date for history lookback
  */
 export async function optimizeWeekSchedule(
   tenantId: string,
   weekStart: Date,
   contractTypeFilter?: "solo1" | "solo2" | "team",
   minDays: number = 3,
-  lookbackWeeks: number = 8
+  historyStartDate?: Date,
+  historyEndDate?: Date
 ): Promise<{
   suggestions: Array<{
     blockId: string;
@@ -544,26 +523,28 @@ export async function optimizeWeekSchedule(
   historyRange: {
     start: string;
     end: string;
-    weeks: number;
+    days: number;
     totalAssignments: number;
   };
 }> {
   const weekEnd = endOfWeek(weekStart, { weekStartsOn: 0 });
 
-  console.log(`[OR-Tools] Optimizing schedule for ${format(weekStart, "yyyy-MM-dd")} to ${format(weekEnd, "yyyy-MM-dd")} (lookback: ${lookbackWeeks} weeks)`);
+  // Default history range if not provided: 8 weeks back
+  const historyEnd = historyEndDate || new Date(weekStart.getTime() - 24 * 60 * 60 * 1000); // day before weekStart
+  const historyStart = historyStartDate || new Date(weekStart.getTime() - 56 * 24 * 60 * 60 * 1000); // 8 weeks back
 
-  // Get drivers and blocks
-  const driverInputs = await getDriversForOptimization(tenantId, contractTypeFilter);
+  const daysDiff = Math.ceil((historyEnd.getTime() - historyStart.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+
+  console.log(`[OR-Tools] Optimizing schedule for ${format(weekStart, "yyyy-MM-dd")} to ${format(weekEnd, "yyyy-MM-dd")} (lookback: ${daysDiff} days from ${format(historyStart, "yyyy-MM-dd")} to ${format(historyEnd, "yyyy-MM-dd")})`);
+
+  // ============ SINGLE SOURCE OF TRUTH ============
+  // ONE query to get ALL history, then derive EVERYTHING from it
+  const { profiles, slotHistory, driverHistories, totalAssignments: totalHistoryAssignments } =
+    await getAllDriverProfiles(tenantId, historyStart, historyEnd);
+
+  // Get drivers with history-derived profiles, and unassigned blocks
+  const driverInputs = await getDriversForOptimization(tenantId, profiles, contractTypeFilter);
   const blockInputs = await getUnassignedBlocks(tenantId, weekStart, weekEnd, contractTypeFilter);
-
-  // Get slot history for pattern matching (with variable lookback)
-  const { slotHistory, historyStart, historyEnd } = await getSlotHistory(tenantId, weekStart, lookbackWeeks);
-
-  // Get driver histories for ML pattern analysis (with variable lookback)
-  const driverHistories = await getDriverHistories(tenantId, weekStart, lookbackWeeks);
-
-  // Count total assignments in history
-  const totalHistoryAssignments = Object.values(driverHistories).reduce((sum, h) => sum + h.length, 0);
 
   console.log(`[OR-Tools] Found ${driverInputs.length} drivers and ${blockInputs.length} unassigned blocks`);
 
@@ -581,7 +562,7 @@ export async function optimizeWeekSchedule(
       historyRange: {
         start: format(historyStart, "yyyy-MM-dd"),
         end: format(historyEnd, "yyyy-MM-dd"),
-        weeks: lookbackWeeks,
+        days: daysDiff,
         totalAssignments: totalHistoryAssignments
       }
     };
@@ -594,7 +575,7 @@ export async function optimizeWeekSchedule(
     slotHistoryCount: Object.keys(slotHistory).length,
     driverHistoriesCount: Object.keys(driverHistories).length,
     minDays,
-    lookbackWeeks,
+    historyDays: daysDiff,
   });
   const result = await callORToolsSolver(driverInputs, blockInputs, slotHistory, minDays, driverHistories);
 
@@ -620,7 +601,7 @@ export async function optimizeWeekSchedule(
     historyRange: {
       start: format(historyStart, "yyyy-MM-dd"),
       end: format(historyEnd, "yyyy-MM-dd"),
-      weeks: lookbackWeeks,
+      days: daysDiff,
       totalAssignments: totalHistoryAssignments
     }
   };

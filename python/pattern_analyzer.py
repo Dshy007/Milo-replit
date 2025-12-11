@@ -352,9 +352,12 @@ class PatternAnalyzer:
 
         Uses a combination of:
         1. Day preference match
-        2. Time preference match
-        3. Historical slot frequency
+        2. Time preference match (HEAVILY weighted for consistency)
+        3. Historical slot frequency (day+time specific)
         4. Pattern group alignment
+
+        TIME CONSISTENCY: Drivers should work the same time slot across days.
+        A driver who always works 16:30 should NOT be assigned to 17:30.
 
         Args:
             drivers: List of driver dicts with id, contractType
@@ -367,13 +370,22 @@ class PatternAnalyzer:
         """
         scores = {}
 
+        # Pre-compute each driver's PRIMARY time slot (most frequent time worked)
+        driver_primary_time = {}
+        for driver_id, profile in driver_profiles.items():
+            preferred_times = profile.get('preferredTimes', [])
+            if preferred_times:
+                # First preferred time is the most frequent
+                driver_primary_time[driver_id] = preferred_times[0]
+
         for driver in drivers:
             driver_id = driver['id']
             driver_ct = driver.get('contractType', 'solo1').lower()
             profile = driver_profiles.get(driver_id, {})
 
             preferred_days = set(profile.get('preferredDays', []))
-            preferred_times = set(profile.get('preferredTimes', []))
+            preferred_times = profile.get('preferredTimes', [])
+            primary_time = driver_primary_time.get(driver_id)
 
             for block in blocks:
                 block_id = block['id']
@@ -382,27 +394,32 @@ class PatternAnalyzer:
                 block_time = block.get('time', '')
 
                 # Start with base score
-                score = 0.3
+                score = 0.2
 
                 # Contract type match (hard requirement reflected in score)
                 if driver_ct != block_ct:
                     scores[(driver_id, block_id)] = 0.0
                     continue
 
-                # Day preference match (+0.3)
+                # Day preference match (+0.2)
                 if block_day in preferred_days:
-                    score += 0.3
-
-                # Time preference match (+0.2)
-                if block_time in preferred_times:
                     score += 0.2
 
-                # Historical slot match (+0.2 max)
+                # TIME CONSISTENCY SCORING (most important for schedule stability)
+                # Primary time match: BIG bonus if this is driver's most frequent time
+                if primary_time and block_time == primary_time:
+                    score += 0.35  # Strong bonus for exact primary time match
+                elif block_time in preferred_times:
+                    score += 0.15  # Smaller bonus for any preferred time
+
+                # Historical SLOT match (day+time specific) - CRITICAL for consistency
+                # This rewards drivers who have historically worked THIS EXACT slot
                 slot_key = f"{block_day}_{block_time}"
                 history_count = slot_history.get(slot_key, {}).get(driver_id, 0)
                 if history_count > 0:
-                    # Log scale for history bonus
-                    history_bonus = min(0.2, 0.05 * np.log1p(history_count))
+                    # Stronger bonus for slot-specific history (up to +0.25)
+                    # A driver who worked monday_16:30 five times gets priority
+                    history_bonus = min(0.25, 0.08 * np.log1p(history_count))
                     score += history_bonus
 
                 scores[(driver_id, block_id)] = round(min(1.0, score), 3)

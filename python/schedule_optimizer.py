@@ -109,6 +109,17 @@ def optimize_schedule(drivers: list, blocks: list, slot_history: dict, min_days:
         for profile in ml_profiles.values():
             pattern_counts[profile.get('patternGroup', 'unknown')] += 1
         print(f"[ML] Pattern groups: {dict(pattern_counts)}", file=sys.stderr)
+
+        # Log driver time preferences (for debugging flip-flop issues)
+        print(f"[ML] Driver primary times (top 10):", file=sys.stderr)
+        driver_times = []
+        for d in drivers[:20]:  # Check first 20 drivers
+            profile = ml_profiles.get(d["id"], {})
+            preferred_times = profile.get('preferredTimes', [])
+            if preferred_times:
+                driver_times.append((d["name"], preferred_times[0], preferred_times))
+        for name, primary, all_times in driver_times[:10]:
+            print(f"  {name}: PRIMARY={primary} (all: {all_times})", file=sys.stderr)
     elif not ML_AVAILABLE:
         print("[ML] Pattern analyzer not available, using raw history", file=sys.stderr)
     else:
@@ -179,9 +190,21 @@ def optimize_schedule(drivers: list, blocks: list, slot_history: dict, min_days:
     for a in all_assignments:
         driver_days[a["driverName"]].add(a["day"])
 
-    print(f"\n=== Driver Schedules ===", file=sys.stderr)
-    for name, days in sorted(driver_days.items(), key=lambda x: -len(x[1]))[:15]:
-        print(f"  {name}: {len(days)} days - {', '.join(sorted(days))}", file=sys.stderr)
+    print(f"\n=== Driver Schedules (ALL drivers) ===", file=sys.stderr)
+
+    # Show ALL solo1 drivers
+    solo1_drivers = [(name, days) for name, days in driver_days.items()
+                     if any(a["contractType"].lower() == "solo1" for a in all_assignments if a["driverName"] == name)]
+    print(f"\n  SOLO1 Drivers ({len(solo1_drivers)}):", file=sys.stderr)
+    for name, days in sorted(solo1_drivers, key=lambda x: -len(x[1])):
+        print(f"    {name}: {len(days)} days - {', '.join(sorted(days))}", file=sys.stderr)
+
+    # Show ALL solo2 drivers
+    solo2_drivers = [(name, days) for name, days in driver_days.items()
+                     if any(a["contractType"].lower() == "solo2" for a in all_assignments if a["driverName"] == name)]
+    print(f"\n  SOLO2 Drivers ({len(solo2_drivers)}):", file=sys.stderr)
+    for name, days in sorted(solo2_drivers, key=lambda x: -len(x[1])):
+        print(f"    {name}: {len(days)} days - {', '.join(sorted(days))}", file=sys.stderr)
 
     print(f"\n=== Result: {len(all_assignments)} assigned, {len(all_unassigned)} unassigned ===", file=sys.stderr)
 

@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { format, startOfWeek, addWeeks, subWeeks } from "date-fns";
+import { format, startOfWeek, addWeeks, subWeeks, subDays } from "date-fns";
 import {
   Brain,
   RefreshCw,
@@ -25,6 +25,9 @@ import {
 } from "lucide-react";
 import { ImportWizard } from "@/components/ImportWizard";
 import { Slider } from "@/components/ui/slider";
+import { Calendar as CalendarComponent } from "@/components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { CalendarIcon } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -66,7 +69,7 @@ interface ScheduleStats {
 interface HistoryRange {
   start: string;
   end: string;
-  weeks: number;
+  days: number;
   totalAssignments: number;
 }
 
@@ -107,22 +110,18 @@ const getSliderLabel = (value: number): string => {
   }
 };
 
-// Lookback weeks slider labels
-const getLookbackLabel = (weeks: number): string => {
-  switch (weeks) {
-    case 1: return "1 week (last week only)";
-    case 2: return "2 weeks";
-    case 4: return "4 weeks";
-    case 8: return "8 weeks (default)";
-    default: return `${weeks} weeks`;
-  }
+// Calculate the number of days between two dates
+const getDaysDiff = (start: Date, end: Date): number => {
+  return Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
 };
 
 export default function AIScheduler() {
   const [weekOffset, setWeekOffset] = useState(0);
   const [contractFilter, setContractFilter] = useState<"all" | "solo1" | "solo2">("all");
   const [minDays, setMinDays] = useState(3);
-  const [lookbackWeeks, setLookbackWeeks] = useState(8);
+  // Custom date range for history lookback (default: 8 weeks back from today)
+  const [historyStartDate, setHistoryStartDate] = useState<Date>(() => subDays(new Date(), 56));
+  const [historyEndDate, setHistoryEndDate] = useState<Date>(() => subDays(new Date(), 1));
   const [isImportWizardOpen, setIsImportWizardOpen] = useState(false);
   const { toast } = useToast();
 
@@ -135,21 +134,59 @@ export default function AIScheduler() {
       : subWeeks(currentWeekStart, Math.abs(weekOffset));
   const weekStartStr = format(selectedWeekStart, "yyyy-MM-dd");
 
-  // Fetch schedule optimization
-  const { data, isLoading, refetch, isFetching } = useQuery<ScheduleResult>({
-    queryKey: ["/api/matching/calculate", weekStartStr, contractFilter, minDays, lookbackWeeks],
-    queryFn: async () => {
+  // Format dates for API
+  const historyStartStr = format(historyStartDate, "yyyy-MM-dd");
+  const historyEndStr = format(historyEndDate, "yyyy-MM-dd");
+
+  // Schedule optimization state
+  const [optimizerResult, setOptimizerResult] = useState<ScheduleResult | null>(null);
+
+  // Optimizer mutation - always uses fresh parameters
+  const optimizerMutation = useMutation({
+    mutationFn: async (params: {
+      weekStart: string;
+      contractType: string;
+      minDays: number;
+      historyStart: string;
+      historyEnd: string;
+    }) => {
+      console.log("[AIScheduler] Running optimizer with history:", params.historyStart, "to", params.historyEnd);
       const res = await apiRequest("POST", "/api/matching/calculate", {
-        weekStart: weekStartStr,
-        contractType: contractFilter === "all" ? undefined : contractFilter,
-        minDays,
-        lookbackWeeks,
+        weekStart: params.weekStart,
+        contractType: params.contractType === "all" ? undefined : params.contractType,
+        minDays: params.minDays,
+        historyStart: params.historyStart,
+        historyEnd: params.historyEnd,
       });
       return res.json();
     },
-    enabled: false,
-    staleTime: 1000 * 60 * 5,
+    onSuccess: (result: ScheduleResult) => {
+      setOptimizerResult(result);
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Optimizer Failed",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
   });
+
+  // Convenience accessors for backward compatibility
+  const data = optimizerResult;
+  const isFetching = optimizerMutation.isPending;
+  const isLoading = optimizerMutation.isPending;
+
+  // Run optimizer with current parameters
+  const runOptimizer = () => {
+    optimizerMutation.mutate({
+      weekStart: weekStartStr,
+      contractType: contractFilter,
+      minDays,
+      historyStart: historyStartStr,
+      historyEnd: historyEndStr,
+    });
+  };
 
   // Apply mutations
   const applyMutation = useMutation({
@@ -286,7 +323,7 @@ export default function AIScheduler() {
           <div className="flex items-center gap-3">
             <Button
               variant="outline"
-              onClick={() => refetch()}
+              onClick={runOptimizer}
               disabled={isFetching}
               className="border-slate-700 bg-slate-800/50 hover:bg-slate-800 text-slate-300"
             >
@@ -418,38 +455,72 @@ export default function AIScheduler() {
               </Tooltip>
             </TooltipProvider>
 
-            {/* Lookback Weeks Slider */}
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <div className="flex items-center gap-4 bg-slate-800/50 rounded-lg px-4 py-2 min-w-[200px] border border-slate-700/50">
-                    <History className="w-4 h-4 text-slate-500 flex-shrink-0" />
-                    <div className="flex-1">
-                      <div className="flex items-center justify-between text-xs mb-1">
-                        <span className="text-slate-500">Lookback</span>
-                        <span className="font-medium text-cyan-400">
-                          {getLookbackLabel(lookbackWeeks)}
-                        </span>
-                      </div>
-                      <Slider
-                        value={[lookbackWeeks === 1 ? 0 : lookbackWeeks === 2 ? 1 : lookbackWeeks === 4 ? 2 : 3]}
-                        onValueChange={([idx]) => setLookbackWeeks([1, 2, 4, 8][idx])}
-                        min={0}
-                        max={3}
-                        step={1}
-                        className="w-full"
+            {/* Custom Date Range Picker */}
+            <div className="flex items-center gap-3 bg-slate-800/50 rounded-lg px-4 py-2 border border-slate-700/50">
+              <History className="w-4 h-4 text-slate-500 flex-shrink-0" />
+              <div className="flex items-center gap-2">
+                {/* Start Date */}
+                <div className="flex flex-col">
+                  <span className="text-[10px] text-slate-500 mb-0.5">Start date</span>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 w-[130px] justify-start text-left font-normal border-slate-600 bg-slate-900/50 hover:bg-slate-800 text-slate-200"
+                      >
+                        <CalendarIcon className="mr-2 h-3 w-3 text-slate-400" />
+                        <span className="text-xs">{format(historyStartDate, "M/d/yyyy")}</span>
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0 bg-slate-900 border-slate-700" align="start">
+                      <CalendarComponent
+                        mode="single"
+                        selected={historyStartDate}
+                        onSelect={(date) => date && setHistoryStartDate(date)}
+                        disabled={(date) => date > historyEndDate || date > new Date()}
+                        defaultMonth={historyStartDate}
+                        initialFocus
+                        className="bg-slate-900 text-slate-200"
                       />
-                    </div>
-                  </div>
-                </TooltipTrigger>
-                <TooltipContent side="bottom" className="bg-slate-800 border-slate-700">
-                  <p className="font-medium mb-1 text-slate-100">History Lookback</p>
-                  <p className="text-xs text-slate-400">1 = Only last week's patterns</p>
-                  <p className="text-xs text-slate-400">2-4 = Recent patterns</p>
-                  <p className="text-xs text-slate-400">8 = Full 8-week history (default)</p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+                    </PopoverContent>
+                  </Popover>
+                </div>
+
+                {/* End Date */}
+                <div className="flex flex-col">
+                  <span className="text-[10px] text-slate-500 mb-0.5">End date</span>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 w-[130px] justify-start text-left font-normal border-slate-600 bg-slate-900/50 hover:bg-slate-800 text-slate-200"
+                      >
+                        <CalendarIcon className="mr-2 h-3 w-3 text-slate-400" />
+                        <span className="text-xs">{format(historyEndDate, "M/d/yyyy")}</span>
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0 bg-slate-900 border-slate-700" align="start">
+                      <CalendarComponent
+                        mode="single"
+                        selected={historyEndDate}
+                        onSelect={(date) => date && setHistoryEndDate(date)}
+                        disabled={(date) => date < historyStartDate || date > new Date()}
+                        defaultMonth={historyEndDate}
+                        initialFocus
+                        className="bg-slate-900 text-slate-200"
+                      />
+                    </PopoverContent>
+                  </Popover>
+                </div>
+
+                {/* Days indicator */}
+                <Badge className="bg-cyan-500/20 text-cyan-300 border-cyan-500/30 text-[10px] ml-1">
+                  {getDaysDiff(historyStartDate, historyEndDate)} days
+                </Badge>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -476,7 +547,7 @@ export default function AIScheduler() {
                 Import Schedule
               </Button>
               <Button
-                onClick={() => refetch()}
+                onClick={runOptimizer}
                 disabled={isFetching}
                 className="bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white shadow-lg shadow-purple-500/20"
               >
@@ -528,7 +599,7 @@ export default function AIScheduler() {
                 <div className="flex items-center gap-2 mb-1">
                   <span className="font-medium text-cyan-400">History Analyzed</span>
                   <Badge className="bg-cyan-500/20 text-cyan-300 border-cyan-500/30 text-xs">
-                    {data.historyRange.weeks} week{data.historyRange.weeks > 1 ? 's' : ''} lookback
+                    {data.historyRange.days} day{data.historyRange.days > 1 ? 's' : ''} lookback
                   </Badge>
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
@@ -809,7 +880,7 @@ export default function AIScheduler() {
             </p>
             <Button
               variant="outline"
-              onClick={() => refetch()}
+              onClick={runOptimizer}
               className="border-slate-700 bg-slate-800/50 hover:bg-slate-700 text-slate-300"
             >
               <RefreshCw className="w-4 h-4 mr-2" />
