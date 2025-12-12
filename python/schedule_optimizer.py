@@ -1,6 +1,5 @@
 """
-Schedule Optimizer - Using Google OR-Tools CP-SAT Solver + scikit-learn Pattern Analysis
-(Same algorithm used in hospital nurse scheduling, enhanced with ML)
+Schedule Optimizer - Using Google OR-Tools CP-SAT Solver + XGBoost/scikit-learn ML
 
 CONSTRAINTS:
   1. Each block assigned to exactly one driver (hard)
@@ -9,22 +8,24 @@ CONSTRAINTS:
   4. Fair distribution: min/max days per driver (configurable via slider)
 
 OBJECTIVE:
-  Maximize ML-predicted fit scores (combines day/time preferences + historical patterns)
+  Maximize ML-predicted fit scores using XGBoost time series forecasting
+
+SCORING MODES:
+  1. XGBoost (default): Uses skforecast + XGBoost to predict driver availability
+     - Learns rolling interval patterns (e.g., every ~3 days)
+     - Learns fixed weekday preferences
+     - Captures non-linear feature interactions
+  2. K-Means fallback: If XGBoost fails, falls back to pattern_analyzer.py
+  3. Raw history: If all ML fails, uses simple history counts
 
 SLIDER (minDays):
   3 = Allow 3-7 days per driver (flexible, more coverage)
   4 = Allow 4-6 days per driver (balanced)
   5 = Allow 5-5 days per driver (strict, equal distribution)
 
-INTEGRATION:
-  Uses pattern_analyzer.py for:
-  - K-Means clustering (driver pattern groups: sunWed, wedSat, mixed)
-  - ML fit score prediction (0-1 score for driver-block compatibility)
-
 MINIMUM HISTORY REQUIREMENT:
   Drivers MUST have at least 1 assignment in their 8-week history to be
   eligible for AI assignment. Drivers with zero history are EXCLUDED.
-  This prevents brand new drivers from being auto-assigned to blocks.
 """
 
 import json
@@ -42,7 +43,15 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
 
-# Import pattern analyzer for ML-based scoring
+# Import XGBoost availability forecaster (primary ML)
+try:
+    from availability_forecaster import DriverAvailabilityForecaster
+    XGBOOST_AVAILABLE = True
+except ImportError:
+    XGBOOST_AVAILABLE = False
+    print("[Optimizer] WARNING: XGBoost forecaster not available", file=sys.stderr)
+
+# Import pattern analyzer for fallback ML-based scoring
 try:
     from pattern_analyzer import PatternAnalyzer
     ML_AVAILABLE = True
@@ -96,35 +105,64 @@ def optimize_schedule(drivers: list, blocks: list, slot_history: dict, min_days:
     # Use filtered drivers for optimization
     drivers = eligible_drivers
 
-    # Initialize ML components if available and histories provided
+    # Initialize ML components - try XGBoost first, then fall back to K-Means
     ml_profiles = {}
     ml_scores = {}
-    if ML_AVAILABLE and driver_histories:
-        print(f"[ML] Analyzing patterns for {len(driver_histories)} drivers...", file=sys.stderr)
-        analyzer = PatternAnalyzer()
-        ml_profiles = analyzer.cluster_drivers(driver_histories)
-        ml_scores = analyzer.predict_fit_scores(drivers, blocks, ml_profiles, slot_history)
+    xgboost_scores = {}
+    scoring_method = "raw_history"
 
-        # Log pattern distribution
-        pattern_counts = defaultdict(int)
-        for profile in ml_profiles.values():
-            pattern_counts[profile.get('patternGroup', 'unknown')] += 1
-        print(f"[ML] Pattern groups: {dict(pattern_counts)}", file=sys.stderr)
+    if driver_histories:
+        # Try XGBoost forecaster first (primary ML)
+        if XGBOOST_AVAILABLE:
+            print(f"[XGBoost] Training availability forecaster on {len(driver_histories)} drivers...", file=sys.stderr)
+            try:
+                forecaster = DriverAvailabilityForecaster(lags=14)
+                if forecaster.fit(driver_histories):
+                    xgboost_scores = forecaster.predict_for_blocks(blocks, drivers)
+                    if xgboost_scores:
+                        scoring_method = "xgboost"
+                        print(f"[XGBoost] Generated {len(xgboost_scores)} driver-block scores", file=sys.stderr)
 
-        # Log driver time preferences (for debugging flip-flop issues)
-        print(f"[ML] Driver primary times (top 10):", file=sys.stderr)
-        driver_times = []
-        for d in drivers[:20]:  # Check first 20 drivers
-            profile = ml_profiles.get(d["id"], {})
-            preferred_times = profile.get('preferredTimes', [])
-            if preferred_times:
-                driver_times.append((d["name"], preferred_times[0], preferred_times))
-        for name, primary, all_times in driver_times[:10]:
-            print(f"  {name}: PRIMARY={primary} (all: {all_times})", file=sys.stderr)
-    elif not ML_AVAILABLE:
-        print("[ML] Pattern analyzer not available, using raw history", file=sys.stderr)
-    else:
-        print("[ML] No driver histories provided, using raw history", file=sys.stderr)
+                        # Log sample predictions
+                        sample_scores = list(xgboost_scores.items())[:5]
+                        print(f"[XGBoost] Sample predictions:", file=sys.stderr)
+                        for (driver_id, block_id), score in sample_scores:
+                            driver_name = next((d["name"] for d in drivers if d["id"] == driver_id), "Unknown")
+                            print(f"  {driver_name}: {score:.3f}", file=sys.stderr)
+                else:
+                    print(f"[XGBoost] Training failed, falling back to K-Means", file=sys.stderr)
+            except Exception as e:
+                print(f"[XGBoost] Error: {e}, falling back to K-Means", file=sys.stderr)
+
+        # Fall back to K-Means pattern analyzer if XGBoost didn't work
+        if scoring_method != "xgboost" and ML_AVAILABLE:
+            print(f"[K-Means] Analyzing patterns for {len(driver_histories)} drivers...", file=sys.stderr)
+            analyzer = PatternAnalyzer()
+            ml_profiles = analyzer.cluster_drivers(driver_histories)
+            ml_scores = analyzer.predict_fit_scores(drivers, blocks, ml_profiles, slot_history)
+            scoring_method = "kmeans"
+
+            # Log pattern distribution
+            pattern_counts = defaultdict(int)
+            rolling_pattern_drivers = []
+            for driver_id, profile in ml_profiles.items():
+                pattern_counts[profile.get('patternGroup', 'unknown')] += 1
+                rolling = profile.get('rollingPattern', {})
+                if rolling.get('hasRollingPattern'):
+                    rolling_pattern_drivers.append({
+                        'driverId': driver_id,
+                        'intervalDays': rolling.get('intervalDays'),
+                        'intervalStdDev': rolling.get('intervalStdDev'),
+                        'confidence': rolling.get('confidence')
+                    })
+            print(f"[K-Means] Pattern groups: {dict(pattern_counts)}", file=sys.stderr)
+
+            if rolling_pattern_drivers:
+                print(f"[K-Means] Drivers with rolling interval patterns: {len(rolling_pattern_drivers)}", file=sys.stderr)
+                for rp in rolling_pattern_drivers[:5]:
+                    print(f"  {rp['driverId'][:8]}...: every ~{rp['intervalDays']} days (std={rp['intervalStdDev']}, conf={rp['confidence']})", file=sys.stderr)
+
+    print(f"[Optimizer] Using scoring method: {scoring_method.upper()}", file=sys.stderr)
 
     if not blocks:
         return {
@@ -180,6 +218,7 @@ def optimize_schedule(drivers: list, blocks: list, slot_history: dict, min_days:
         assignments, unassigned, status = solve_contract_type(
             ct_drivers, ct_blocks, slot_history, min_days, driver_map,
             ml_profiles=ml_profiles, ml_scores=ml_scores,
+            xgboost_scores=xgboost_scores, scoring_method=scoring_method,
             driver_preferences=driver_preferences or {}
         )
 
@@ -226,6 +265,7 @@ def optimize_schedule(drivers: list, blocks: list, slot_history: dict, min_days:
 def solve_contract_type(drivers: list, blocks: list, slot_history: dict,
                         min_days: int, driver_map: dict,
                         ml_profiles: dict = None, ml_scores: dict = None,
+                        xgboost_scores: dict = None, scoring_method: str = "raw_history",
                         driver_preferences: dict = None) -> tuple:
     """
     Solve scheduling for one contract type using CP-SAT + ML scores.
@@ -233,11 +273,14 @@ def solve_contract_type(drivers: list, blocks: list, slot_history: dict,
 
     Args:
         ml_profiles: {driver_id: {patternGroup, preferredDays, ...}} from PatternAnalyzer
-        ml_scores: {(driver_id, block_id): float} fit scores 0-1
+        ml_scores: {(driver_id, block_id): float} fit scores 0-1 from K-Means
+        xgboost_scores: {(driver_id, block_id): float} fit scores 0-1 from XGBoost
+        scoring_method: "xgboost", "kmeans", or "raw_history"
         driver_preferences: {driver_id: {minDays, maxDays, allowedDays}} - per-driver overrides
     """
     ml_profiles = ml_profiles or {}
     ml_scores = ml_scores or {}
+    xgboost_scores = xgboost_scores or {}
     driver_preferences = driver_preferences or {}
 
     model = cp_model.CpModel()
@@ -343,27 +386,29 @@ def solve_contract_type(drivers: list, blocks: list, slot_history: dict,
         if len(drivers_with_prefs) > 10:
             print(f"      ... and {len(drivers_with_prefs) - 10} more", file=sys.stderr)
 
-    # ============ OBJECTIVE: Maximize ML fit scores (or fallback to history) ============
+    # ============ OBJECTIVE: Maximize ML fit scores (XGBoost > K-Means > history) ============
 
-    # Build preference scores - use ML scores if available, else raw history
+    # Build preference scores based on scoring method
     preference_score = {}
-    use_ml = bool(ml_scores)
 
     for d, driver in enumerate(drivers):
         driver_id = driver["id"]
         for b, block in enumerate(blocks):
             block_id = block["id"]
+            ml_key = (driver_id, block_id)
 
-            if use_ml:
-                # Use ML-predicted fit score (0-1)
-                # Convert tuple key or string key format
-                ml_key = (driver_id, block_id)
-                score = ml_scores.get(ml_key, 0.0)
-
-                # Scale to integer for CP-SAT (multiply by 1000)
+            if scoring_method == "xgboost" and ml_key in xgboost_scores:
+                # Primary: XGBoost time series forecast (0-1)
+                score = xgboost_scores.get(ml_key, 0.0)
                 preference_score[(d, b)] = int(score * 1000)
+
+            elif scoring_method == "kmeans" and ml_key in ml_scores:
+                # Fallback: K-Means pattern analyzer (0-1)
+                score = ml_scores.get(ml_key, 0.0)
+                preference_score[(d, b)] = int(score * 1000)
+
             else:
-                # Fallback: use raw history count
+                # Last resort: raw history count
                 slot = f"{block['day']}_{block['time']}"
                 history_count = slot_history.get(slot, {}).get(driver_id, 0)
                 preference_score[(d, b)] = history_count
@@ -371,13 +416,12 @@ def solve_contract_type(drivers: list, blocks: list, slot_history: dict,
     # Log top preferences
     top_prefs = sorted(preference_score.items(), key=lambda x: -x[1])[:10]
     if top_prefs and top_prefs[0][1] > 0:
-        score_type = "ML fit" if use_ml else "history"
-        print(f"    Top preferences ({score_type}):", file=sys.stderr)
+        print(f"    Top preferences ({scoring_method}):", file=sys.stderr)
         for (d, b), score in top_prefs[:5]:
             if score > 0:
                 driver_name = drivers[d]["name"]
                 block = blocks[b]
-                display_score = score / 1000 if use_ml else score
+                display_score = score / 1000 if scoring_method in ["xgboost", "kmeans"] else score
                 print(f"      {driver_name} -> {block['day']}_{block['time']}: {display_score}", file=sys.stderr)
 
     # Objective: maximize sum of preference scores for assigned blocks
@@ -422,13 +466,28 @@ def solve_contract_type(drivers: list, blocks: list, slot_history: dict,
                     slot = f"{block['day']}_{block['time']}"
                     history_count = slot_history.get(slot, {}).get(driver_id, 0)
 
-                    # Get ML info if available
-                    ml_score = ml_scores.get((driver_id, block_id), 0.0) if use_ml else 0.0
+                    # Get ML score based on scoring method
+                    if scoring_method == "xgboost":
+                        ml_score = xgboost_scores.get((driver_id, block_id), 0.0)
+                    elif scoring_method == "kmeans":
+                        ml_score = ml_scores.get((driver_id, block_id), 0.0)
+                    else:
+                        ml_score = 0.0
+
                     driver_profile = ml_profiles.get(driver_id, {})
                     pattern_group = driver_profile.get('patternGroup', 'unknown')
 
-                    # Determine match type based on ML score
-                    if use_ml:
+                    # Determine match type based on scoring method and score
+                    if scoring_method == "xgboost":
+                        if ml_score >= 0.7:
+                            match_type = "xgb_excellent"
+                        elif ml_score >= 0.5:
+                            match_type = "xgb_good"
+                        elif ml_score >= 0.3:
+                            match_type = "xgb_fair"
+                        else:
+                            match_type = "xgb_assigned"
+                    elif scoring_method == "kmeans":
                         if ml_score >= 0.8:
                             match_type = "ml_excellent"
                         elif ml_score >= 0.6:
@@ -451,8 +510,9 @@ def solve_contract_type(drivers: list, blocks: list, slot_history: dict,
                         "day": block["day"],
                         "historyCount": history_count,
                         "contractType": block.get("contractType", "solo1"),
-                        "mlScore": round(ml_score, 3) if use_ml else None,
-                        "patternGroup": pattern_group if use_ml else None
+                        "mlScore": round(ml_score, 3) if scoring_method in ["xgboost", "kmeans"] else None,
+                        "patternGroup": pattern_group if scoring_method == "kmeans" else None,
+                        "scoringMethod": scoring_method
                     })
                     assigned_blocks.add(block_id)
 
