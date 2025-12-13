@@ -10,6 +10,12 @@ import { db } from "./db";
 import { drivers, blocks, blockAssignments, driverDnaProfiles } from "@shared/schema";
 import { eq, and, gte, lte, sql, isNull } from "drizzle-orm";
 import { format, subWeeks, startOfWeek, endOfWeek, addDays } from "date-fns";
+import { spawn } from "child_process";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Conversation history storage (in-memory for now, could be persisted to DB)
 const conversationHistory: Map<string, Array<{ role: "user" | "assistant"; content: string }>> = new Map();
@@ -21,10 +27,45 @@ const MILO_CHAT_SYSTEM_PROMPT = `You are MILO (Match Intelligence & Logistics Op
 You can answer questions about:
 - Driver schedules and history (what days/times they worked)
 - Driver preferences from their DNA profiles
+- Driver scheduling preferences (min/max days, allowed days restrictions)
 - Block assignments and coverage
 - DOT compliance patterns
 - Matching recommendations
 - How many blocks/days a driver was assigned this week
+- AI Scheduler constraints for part-time drivers
+- Rolling interval patterns (drivers who work every N days)
+
+## DRIVER PATTERN TYPES
+
+There are TWO fundamentally different pattern types:
+
+### 1. Fixed Weekday Pattern (e.g., Firas)
+- Works specific days of the week: Saturday, Sunday, Monday
+- Calendar-driven schedule
+- Use allowedDays scheduling preference to restrict
+
+### 2. Rolling Interval Pattern (e.g., Adan)
+- Works every ~N days regardless of which weekday
+- Cycle-driven schedule (e.g., works every 3 days)
+- Identified by consistent interval between blocks
+- Example: blocks on Nov 1, Nov 4, Nov 7, Nov 10 = ~3 day cycle
+
+When a driver has a rolling pattern, the data will show:
+- **intervalDays**: Average days between blocks
+- **intervalStdDev**: How consistent the pattern is (lower = more consistent)
+- **lastWorkDate**: Most recent work date (for predicting next work)
+
+## DRIVER SCHEDULING PREFERENCES
+
+Drivers can have per-driver scheduling preferences that control how the AI Scheduler assigns them:
+- **minDays**: Minimum days per week (e.g., 1 for part-time)
+- **maxDays**: Maximum days per week (e.g., 3 for part-time)
+- **allowedDays**: Specific days only (e.g., ["saturday", "sunday"] for weekend-only)
+- **notes**: Free-form notes like "Part-time student" or "Only weekends"
+
+Examples:
+- A driver with minDays=3, maxDays=3, allowedDays=["saturday", "sunday", "monday"] will ONLY get blocks on those 3 days
+- A driver with no preferences uses the global defaults (typically 3-5 days)
 
 ## ASSIGNMENT COMMANDS (handled automatically)
 
@@ -38,6 +79,7 @@ Users can say things like "give Adan 3 solo2's at 23:30" - these commands are ex
 - If you don't have data, say so clearly
 - When asked about a driver, always mention their contract type (solo1/solo2)
 - When asked "how many days did X get", count their assignments in the provided data
+- When asked about scheduling preferences, mention any restrictions like min/max days or allowed days
 
 ## DATA CONTEXT
 
@@ -63,6 +105,15 @@ Assistant: Yes, Firas worked on Mondays in the last 4 weeks:
 - Dec 16: 16:30 start (Tractor_9)
 
 He consistently works Mondays at 16:30.
+
+User: "What are Firas's scheduling preferences?"
+Assistant: Firas has the following scheduling preferences:
+- **Min Days**: 3
+- **Max Days**: 3
+- **Allowed Days**: Saturday, Sunday, Monday
+- **Notes**: None
+
+This means the AI Scheduler will only assign Firas blocks on Saturday, Sunday, and Monday, exactly 3 days per week.
 `;
 
 interface ChatMessage {
@@ -95,6 +146,83 @@ const CANONICAL_START_TIMES: Record<string, string> = {
 
 const DAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 
+interface RollingPattern {
+  hasRollingPattern: boolean;
+  intervalDays: number | null;
+  intervalMedian: number | null;
+  intervalStdDev: number | null;
+  confidence: number;
+  lastWorkDate: string | null;
+}
+
+interface PatternAnalysisResult {
+  profiles: Record<string, {
+    patternGroup: string | null;
+    preferredDays: string[];
+    preferredTimes: string[];
+    rollingPattern: RollingPattern;
+  }>;
+}
+
+/**
+ * Call Python pattern analyzer to detect rolling interval patterns
+ */
+async function analyzeDriverPatterns(
+  driverHistories: Record<string, Array<{ day: string; time: string; serviceDate: string }>>
+): Promise<PatternAnalysisResult | null> {
+  return new Promise((resolve) => {
+    const pythonPath = process.env.PYTHON_PATH || "python";
+    const scriptPath = path.join(__dirname, "../python/pattern_analyzer.py");
+
+    const input = JSON.stringify({
+      action: "cluster",
+      driverHistories
+    });
+
+    const python = spawn(pythonPath, [scriptPath]);
+
+    let stdout = "";
+    let stderr = "";
+
+    python.stdout.on("data", (data) => {
+      stdout += data.toString();
+    });
+
+    python.stderr.on("data", (data) => {
+      stderr += data.toString();
+    });
+
+    python.on("close", (code) => {
+      if (code !== 0) {
+        console.error("[MiloChat] Pattern analyzer error:", stderr);
+        resolve(null);
+        return;
+      }
+
+      try {
+        const result = JSON.parse(stdout);
+        if (result.success) {
+          resolve(result as PatternAnalysisResult);
+        } else {
+          console.error("[MiloChat] Pattern analyzer failed:", result.error);
+          resolve(null);
+        }
+      } catch (e) {
+        console.error("[MiloChat] Failed to parse pattern analyzer output:", stdout);
+        resolve(null);
+      }
+    });
+
+    python.on("error", (err) => {
+      console.error("[MiloChat] Failed to start pattern analyzer:", err);
+      resolve(null);
+    });
+
+    python.stdin.write(input);
+    python.stdin.end();
+  });
+}
+
 /**
  * Compute driver patterns from 8-week historical assignment data
  * This is the SOURCE OF TRUTH - not the DNA profile table
@@ -112,6 +240,7 @@ async function computeDriverPatternsFromHistory(
   dayCounts: Record<string, number>;
   timeCounts: Record<string, number>;
   totalShifts: number;
+  rollingPattern?: RollingPattern;
 }>> {
   const cutoffDate = format(subWeeks(new Date(), weeksBack), "yyyy-MM-dd");
 
@@ -188,7 +317,11 @@ async function computeDriverPatternsFromHistory(
     dayCounts: Record<string, number>;
     timeCounts: Record<string, number>;
     totalShifts: number;
+    rollingPattern?: RollingPattern;
   }>();
+
+  // Also build history entries for Python pattern analyzer
+  const driverHistories: Record<string, Array<{ day: string; time: string; serviceDate: string }>> = {};
 
   for (const row of assignments.rows as any[]) {
     const driverId = row.driver_id;
@@ -203,6 +336,7 @@ async function computeDriverPatternsFromHistory(
     const serviceDate = new Date(row.service_date);
     const dayIndex = serviceDate.getDay();
     const dayName = DAY_NAMES[dayIndex];
+    const serviceDateStr = format(serviceDate, "yyyy-MM-dd");
 
     if (!driverPatterns.has(driverId)) {
       const predType = driverPredominantType.get(driverId);
@@ -218,6 +352,12 @@ async function computeDriverPatternsFromHistory(
         totalShifts: 0,
       });
     }
+
+    // Build history entries for Python pattern analyzer
+    if (!driverHistories[driverId]) {
+      driverHistories[driverId] = [];
+    }
+    driverHistories[driverId].push({ day: dayName, time, serviceDate: serviceDateStr });
 
     const pattern = driverPatterns.get(driverId)!;
     pattern.dayCounts[dayName] = (pattern.dayCounts[dayName] || 0) + 1;
@@ -240,16 +380,61 @@ async function computeDriverPatternsFromHistory(
     pattern.primaryTime = sortedTimes[0]?.[0] || "??:??";
   }
 
+  // Analyze rolling patterns using Python ML analyzer
+  if (Object.keys(driverHistories).length > 0) {
+    try {
+      const patternAnalysis = await analyzeDriverPatterns(driverHistories);
+      if (patternAnalysis && patternAnalysis.profiles) {
+        for (const [driverId, profile] of Object.entries(patternAnalysis.profiles)) {
+          const driverPattern = driverPatterns.get(driverId);
+          if (driverPattern && profile.rollingPattern) {
+            driverPattern.rollingPattern = profile.rollingPattern;
+          }
+        }
+      }
+    } catch (err) {
+      console.error("[MiloChat] Failed to analyze rolling patterns:", err);
+    }
+  }
+
   return driverPatterns;
 }
 
 /**
  * Fetch driver data for context injection
  * Uses ACTUAL historical assignment data, not stale DNA profile table
+ * Also includes scheduling preferences (minDays, maxDays, allowedDays)
  */
 async function getDriverContext(tenantId: string, driverName?: string, contractTypeFilter?: string, weeksBack: number = 8): Promise<string> {
   // Compute patterns from history (source of truth)
   const driverPatterns = await computeDriverPatternsFromHistory(tenantId, weeksBack);
+
+  // Fetch scheduling preferences for all drivers
+  const schedulingPrefs = await db
+    .select({
+      id: drivers.id,
+      schedulingMinDays: drivers.schedulingMinDays,
+      schedulingMaxDays: drivers.schedulingMaxDays,
+      schedulingAllowedDays: drivers.schedulingAllowedDays,
+      schedulingNotes: drivers.schedulingNotes,
+    })
+    .from(drivers)
+    .where(eq(drivers.tenantId, tenantId));
+
+  const prefsMap = new Map<string, {
+    minDays: number | null;
+    maxDays: number | null;
+    allowedDays: string[] | null;
+    notes: string | null;
+  }>();
+  for (const pref of schedulingPrefs) {
+    prefsMap.set(pref.id, {
+      minDays: pref.schedulingMinDays,
+      maxDays: pref.schedulingMaxDays,
+      allowedDays: pref.schedulingAllowedDays,
+      notes: pref.schedulingNotes,
+    });
+  }
 
   // Convert to array and optionally filter
   let filteredDrivers = Array.from(driverPatterns.values());
@@ -277,7 +462,7 @@ async function getDriverContext(tenantId: string, driverName?: string, contractT
   // Sort by name
   filteredDrivers.sort((a, b) => a.name.localeCompare(b.name));
 
-  // Format driver info with ACTUAL historical patterns
+  // Format driver info with ACTUAL historical patterns AND scheduling preferences
   const driverInfo = filteredDrivers.map(d => {
     const dayList = d.preferredDays
       .map(day => {
@@ -293,14 +478,123 @@ async function getDriverContext(tenantId: string, driverName?: string, contractT
       })
       .join(", ");
 
+    // Include scheduling preferences
+    const prefs = prefsMap.get(d.id);
+    let schedulingInfo = "";
+    if (prefs && (prefs.minDays || prefs.maxDays || prefs.allowedDays?.length || prefs.notes)) {
+      const parts: string[] = [];
+      if (prefs.minDays !== null) parts.push(`Min Days: ${prefs.minDays}`);
+      if (prefs.maxDays !== null) parts.push(`Max Days: ${prefs.maxDays}`);
+      if (prefs.allowedDays && prefs.allowedDays.length > 0) {
+        parts.push(`Allowed Days: ${prefs.allowedDays.map(dayStr => dayStr.charAt(0).toUpperCase() + dayStr.slice(1)).join(", ")}`);
+      }
+      if (prefs.notes) parts.push(`Notes: ${prefs.notes}`);
+      schedulingInfo = `\n  - **Scheduling Preferences**: ${parts.join(" | ")}`;
+    }
+
+    // Include rolling pattern info if detected
+    let rollingPatternInfo = "";
+    if (d.rollingPattern && d.rollingPattern.hasRollingPattern) {
+      const rp = d.rollingPattern;
+      rollingPatternInfo = `\n  - **Rolling Pattern**: Works every ~${rp.intervalDays} days (std: ${rp.intervalStdDev}, conf: ${(rp.confidence * 100).toFixed(0)}%, last: ${rp.lastWorkDate})`;
+    }
+
     return `**${d.name}** (${d.contractType}, ${d.totalShifts} shifts in last ${weeksBack} weeks)
   - Primary Time: ${d.primaryTime}
   - Days Worked: ${dayList || "none"}
   - Times Worked: ${timeList || "none"}
-  - ID: ${d.id}`;
+  - ID: ${d.id}${schedulingInfo}${rollingPatternInfo}`;
   }).join("\n\n");
 
   return driverInfo;
+}
+
+/**
+ * Get driver schedule for a specific date range
+ * Used when user asks "what did X work Dec 7-13"
+ */
+async function getDriverScheduleForDateRange(
+  tenantId: string,
+  driverName: string,
+  dateRange: { start: Date; end: Date }
+): Promise<string> {
+  // Find matching driver
+  const matchingDrivers = await db
+    .select({ id: drivers.id, firstName: drivers.firstName, lastName: drivers.lastName })
+    .from(drivers)
+    .where(eq(drivers.tenantId, tenantId));
+
+  const searchName = driverName.toLowerCase();
+  const matchedDrivers = matchingDrivers.filter(d =>
+    d.firstName?.toLowerCase().includes(searchName) ||
+    d.lastName?.toLowerCase().includes(searchName) ||
+    `${d.firstName} ${d.lastName}`.toLowerCase().includes(searchName)
+  );
+
+  if (matchedDrivers.length === 0) {
+    return `No driver found matching "${driverName}".`;
+  }
+
+  const driverIds = matchedDrivers.map(d => d.id);
+  const driverMap = new Map<string, string>();
+  for (const d of matchedDrivers) {
+    driverMap.set(d.id, `${d.firstName} ${d.lastName}`);
+  }
+
+  // Get blocks in the date range for these drivers
+  const assignments = await db
+    .select({
+      serviceDate: blocks.serviceDate,
+      soloType: blocks.soloType,
+      tractorId: blocks.tractorId,
+      driverId: blockAssignments.driverId,
+    })
+    .from(blockAssignments)
+    .innerJoin(blocks, eq(blockAssignments.blockId, blocks.id))
+    .where(
+      and(
+        eq(blocks.tenantId, tenantId),
+        eq(blockAssignments.isActive, true),
+        gte(blocks.serviceDate, dateRange.start),
+        lte(blocks.serviceDate, dateRange.end)
+      )
+    );
+
+  // Filter to our drivers
+  const driverAssignments = assignments.filter(a => a.driverId && driverIds.includes(a.driverId));
+
+  if (driverAssignments.length === 0) {
+    return `No assignments found for "${driverName}" between ${format(dateRange.start, "MMM d")} and ${format(dateRange.end, "MMM d")}.`;
+  }
+
+  // Format the results
+  const DAY_NAMES_UPPER = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+  const rows = driverAssignments
+    .sort((a, b) => new Date(a.serviceDate).getTime() - new Date(b.serviceDate).getTime())
+    .map(a => {
+      const date = new Date(a.serviceDate);
+      const dayName = DAY_NAMES_UPPER[date.getDay()];
+      const soloType = (a.soloType || "solo1").toLowerCase();
+      const tractorId = a.tractorId || "Tractor_1";
+      const lookupKey = `${soloType}_${tractorId}`;
+      const time = CANONICAL_START_TIMES[lookupKey] || "??:??";
+      const driverFullName = driverMap.get(a.driverId!) || "Unknown";
+
+      return `| ${format(date, "yyyy-MM-dd")} | ${dayName} | ${time} | ${a.soloType} | ${tractorId} | ${driverFullName} |`;
+    });
+
+  const driverNameDisplay = matchedDrivers.length === 1
+    ? driverMap.get(matchedDrivers[0].id) || driverName
+    : driverName;
+
+  return `## ${driverNameDisplay}'s Schedule for ${format(dateRange.start, "MMM d")} - ${format(dateRange.end, "MMM d")}
+
+| Date | Day | Start Time | Type | Tractor | Driver |
+|------|-----|------------|------|---------|--------|
+${rows.join("\n")}
+
+**Total:** ${driverAssignments.length} assignment(s)`;
 }
 
 /**
@@ -519,6 +813,53 @@ function extractWeeks(query: string): number {
   }
 
   return 4; // Default to 4 weeks for simple history queries
+}
+
+/**
+ * Parse date range from query like "Dec 7-13" or "December 7-13"
+ * Returns { start: Date, end: Date } or null
+ */
+function extractDateRange(query: string): { start: Date; end: Date } | null {
+  const lowerQuery = query.toLowerCase();
+
+  // Pattern: "Dec 7-13" or "December 7-13" or "dec 7 - 13"
+  const monthRangeMatch = query.match(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s*(\d{1,2})\s*[-–to]+\s*(\d{1,2})\b/i);
+
+  if (monthRangeMatch) {
+    const monthName = monthRangeMatch[1].toLowerCase();
+    const startDay = parseInt(monthRangeMatch[2]);
+    const endDay = parseInt(monthRangeMatch[3]);
+
+    // Map month name to number
+    const monthMap: Record<string, number> = {
+      jan: 0, january: 0,
+      feb: 1, february: 1,
+      mar: 2, march: 2,
+      apr: 3, april: 3,
+      may: 4,
+      jun: 5, june: 5,
+      jul: 6, july: 6,
+      aug: 7, august: 7,
+      sep: 8, september: 8,
+      oct: 9, october: 9,
+      nov: 10, november: 10,
+      dec: 11, december: 11,
+    };
+
+    const month = monthMap[monthName];
+    if (month !== undefined && startDay >= 1 && endDay >= 1 && endDay <= 31) {
+      const currentYear = new Date().getFullYear();
+      // If the date is in the future, assume current year; otherwise last year
+      const testDate = new Date(currentYear, month, startDay);
+      const year = testDate > new Date() ? currentYear - 1 : currentYear;
+
+      const start = new Date(year, month, startDay);
+      const end = new Date(year, month, endDay, 23, 59, 59);
+      return { start, end };
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -1154,12 +1495,20 @@ export async function chatWithMilo(
   const weeks = extractWeeks(userMessage);
   const contractType = extractContractType(userMessage);
   const isStrategyQuery = isStrategyAnalysisQuery(userMessage);
+  const dateRange = extractDateRange(userMessage);
 
   // Fetch relevant data based on query
   let contextData = "";
 
+  // If specific date range requested with a driver name, use date range lookup
+  if (dateRange && driverName) {
+    contextData += await getDriverScheduleForDateRange(tenantId, driverName, dateRange);
+    contextData += "\n\n";
+    // Also include general driver pattern info for context
+    contextData += await getDriverContext(tenantId, driverName, undefined, 8);
+  }
   // Strategy analysis queries need CURRENT WEEK schedule with unassigned blocks
-  if (isStrategyQuery) {
+  else if (isStrategyQuery) {
     // Get current week schedule (assigned + unassigned blocks)
     contextData += await getCurrentWeekSchedule(tenantId);
     contextData += "\n\n";

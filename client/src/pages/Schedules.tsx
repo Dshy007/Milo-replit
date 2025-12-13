@@ -1,7 +1,7 @@
 import React, { useState, useMemo, memo, useCallback, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format, startOfWeek, addWeeks, subWeeks, eachDayOfInterval, addDays } from "date-fns";
-import { ChevronLeft, ChevronRight, Calendar, User, Upload, X, LayoutGrid, List, UserMinus, Undo2, Redo2, CheckSquare, XSquare, Moon, Sun, Zap, Cpu, AlertTriangle, Search, Sparkles, Loader2, Dna, Clock, Truck } from "lucide-react";
+import { ChevronLeft, ChevronRight, Calendar, User, Upload, X, LayoutGrid, List, UserMinus, Undo2, Redo2, CheckSquare, XSquare, Moon, Sun, Zap, Cpu, AlertTriangle, Search, Sparkles, Loader2, Dna, Clock, Truck, Trash2 } from "lucide-react";
 import { ImportOverlay } from "@/components/ImportOverlay";
 import { ImportWizard } from "@/components/ImportWizard";
 import { ActualsComparisonReview } from "@/components/ActualsComparisonReview";
@@ -61,6 +61,47 @@ const formatDay = (day: string) => {
     thursday: "Thu", friday: "Fri", saturday: "Sat",
   };
   return map[day.toLowerCase()] || day.slice(0, 3);
+};
+
+// Generate a consistent gradient color for each driver name
+// Uses a hash of the driver name to pick from a set of distinct gradient color pairs
+const DRIVER_GRADIENT_COLORS = [
+  { from: '#6366f1', to: '#8b5cf6' },  // Indigo to Purple
+  { from: '#06b6d4', to: '#0891b2' },  // Cyan to Darker Cyan
+  { from: '#10b981', to: '#059669' },  // Emerald to Darker Emerald
+  { from: '#f59e0b', to: '#d97706' },  // Amber to Darker Amber
+  { from: '#ec4899', to: '#db2777' },  // Pink to Darker Pink
+  { from: '#8b5cf6', to: '#7c3aed' },  // Violet to Darker Violet
+  { from: '#14b8a6', to: '#0d9488' },  // Teal to Darker Teal
+  { from: '#f97316', to: '#ea580c' },  // Orange to Darker Orange
+  { from: '#3b82f6', to: '#2563eb' },  // Blue to Darker Blue
+  { from: '#a855f7', to: '#9333ea' },  // Purple to Darker Purple
+  { from: '#22c55e', to: '#16a34a' },  // Green to Darker Green
+  { from: '#ef4444', to: '#dc2626' },  // Red to Darker Red
+  { from: '#84cc16', to: '#65a30d' },  // Lime to Darker Lime
+  { from: '#0ea5e9', to: '#0284c7' },  // Sky to Darker Sky
+  { from: '#d946ef', to: '#c026d3' },  // Fuchsia to Darker Fuchsia
+  { from: '#f43f5e', to: '#e11d48' },  // Rose to Darker Rose
+];
+
+const getDriverGradient = (driverName: string | null): { background: string; borderColor: string } => {
+  if (!driverName) return { background: 'transparent', borderColor: 'transparent' };
+
+  // Simple hash function to get consistent index for same name
+  let hash = 0;
+  for (let i = 0; i < driverName.length; i++) {
+    const char = driverName.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32bit integer
+  }
+
+  const index = Math.abs(hash) % DRIVER_GRADIENT_COLORS.length;
+  const colors = DRIVER_GRADIENT_COLORS[index];
+
+  return {
+    background: `linear-gradient(135deg, ${colors.from}60 0%, ${colors.to}80 100%)`,
+    borderColor: colors.from + 'AA'
+  };
 };
 
 // Simplified occurrence from new calendar API
@@ -973,6 +1014,42 @@ export default function Schedules() {
     });
   };
 
+  const selectAllBlocks = () => {
+    const allCellIds = new Set<string>();
+    Object.entries(occurrencesByContract).forEach(([tractorId, dates]) => {
+      Object.entries(dates).forEach(([date, occurrences]) => {
+        occurrences.forEach(occ => {
+          const cellId = `cell-${date}-${tractorId}-${occ.startTime}`;
+          allCellIds.add(cellId);
+        });
+      });
+    });
+    setSelectedCells(allCellIds);
+    toast({
+      title: "Selection Updated",
+      description: `Selected all ${allCellIds.size} blocks`,
+    });
+  };
+
+  const selectAllAssigned = () => {
+    const assignedCellIds = new Set<string>();
+    Object.entries(occurrencesByContract).forEach(([tractorId, dates]) => {
+      Object.entries(dates).forEach(([date, occurrences]) => {
+        occurrences.forEach(occ => {
+          if (occ.driverId) {
+            const cellId = `cell-${date}-${tractorId}-${occ.startTime}`;
+            assignedCellIds.add(cellId);
+          }
+        });
+      });
+    });
+    setSelectedCells(assignedCellIds);
+    toast({
+      title: "Selection Updated",
+      description: `Selected ${assignedCellIds.size} assigned shifts`,
+    });
+  };
+
   const clearSelection = () => {
     setSelectedCells(new Set());
   };
@@ -1042,6 +1119,76 @@ export default function Schedules() {
         variant: "destructive",
         title: "Bulk Unassign Failed",
         description: error.message || "Failed to unassign drivers",
+      });
+    }
+  };
+
+  const deleteSelected = async () => {
+    if (selectedCells.size === 0) {
+      toast({
+        variant: "destructive",
+        title: "No Selection",
+        description: "Please select blocks first",
+      });
+      return;
+    }
+
+    // Collect unique occurrence IDs to delete (occurrenceId is the database UUID)
+    const occurrenceIdsToDelete = new Set<string>();
+
+    for (const cellId of Array.from(selectedCells)) {
+      const parts = cellId.split('-');
+      if (parts.length < 6) continue;
+
+      const targetDate = `${parts[1]}-${parts[2]}-${parts[3]}`;
+      const targetStartTime = parts[parts.length - 1];
+      const targetContractId = parts.slice(4, parts.length - 1).join('-');
+
+      const occurrences = occurrencesByContract[targetContractId]?.[targetDate] || [];
+      const matchingOccurrences = occurrences.filter(occ => occ.startTime === targetStartTime);
+
+      for (const occ of matchingOccurrences) {
+        // Use occurrenceId (database UUID) not blockId (Amazon block ID)
+        occurrenceIdsToDelete.add(occ.occurrenceId);
+      }
+    }
+
+    if (occurrenceIdsToDelete.size === 0) {
+      toast({
+        variant: "destructive",
+        title: "No Blocks Found",
+        description: "Could not find blocks to delete",
+      });
+      return;
+    }
+
+    try {
+      let deletedCount = 0;
+      for (const occurrenceId of occurrenceIdsToDelete) {
+        // Delete using the database UUID (occurrenceId)
+        const response = await fetch(`/api/blocks/${occurrenceId}`, {
+          method: 'DELETE',
+          credentials: 'include',
+        });
+
+        if (response.ok) {
+          deletedCount++;
+        }
+      }
+
+      toast({
+        title: "Blocks Deleted",
+        description: `Deleted ${deletedCount} blocks`,
+      });
+
+      clearSelection();
+      // Refetch calendar data
+      queryClient.invalidateQueries({ queryKey: ['/api/schedules/calendar'] });
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Delete Failed",
+        description: error.message || "Failed to delete blocks",
       });
     }
   };
@@ -2118,6 +2265,26 @@ export default function Schedules() {
               <Button
                 variant="outline"
                 size="sm"
+                onClick={selectAllBlocks}
+                data-testid="button-select-all"
+                title="Select all blocks"
+              >
+                <CheckSquare className="w-4 h-4 mr-1" />
+                Select All
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={selectAllAssigned}
+                data-testid="button-select-assigned"
+                title="Select all assigned shifts"
+              >
+                <User className="w-4 h-4 mr-1" />
+                Select Assigned
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={selectAllUnassigned}
                 data-testid="button-select-all-unassigned"
                 title="Select all unassigned shifts"
@@ -2146,6 +2313,17 @@ export default function Schedules() {
               >
                 <UserMinus className="w-4 h-4 mr-1" />
                 Unassign Selected
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={deleteSelected}
+                disabled={selectedCells.size === 0}
+                data-testid="button-delete-selected"
+                title="Delete all selected blocks permanently"
+              >
+                <Trash2 className="w-4 h-4 mr-1" />
+                Delete Selected
               </Button>
             </div>
 
@@ -2597,15 +2775,27 @@ export default function Schedules() {
                                                       ? 'warning-gradient'
                                                       : ''
                                                   }`}
-                                                  style={{
-                                                    backgroundColor: getOccurrenceViolationStatus(occ.occurrenceId)
-                                                      ? undefined
-                                                      : (themeMode === 'day' ? undefined : 'rgba(59, 130, 246, 0.15)'),
-                                                    borderColor: getOccurrenceViolationStatus(occ.occurrenceId)
-                                                      ? undefined
-                                                      : (themeMode === 'day' ? undefined : 'rgba(59, 130, 246, 0.3)'),
-                                                    color: themeMode === 'day' ? undefined : themeStyles.color
-                                                  }}
+                                                  style={(() => {
+                                                    // Use driver gradient for assigned blocks (without violations)
+                                                    if (!getOccurrenceViolationStatus(occ.occurrenceId) && occ.driverName) {
+                                                      const gradient = getDriverGradient(occ.driverName);
+                                                      return {
+                                                        background: gradient.background,
+                                                        borderColor: gradient.borderColor,
+                                                        color: themeMode === 'day' ? undefined : themeStyles.color
+                                                      };
+                                                    }
+                                                    // Fallback for violations or unassigned
+                                                    return {
+                                                      backgroundColor: getOccurrenceViolationStatus(occ.occurrenceId)
+                                                        ? undefined
+                                                        : (themeMode === 'day' ? undefined : 'rgba(59, 130, 246, 0.15)'),
+                                                      borderColor: getOccurrenceViolationStatus(occ.occurrenceId)
+                                                        ? undefined
+                                                        : (themeMode === 'day' ? undefined : 'rgba(59, 130, 246, 0.3)'),
+                                                      color: themeMode === 'day' ? undefined : themeStyles.color
+                                                    };
+                                                  })()}
                                                 >
                                                   <div className="flex items-center gap-1.5">
                                                     <User className="w-3 h-3 flex-shrink-0" style={{ color: themeStyles.accentColor }} />

@@ -1,51 +1,56 @@
-import { db } from './server/db.js';
-import { sql } from 'drizzle-orm';
+import { db } from './server/db';
+import { blocks, blockAssignments, drivers } from './shared/schema';
+import { eq, sql } from 'drizzle-orm';
+import { subWeeks } from 'date-fns';
 
-async function main() {
-  // Look up Adan's actual block assignments with tractor IDs
-  const adanAssignments = await db.execute(sql`
-    SELECT
-      d.first_name,
-      d.last_name,
-      b.service_date,
-      b.solo_type,
-      b.tractor_id,
-      b.start_timestamp,
-      b.block_id
+async function checkAdan() {
+  const cutoff = subWeeks(new Date(), 12);
+
+  // Find Adan
+  const allDrivers = await db.select({ id: drivers.id, firstName: drivers.firstName, lastName: drivers.lastName })
+    .from(drivers);
+
+  const adan = allDrivers.find(d => d.firstName?.toLowerCase().includes('adan') || d.lastName?.toLowerCase().includes('adan'));
+
+  if (!adan) {
+    console.log('Adan not found');
+    process.exit(0);
+  }
+
+  console.log('Found Adan:', adan.id, adan.firstName, adan.lastName);
+
+  // Get his assignment history with solo types
+  const history = await db.execute(sql`
+    SELECT b.solo_type, b.service_date, b.tractor_id
     FROM block_assignments ba
     JOIN blocks b ON ba.block_id = b.id
-    JOIN drivers d ON ba.driver_id = d.id
-    WHERE ba.is_active = true
-    AND (d.first_name ILIKE '%Adan%' OR d.last_name ILIKE '%Sandhool%')
+    WHERE ba.driver_id = ${adan.id}
+    AND b.service_date >= ${cutoff}
     ORDER BY b.service_date DESC
     LIMIT 20
   `);
 
-  console.log('=== ADAN SANDHOOL SABRIYE - ACTUAL ASSIGNMENTS ===');
-  console.log('');
-  for (const row of adanAssignments.rows as any[]) {
-    console.log(`  ${row.service_date} | ${(row.solo_type || 'N/A').padEnd(6)} | ${(row.tractor_id || 'N/A').padEnd(12)} | Block: ${row.block_id}`);
+  console.log('\nAdan recent assignments:');
+  for (const row of history.rows as any[]) {
+    console.log('  ', row.service_date, row.solo_type, row.tractor_id);
   }
 
-  // Now check the canonical start times for Solo2 tractors
-  console.log('');
-  console.log('=== CANONICAL START TIMES (Holy Grail) ===');
-  console.log('');
-  console.log('Solo2 Tractors:');
-  console.log('  solo2_Tractor_1: 18:30');
-  console.log('  solo2_Tractor_2: 23:30  <-- Adan\'s slot if he works Solo2');
-  console.log('  solo2_Tractor_3: 21:30');
-  console.log('  solo2_Tractor_4: 08:30');
-  console.log('  solo2_Tractor_5: 15:30');
-  console.log('  solo2_Tractor_6: 11:30');
-  console.log('  solo2_Tractor_7: 16:30');
-  console.log('');
-  console.log('Solo1 Tractors (for reference):');
-  console.log('  solo1_Tractor_8: 00:30');
-  console.log('');
-  console.log('NOTE: 00:30 is Solo1 Tractor_8, but 23:30 is Solo2 Tractor_2!');
-  console.log('If Adan works 23:30, he is a SOLO2 driver, not Solo1.');
+  // Count by type
+  const counts = await db.execute(sql`
+    SELECT b.solo_type, COUNT(*) as count
+    FROM block_assignments ba
+    JOIN blocks b ON ba.block_id = b.id
+    WHERE ba.driver_id = ${adan.id}
+    AND b.service_date >= ${cutoff}
+    GROUP BY b.solo_type
+  `);
+
+  console.log('\nCounts by type:');
+  for (const row of counts.rows as any[]) {
+    console.log('  ', row.solo_type, ':', row.count);
+  }
 
   process.exit(0);
 }
-main();
+
+checkAdan();

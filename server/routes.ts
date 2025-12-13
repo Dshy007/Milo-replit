@@ -4044,11 +4044,11 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
   // POST /api/matching/calculate - Calculate driver-block matches using OR-Tools
   // This replaces the client-side calculateBlockMatch() function
   // minDays slider: 3 = part-time OK, 4 = prefer full-time, 5 = full-time only
-  // lookbackWeeks slider: 1, 2, 4, or 8 weeks to look back for pattern matching
+  // historyStart/historyEnd: Custom date range for pattern matching (YYYY-MM-DD format)
   app.post("/api/matching/calculate", requireAuth, async (req, res) => {
     try {
       const tenantId = req.session.tenantId!;
-      const { weekStart, contractType, minDays, lookbackWeeks } = req.body;
+      const { weekStart, contractType, minDays, historyStart, historyEnd } = req.body;
 
       // Default to current week if no weekStart provided
       const weekStartDate = weekStart
@@ -4058,17 +4058,32 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
       // Validate minDays (3, 4, or 5)
       const validMinDays = [3, 4, 5].includes(minDays) ? minDays : 3;
 
-      // Validate lookbackWeeks (1, 2, 4, or 8)
-      const validLookbackWeeks = [1, 2, 4, 8].includes(lookbackWeeks) ? lookbackWeeks : 8;
+      // Parse custom history date range (default to 8 weeks back if not provided)
+      let historyStartDate: Date;
+      let historyEndDate: Date;
 
-      console.log(`[OR-Tools API] Calculating matches for week starting ${format(weekStartDate, "yyyy-MM-dd")}, contract type: ${contractType || "all"}, minDays: ${validMinDays}, lookbackWeeks: ${validLookbackWeeks}`);
+      if (historyStart && historyEnd) {
+        historyStartDate = parseISO(historyStart);
+        historyEndDate = parseISO(historyEnd);
+        console.log(`[OR-Tools API] Custom history range: ${historyStart} to ${historyEnd}`);
+      } else {
+        // Default: 8 weeks back from week start
+        historyEndDate = new Date(weekStartDate);
+        historyEndDate.setDate(historyEndDate.getDate() - 1);
+        historyStartDate = new Date(weekStartDate);
+        historyStartDate.setDate(historyStartDate.getDate() - 56);
+        console.log(`[OR-Tools API] Default history range: ${format(historyStartDate, "yyyy-MM-dd")} to ${format(historyEndDate, "yyyy-MM-dd")}`);
+      }
+
+      console.log(`[OR-Tools API] Calculating matches for week starting ${format(weekStartDate, "yyyy-MM-dd")}, contract type: ${contractType || "all"}, minDays: ${validMinDays}`);
 
       const result = await optimizeWeekSchedule(
         tenantId,
         weekStartDate,
         contractType as "solo1" | "solo2" | "team" | undefined,
         validMinDays,
-        validLookbackWeeks
+        historyStartDate,
+        historyEndDate
       );
 
       res.json({

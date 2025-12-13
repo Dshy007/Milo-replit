@@ -55,6 +55,7 @@
     "@types/papaparse": "^5.5.0",
     "@types/three": "^0.181.0",
     "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^12.5.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",

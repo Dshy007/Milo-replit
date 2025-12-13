@@ -521,6 +521,208 @@ def solve_contract_type(drivers: list, blocks: list, slot_history: dict,
     return assignments, unassigned, status_name
 
 
+def optimize_with_precomputed_scores(drivers: list, blocks: list, score_matrix: dict, min_days: int = 3) -> dict:
+    """
+    Optimize schedule using PRE-COMPUTED scores from the pipeline.
+
+    This function does NOT:
+    - Build its own slot_history
+    - Run XGBoost or K-Means
+    - Calculate ownership scores
+
+    It ONLY:
+    - Uses the scores passed in from the pipeline
+    - Finds the globally optimal assignment via CP-SAT
+
+    Args:
+        drivers: List of {id, name, contractType}
+        blocks: List of {id, day, time, contractType, serviceDate}
+        score_matrix: {blockId: {driverId: score}} - PRE-COMPUTED by pipeline
+        min_days: Minimum days per driver (fairness constraint)
+    """
+    print(f"=== OR-Tools with Pipeline Scores (minDays={min_days}) ===", file=sys.stderr)
+    print(f"Input: {len(drivers)} drivers, {len(blocks)} blocks", file=sys.stderr)
+    print(f"Score matrix: {len(score_matrix)} blocks with pre-computed scores", file=sys.stderr)
+
+    if not blocks or not drivers:
+        return {
+            "assignments": [],
+            "unassigned": [b["id"] for b in blocks],
+            "stats": {
+                "totalBlocks": len(blocks),
+                "totalDrivers": len(drivers),
+                "assigned": 0,
+                "unassigned": len(blocks),
+                "solverStatus": "NO_INPUT"
+            }
+        }
+
+    model = cp_model.CpModel()
+
+    # Index mappings
+    driver_ids = [d["id"] for d in drivers]
+    block_ids = [b["id"] for b in blocks]
+    driver_map = {d["id"]: d for d in drivers}
+
+    n_drivers = len(driver_ids)
+    n_blocks = len(block_ids)
+
+    # Get unique dates for one-block-per-day constraint
+    date_to_blocks = defaultdict(list)
+    for i, b in enumerate(blocks):
+        date_to_blocks[b.get("serviceDate", b["day"])].append(i)
+
+    # Decision variables: assign[d][b] = 1 if driver d assigned to block b
+    assign = {}
+    for d in range(n_drivers):
+        for b in range(n_blocks):
+            assign[(d, b)] = model.new_bool_var(f"assign_d{d}_b{b}")
+
+    # ============ HARD CONSTRAINTS ============
+
+    # Constraint 1: Each block assigned to exactly one driver
+    for b in range(n_blocks):
+        model.add_exactly_one(assign[(d, b)] for d in range(n_drivers))
+
+    # Constraint 2: Each driver works at most one block per date
+    for d in range(n_drivers):
+        for date, block_indices in date_to_blocks.items():
+            model.add_at_most_one(assign[(d, b)] for b in block_indices)
+
+    # Constraint 3: Fair distribution (min/max days per driver)
+    # When more drivers than blocks, allow 0 minimum to avoid INFEASIBLE
+    num_dates = len(date_to_blocks)
+    base_min = n_blocks // n_drivers if n_drivers > 0 else 0
+    base_max = base_min + (1 if n_blocks % n_drivers != 0 else 0)
+
+    # Slider adjusts flexibility
+    if min_days >= 5:
+        driver_min = base_min
+        driver_max = base_max
+    elif min_days == 4:
+        driver_min = max(0, base_min - 1)  # Allow 0 when more drivers than blocks
+        driver_max = min(num_dates, base_max + 1)
+    else:
+        driver_min = max(0, base_min - 2)  # Allow 0 when more drivers than blocks
+        driver_max = min(num_dates, base_max + 2)
+
+    # Ensure max is at least 1 (drivers can get at least one block if available)
+    driver_max = max(1, driver_max)
+
+    print(f"  Distribution: {driver_min}-{driver_max} blocks per driver", file=sys.stderr)
+
+    for d in range(n_drivers):
+        total_assigned = sum(assign[(d, b)] for b in range(n_blocks))
+        model.add(total_assigned >= driver_min)
+        model.add(total_assigned <= driver_max)
+
+    # ============ OBJECTIVE: Maximize pre-computed pipeline scores ============
+
+    # Convert scores to integers (CP-SAT requires integers)
+    preference_score = {}
+    for d, driver in enumerate(drivers):
+        driver_id = driver["id"]
+        for b, block in enumerate(blocks):
+            block_id = block["id"]
+            # Get pre-computed score from pipeline (0-1 float)
+            block_scores = score_matrix.get(block_id, {})
+            score = block_scores.get(driver_id, 0.0)
+            # Scale to integer (0-1000)
+            preference_score[(d, b)] = int(score * 1000)
+
+    # Log top scores
+    top_scores = sorted(preference_score.items(), key=lambda x: -x[1])[:5]
+    if top_scores and top_scores[0][1] > 0:
+        print(f"  Top pipeline scores:", file=sys.stderr)
+        for (d, b), score in top_scores:
+            driver_name = drivers[d]["name"]
+            block = blocks[b]
+            print(f"    {driver_name} -> {block['day']}_{block['time']}: {score/1000:.3f}", file=sys.stderr)
+
+    # Objective: maximize sum of pre-computed scores
+    model.maximize(
+        sum(preference_score[(d, b)] * assign[(d, b)]
+            for d in range(n_drivers)
+            for b in range(n_blocks))
+    )
+
+    # ============ SOLVE ============
+
+    solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = 30.0
+
+    status = solver.solve(model)
+
+    status_names = {
+        cp_model.OPTIMAL: "OPTIMAL",
+        cp_model.FEASIBLE: "FEASIBLE",
+        cp_model.INFEASIBLE: "INFEASIBLE",
+        cp_model.MODEL_INVALID: "MODEL_INVALID",
+        cp_model.UNKNOWN: "UNKNOWN"
+    }
+    status_name = status_names.get(status, "UNKNOWN")
+
+    print(f"  Solver status: {status_name}", file=sys.stderr)
+    print(f"  Objective value: {solver.objective_value}", file=sys.stderr)
+
+    # ============ EXTRACT RESULTS ============
+
+    assignments = []
+    assigned_blocks = set()
+
+    if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
+        for d in range(n_drivers):
+            for b in range(n_blocks):
+                if solver.value(assign[(d, b)]) == 1:
+                    driver = drivers[d]
+                    block = blocks[b]
+                    driver_id = driver["id"]
+                    block_id = block["id"]
+
+                    # Get the pipeline score
+                    block_scores = score_matrix.get(block_id, {})
+                    pipeline_score = block_scores.get(driver_id, 0.0)
+
+                    assignments.append({
+                        "blockId": block_id,
+                        "driverId": driver_id,
+                        "driverName": driver.get("name", "Unknown"),
+                        "matchType": "pipeline_optimal",
+                        "day": block["day"],
+                        "time": block["time"],
+                        "serviceDate": block.get("serviceDate", block["day"]),
+                        "contractType": block.get("contractType", "solo1"),
+                        "pipelineScore": round(pipeline_score, 3),
+                        "scoringMethod": "pipeline"
+                    })
+                    assigned_blocks.add(block_id)
+
+    unassigned = [b["id"] for b in blocks if b["id"] not in assigned_blocks]
+
+    # Log driver assignment counts
+    driver_counts = defaultdict(int)
+    for a in assignments:
+        driver_counts[a["driverName"]] += 1
+
+    print(f"\n  Driver assignments:", file=sys.stderr)
+    for name, count in sorted(driver_counts.items(), key=lambda x: -x[1]):
+        print(f"    {name}: {count} blocks", file=sys.stderr)
+
+    print(f"\n=== Result: {len(assignments)} assigned, {len(unassigned)} unassigned ===", file=sys.stderr)
+
+    return {
+        "assignments": assignments,
+        "unassigned": unassigned,
+        "stats": {
+            "totalBlocks": len(blocks),
+            "totalDrivers": len(drivers),
+            "assigned": len(assignments),
+            "unassigned": len(unassigned),
+            "solverStatus": status_name
+        }
+    }
+
+
 def main():
     # Read from stdin (handles large data that exceeds command line limits)
     try:
@@ -545,6 +747,17 @@ def main():
             driver_preferences=data.get("driverPreferences", None)  # per-driver min/max/allowedDays
         )
         print(json.dumps(result))
+
+    elif action == "optimize_with_scores":
+        # NEW: Use pre-computed scores from pipeline (no duplicate ML/history logic)
+        result = optimize_with_precomputed_scores(
+            drivers=data.get("drivers", []),
+            blocks=data.get("blocks", []),
+            score_matrix=data.get("scoreMatrix", {}),
+            min_days=data.get("minDays", 3),
+        )
+        print(json.dumps(result))
+
     else:
         print(json.dumps({"error": f"Unknown action: {action}"}))
         sys.exit(1)

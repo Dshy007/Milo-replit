@@ -231,48 +231,90 @@ class AvailabilityClassifier:
         """
         Generate balanced training data from driver histories.
 
-        For each driver:
-        - POSITIVE samples: dates they worked (label=1)
-        - NEGATIVE samples: sampled dates they didn't work (label=0)
+        For each driver, for each day in their date range:
+        - If they worked that day → positive sample (label=1)
+        - If they didn't work → negative sample (label=0)
 
-        Balanced sampling: ~1:1 ratio of positive to negative samples.
+        Balance: Equal positive and negative samples PER DRIVER.
+        Minimum: Each driver contributes at least 10 samples.
 
         Returns: (X, y) where X is features and y is labels
         """
         X_samples = []
         y_labels = []
+        driver_ids = []  # Track which driver each sample belongs to
+
+        # Stats tracking
+        driver_sample_counts = {}
 
         print(f"[Training] Building training data from {len(driver_histories)} drivers...", file=sys.stderr)
 
+        # First pass: find global date range across ALL drivers
+        all_work_dates = []
+        for driver_id, assignments in driver_histories.items():
+            for assignment in assignments:
+                date_str = assignment.get('serviceDate') or assignment.get('date')
+                if date_str:
+                    try:
+                        date = pd.to_datetime(date_str).to_pydatetime()
+                        all_work_dates.append(date)
+                    except:
+                        continue
+
+        if not all_work_dates:
+            print(f"[Training] ERROR: No valid dates found in histories", file=sys.stderr)
+            return np.array([]), np.array([])
+
+        global_min_date = min(all_work_dates)
+        global_max_date = max(all_work_dates)
+        total_days = (global_max_date - global_min_date).days + 1
+
+        print(f"[Training] Date range: {global_min_date.date()} to {global_max_date.date()} ({total_days} days)", file=sys.stderr)
+
+        # Generate all dates in the global range
+        all_dates_in_range = []
+        current = global_min_date
+        while current <= global_max_date:
+            all_dates_in_range.append(current)
+            current += timedelta(days=1)
+
+        # Second pass: generate samples for each driver
         for driver_id, assignments in driver_histories.items():
             if len(assignments) < 1:
-                continue  # Need at least 1 shift
+                continue
 
             # Compute stats for this driver (cache it)
             stats = self._compute_driver_stats(driver_id, assignments)
             self.driver_stats[driver_id] = stats
             work_dates = stats['work_dates']
+            work_dates_set = set(work_dates)
 
             if len(work_dates) < 1:
                 continue
 
-            # Get date range for this driver
-            min_date = min(work_dates)
-            max_date = max(work_dates)
-            work_dates_set = set(work_dates)
+            # Count positives and negatives for this driver
+            num_positive = len(work_dates)
 
-            # Generate all dates in range
-            all_dates_in_range = []
-            current = min_date
-            while current <= max_date:
-                all_dates_in_range.append(current)
-                current += timedelta(days=1)
-
-            # Non-work dates (for negative samples)
+            # Non-work dates for this driver (within global range)
             non_work_dates = [d for d in all_dates_in_range if d not in work_dates_set]
 
+            # Balance: sample EQUAL number of negatives as positives
+            # But ensure minimum of 5 negatives even for drivers with few positives
+            num_negative_to_sample = max(min(len(non_work_dates), num_positive), 5)
+
+            # Ensure minimum 10 total samples per driver
+            min_samples_per_driver = 10
+            if num_positive + num_negative_to_sample < min_samples_per_driver:
+                # Add more negatives to reach minimum
+                num_negative_to_sample = min(
+                    len(non_work_dates),
+                    min_samples_per_driver - num_positive
+                )
+
+            driver_positives = 0
+            driver_negatives = 0
+
             # POSITIVE samples: each work date (label=1)
-            # For week-to-week matching, use ALL work dates as positive samples
             for work_date in work_dates:
                 # Create history up to this date (for realistic feature extraction)
                 history_before = [
@@ -280,34 +322,32 @@ class AvailabilityClassifier:
                     if pd.to_datetime(a.get('serviceDate') or a.get('date')).to_pydatetime() < work_date
                 ]
 
-                # Even with no prior history, we can still use day-of-week features
-                if len(history_before) >= 0:  # Allow all samples
-                    # Temporarily update stats based on history before this date
-                    temp_stats = self._compute_driver_stats(driver_id, history_before)
-                    self.driver_stats[driver_id] = temp_stats
+                # Temporarily update stats based on history before this date
+                temp_stats = self._compute_driver_stats(driver_id, history_before)
+                self.driver_stats[driver_id] = temp_stats
 
-                    features = self.extract_features(driver_id, work_date, history_before)
-                    X_samples.append(features)
-                    y_labels.append(1)
+                features = self.extract_features(driver_id, work_date, history_before)
+                X_samples.append(features)
+                y_labels.append(1)
+                driver_ids.append(driver_id)
+                driver_positives += 1
 
             # Restore full stats
             self.driver_stats[driver_id] = stats
 
             # NEGATIVE samples: sample non-work dates (label=0)
-            # Sample approximately same number as positive samples for balance
-            num_positive = len([d for d in work_dates[2:]])
-            num_negative_to_sample = min(len(non_work_dates), num_positive)
+            if num_negative_to_sample > 0 and len(non_work_dates) > 0:
+                # Use consistent random seed per driver for reproducibility
+                np.random.seed(hash(driver_id) % (2**32))
 
-            if num_negative_to_sample > 0:
-                # Sample evenly across the date range
-                np.random.seed(42)
-                sampled_non_work = np.random.choice(
+                sample_size = min(num_negative_to_sample, len(non_work_dates))
+                sampled_indices = np.random.choice(
                     len(non_work_dates),
-                    size=num_negative_to_sample,
+                    size=sample_size,
                     replace=False
                 )
 
-                for idx in sampled_non_work:
+                for idx in sampled_indices:
                     non_work_date = non_work_dates[idx]
 
                     # Create history up to this date
@@ -316,16 +356,24 @@ class AvailabilityClassifier:
                         if pd.to_datetime(a.get('serviceDate') or a.get('date')).to_pydatetime() < non_work_date
                     ]
 
-                    if len(history_before) >= 0:  # Allow all samples
-                        temp_stats = self._compute_driver_stats(driver_id, history_before)
-                        self.driver_stats[driver_id] = temp_stats
+                    temp_stats = self._compute_driver_stats(driver_id, history_before)
+                    self.driver_stats[driver_id] = temp_stats
 
-                        features = self.extract_features(driver_id, non_work_date, history_before)
-                        X_samples.append(features)
-                        y_labels.append(0)
+                    features = self.extract_features(driver_id, non_work_date, history_before)
+                    X_samples.append(features)
+                    y_labels.append(0)
+                    driver_ids.append(driver_id)
+                    driver_negatives += 1
 
             # Restore full stats
             self.driver_stats[driver_id] = stats
+
+            # Track per-driver counts
+            driver_sample_counts[driver_id] = {
+                'positive': driver_positives,
+                'negative': driver_negatives,
+                'total': driver_positives + driver_negatives
+            }
 
         X = np.array(X_samples)
         y = np.array(y_labels)
@@ -333,10 +381,24 @@ class AvailabilityClassifier:
         positive_count = np.sum(y == 1)
         negative_count = np.sum(y == 0)
 
-        print(f"[Training] Generated {len(X)} samples:", file=sys.stderr)
+        # Calculate per-driver statistics
+        totals = [c['total'] for c in driver_sample_counts.values()]
+        positives = [c['positive'] for c in driver_sample_counts.values()]
+        negatives = [c['negative'] for c in driver_sample_counts.values()]
+
+        print(f"\n[Training] {'='*50}", file=sys.stderr)
+        print(f"[Training] TRAINING DATA SUMMARY", file=sys.stderr)
+        print(f"[Training] {'='*50}", file=sys.stderr)
+        print(f"[Training] Total samples: {len(X)}", file=sys.stderr)
         print(f"[Training]   Positive (worked): {positive_count}", file=sys.stderr)
         print(f"[Training]   Negative (didn't work): {negative_count}", file=sys.stderr)
         print(f"[Training]   Balance ratio: {positive_count / max(1, negative_count):.2f}", file=sys.stderr)
+        print(f"[Training]", file=sys.stderr)
+        print(f"[Training] Per-driver stats ({len(driver_sample_counts)} drivers):", file=sys.stderr)
+        print(f"[Training]   Samples - min: {min(totals)}, max: {max(totals)}, avg: {np.mean(totals):.1f}", file=sys.stderr)
+        print(f"[Training]   Positives - min: {min(positives)}, max: {max(positives)}, avg: {np.mean(positives):.1f}", file=sys.stderr)
+        print(f"[Training]   Negatives - min: {min(negatives)}, max: {max(negatives)}, avg: {np.mean(negatives):.1f}", file=sys.stderr)
+        print(f"[Training] {'='*50}\n", file=sys.stderr)
 
         return X, y
 
@@ -593,6 +655,113 @@ def main():
                 'rolling_interval': stats['rolling_interval'],
                 'freq_this_day': freq_this_day
             }
+        }
+        print(json.dumps(result))
+
+    elif action == "test_build_training_data":
+        # Just test build_training_data WITHOUT training
+        driver_histories = input_data.get('histories', {})
+
+        classifier = AvailabilityClassifier()
+        X, y = classifier.build_training_data(driver_histories)
+
+        # Output summary (detailed stats already printed to stderr)
+        result = {
+            'success': True,
+            'total_samples': len(X),
+            'positive_samples': int(np.sum(y == 1)),
+            'negative_samples': int(np.sum(y == 0)),
+            'balance_ratio': float(np.sum(y == 1) / max(1, np.sum(y == 0))),
+            'drivers_included': len(driver_histories)
+        }
+        print(json.dumps(result))
+
+    elif action == "test_extreme_cases":
+        # Test extreme cases: Tuesday worker vs Never-Tuesday worker
+        tuesday_worker = input_data.get('tuesdayWorker', {})
+        never_tuesday = input_data.get('neverTuesdayWorker', {})
+        test_date = input_data.get('testDate')
+
+        # Load the trained model
+        classifier = AvailabilityClassifier()
+        model_loaded = classifier.load()
+
+        print(f"\n{'='*60}", file=sys.stderr)
+        print(f"STEP 4: Feature Importance", file=sys.stderr)
+        print(f"{'='*60}", file=sys.stderr)
+
+        if model_loaded and classifier.is_fitted:
+            importance = classifier.model.feature_importances_
+            print(f"\nFeature Importance (from trained model):", file=sys.stderr)
+            for name, imp in sorted(zip(FEATURE_NAMES, importance), key=lambda x: -x[1]):
+                bar = '█' * int(imp * 40)
+                print(f"  {name:25s} {imp:.3f} {bar}", file=sys.stderr)
+        else:
+            print(f"WARNING: Model not loaded, cannot show feature importance", file=sys.stderr)
+
+        print(f"\n{'='*60}", file=sys.stderr)
+        print(f"STEP 5: Extreme Case Testing", file=sys.stderr)
+        print(f"{'='*60}", file=sys.stderr)
+
+        # Test Tuesday worker
+        tw_id = tuesday_worker.get('driverId')
+        tw_history = tuesday_worker.get('history', [])
+
+        # Test Never-Tuesday worker
+        nt_id = never_tuesday.get('driverId')
+        nt_history = never_tuesday.get('history', [])
+
+        # Compute stats for each
+        tw_stats = classifier._compute_driver_stats(tw_id, tw_history)
+        nt_stats = classifier._compute_driver_stats(nt_id, nt_history)
+
+        classifier.driver_stats[tw_id] = tw_stats
+        classifier.driver_stats[nt_id] = nt_stats
+
+        # Extract features for each on test date
+        tw_features = classifier.extract_features(tw_id, test_date, tw_history)
+        nt_features = classifier.extract_features(nt_id, test_date, nt_history)
+
+        print(f"\nTuesday Worker ({tw_id[:8]}...):", file=sys.stderr)
+        print(f"  Total shifts: {len(tw_stats['work_dates'])}", file=sys.stderr)
+        print(f"  Weekday counts: {tw_stats['weekday_counts']}", file=sys.stderr)
+        print(f"  Features on {test_date}:", file=sys.stderr)
+        for name, val in zip(FEATURE_NAMES, tw_features):
+            print(f"    {name:25s} = {val:.3f}", file=sys.stderr)
+
+        print(f"\nNever-Tuesday Worker ({nt_id[:8]}...):", file=sys.stderr)
+        print(f"  Total shifts: {len(nt_stats['work_dates'])}", file=sys.stderr)
+        print(f"  Weekday counts: {nt_stats['weekday_counts']}", file=sys.stderr)
+        print(f"  Features on {test_date}:", file=sys.stderr)
+        for name, val in zip(FEATURE_NAMES, nt_features):
+            print(f"    {name:25s} = {val:.3f}", file=sys.stderr)
+
+        # Predict using XGBoost model directly (not the blended predict_availability)
+        tw_prob = 0.0
+        nt_prob = 0.0
+
+        if model_loaded and classifier.is_fitted:
+            X_tw = np.array([tw_features])
+            X_nt = np.array([nt_features])
+
+            tw_prob = float(classifier.model.predict_proba(X_tw)[0][1])
+            nt_prob = float(classifier.model.predict_proba(X_nt)[0][1])
+
+            print(f"\n{'='*60}", file=sys.stderr)
+            print(f"XGBoost Raw Predictions:", file=sys.stderr)
+            print(f"  Tuesday worker:       {tw_prob:.3f} ({tw_prob*100:.1f}%)", file=sys.stderr)
+            print(f"  Never-Tuesday worker: {nt_prob:.3f} ({nt_prob*100:.1f}%)", file=sys.stderr)
+            print(f"  Difference:           {abs(tw_prob - nt_prob):.3f} ({abs(tw_prob - nt_prob)*100:.1f}%)", file=sys.stderr)
+            print(f"{'='*60}\n", file=sys.stderr)
+        else:
+            print(f"\nWARNING: Model not fitted, using fallback", file=sys.stderr)
+
+        result = {
+            'tuesdayWorkerProb': tw_prob,
+            'neverTuesdayProb': nt_prob,
+            'difference': abs(tw_prob - nt_prob),
+            'tuesdayWorkerFeatures': dict(zip(FEATURE_NAMES, tw_features)),
+            'neverTuesdayFeatures': dict(zip(FEATURE_NAMES, nt_features)),
         }
         print(json.dumps(result))
 

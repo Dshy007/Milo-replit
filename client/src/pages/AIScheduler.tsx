@@ -22,6 +22,7 @@ import {
   Upload,
   History,
   CheckCircle,
+  Settings,
 } from "lucide-react";
 import { ImportWizard } from "@/components/ImportWizard";
 import { Slider } from "@/components/ui/slider";
@@ -113,6 +114,38 @@ const getLookbackLabel = (weeks: number): string => {
   return `${weeks} weeks`;
 };
 
+// Predictability slider label
+const getPredictabilityLabel = (value: number): string => {
+  switch (value) {
+    case 20: return "Flexible Pattern";
+    case 40: return "Somewhat Flexible";
+    case 60: return "Balanced";
+    case 80: return "Follow Pattern";
+    case 100: return "Keep Pattern";
+    default: return "Balanced";
+  }
+};
+
+// Time flexibility slider label
+const getTimeFlexLabel = (hours: number): string => {
+  if (hours === 0) return "Exact Time";
+  return `±${hours}hr`;
+};
+
+// Memory length slider label
+const getMemoryLabel = (weeks: number): string => {
+  return `${weeks} weeks`;
+};
+
+// Preset modes
+type ScheduleMode = "auto" | "stable" | "flex" | "custom";
+
+const PRESET_VALUES: Record<Exclude<ScheduleMode, "custom">, { predictability: number; timeFlex: number; memory: number }> = {
+  auto: { predictability: 60, timeFlex: 2, memory: 7 },
+  stable: { predictability: 100, timeFlex: 1, memory: 12 },
+  flex: { predictability: 20, timeFlex: 4, memory: 3 },
+};
+
 // Calculate the number of days between two dates
 const getDaysDiff = (start: Date, end: Date): number => {
   return Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
@@ -128,6 +161,34 @@ export default function AIScheduler() {
   const [historyStartDate, setHistoryStartDate] = useState<Date>(() => subDays(new Date(), 7));
   const [historyEndDate, setHistoryEndDate] = useState<Date>(() => subDays(new Date(), 1));
   const [isImportWizardOpen, setIsImportWizardOpen] = useState(false);
+
+  // New scheduling settings sliders
+  const [scheduleMode, setScheduleMode] = useState<ScheduleMode>("auto");
+  const [predictability, setPredictability] = useState(60);  // 20, 40, 60, 80, 100
+  const [timeFlex, setTimeFlex] = useState(2);               // 0, 1, 2, 3, 4 hours
+  const [memoryLength, setMemoryLength] = useState(7);       // 3, 5, 7, 9, 12 weeks
+
+  // Handle preset mode selection
+  const handleModeChange = (mode: ScheduleMode) => {
+    setScheduleMode(mode);
+    if (mode !== "custom") {
+      const preset = PRESET_VALUES[mode];
+      setPredictability(preset.predictability);
+      setTimeFlex(preset.timeFlex);
+      setMemoryLength(preset.memory);
+    }
+  };
+
+  // When sliders change manually, switch to custom mode
+  const handleSliderChange = (
+    setter: (value: number) => void,
+    value: number
+  ) => {
+    setter(value);
+    if (scheduleMode !== "custom") {
+      setScheduleMode("custom");
+    }
+  };
 
   // Update history dates when lookbackWeeks changes
   const handleLookbackChange = (weeks: number) => {
@@ -435,11 +496,11 @@ export default function AIScheduler() {
               </div>
             </div>
 
-            {/* MinDays Slider */}
+            {/* MinDays Slider (keeping for now) */}
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <div className="flex items-center gap-4 bg-slate-800/50 rounded-lg px-4 py-2 min-w-[240px] border border-slate-700/50">
+                  <div className="flex items-center gap-4 bg-slate-800/50 rounded-lg px-4 py-2 min-w-[200px] border border-slate-700/50">
                     <Target className="w-4 h-4 text-slate-500 flex-shrink-0" />
                     <div className="flex-1">
                       <div className="flex items-center justify-between text-xs mb-1">
@@ -467,42 +528,147 @@ export default function AIScheduler() {
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
+          </div>
+        </div>
 
-            {/* Lookback Weeks Slider */}
+        {/* Scheduling Settings Panel */}
+        <div className="elegant-card p-4 mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center">
+                <Settings className="w-4 h-4 text-white" />
+              </div>
+              <div>
+                <h3 className="text-sm font-semibold text-slate-200">Scheduling Settings</h3>
+                <p className="text-xs text-slate-500">Configure how the AI matches drivers to blocks</p>
+              </div>
+            </div>
+
+            {/* Preset Mode Buttons */}
+            <div className="flex gap-2">
+              {[
+                { value: "auto", label: "AUTO", color: "bg-blue-600 hover:bg-blue-500" },
+                { value: "stable", label: "STABLE", color: "bg-emerald-600 hover:bg-emerald-500" },
+                { value: "flex", label: "FLEX", color: "bg-amber-600 hover:bg-amber-500" },
+                { value: "custom", label: "CUSTOM", color: "bg-slate-600 hover:bg-slate-500" },
+              ].map((mode) => (
+                <Button
+                  key={mode.value}
+                  variant={scheduleMode === mode.value ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => handleModeChange(mode.value as ScheduleMode)}
+                  className={cn(
+                    "border-slate-700 text-xs font-medium",
+                    scheduleMode !== mode.value && "bg-slate-800/50 text-slate-400 hover:bg-slate-700",
+                    scheduleMode === mode.value && mode.color
+                  )}
+                >
+                  {mode.label}
+                </Button>
+              ))}
+            </div>
+          </div>
+
+          {/* 3 Sliders */}
+          <div className="grid grid-cols-3 gap-4">
+            {/* Predictability Slider */}
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <div className="flex items-center gap-4 bg-slate-800/50 rounded-lg px-4 py-2 min-w-[260px] border border-slate-700/50">
-                    <History className="w-4 h-4 text-slate-500 flex-shrink-0" />
-                    <div className="flex-1">
-                      <div className="flex items-center justify-between text-xs mb-1">
-                        <span className="text-slate-500">Lookback</span>
-                        <span className="font-medium text-cyan-400">
-                          {getLookbackLabel(lookbackWeeks)}
-                        </span>
-                      </div>
-                      <Slider
-                        value={[lookbackWeeks]}
-                        onValueChange={([value]) => handleLookbackChange(value)}
-                        min={1}
-                        max={8}
-                        step={1}
-                        className="w-full"
-                      />
+                  <div className="bg-slate-800/50 rounded-lg px-4 py-3 border border-slate-700/50">
+                    <div className="flex items-center justify-between text-xs mb-2">
+                      <span className="text-slate-500">Predictability</span>
+                      <span className="font-medium text-amber-400">
+                        {getPredictabilityLabel(predictability)}
+                      </span>
                     </div>
-                    <Badge className="bg-cyan-500/20 text-cyan-300 border-cyan-500/30 text-[10px]">
-                      {lookbackWeeks * 7}d
-                    </Badge>
+                    <Slider
+                      value={[predictability]}
+                      onValueChange={([value]) => handleSliderChange(setPredictability, value)}
+                      min={20}
+                      max={100}
+                      step={20}
+                      className="w-full"
+                    />
+                    <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+                      <span>Flexible</span>
+                      <span>Keep Pattern</span>
+                    </div>
                   </div>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="bg-slate-800 border-slate-700">
-                  <p className="font-medium mb-1 text-slate-100">History Lookback</p>
-                  <p className="text-xs text-slate-400">1 week = Match last week to this week</p>
-                  <p className="text-xs text-slate-400">4 weeks = Use 1 month of patterns</p>
-                  <p className="text-xs text-slate-400">8 weeks = Full pattern analysis</p>
-                  <p className="text-xs text-cyan-400 mt-1">
-                    {format(historyStartDate, "M/d")} → {format(historyEndDate, "M/d")}
-                  </p>
+                  <p className="font-medium mb-1 text-slate-100">How closely to follow driver patterns</p>
+                  <p className="text-xs text-slate-400">20% = Allow flexible assignments</p>
+                  <p className="text-xs text-slate-400">60% = Balanced approach</p>
+                  <p className="text-xs text-slate-400">100% = Strictly follow established patterns</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+
+            {/* Time Flexibility Slider */}
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="bg-slate-800/50 rounded-lg px-4 py-3 border border-slate-700/50">
+                    <div className="flex items-center justify-between text-xs mb-2">
+                      <span className="text-slate-500">Time Flexibility</span>
+                      <span className="font-medium text-cyan-400">
+                        {getTimeFlexLabel(timeFlex)}
+                      </span>
+                    </div>
+                    <Slider
+                      value={[timeFlex]}
+                      onValueChange={([value]) => handleSliderChange(setTimeFlex, value)}
+                      min={0}
+                      max={4}
+                      step={1}
+                      className="w-full"
+                    />
+                    <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+                      <span>Exact Time</span>
+                      <span>±4 Hours</span>
+                    </div>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="bg-slate-800 border-slate-700">
+                  <p className="font-medium mb-1 text-slate-100">How far from original time is OK?</p>
+                  <p className="text-xs text-slate-400">0 = Only exact time matches</p>
+                  <p className="text-xs text-slate-400">±2hr = Standard bump tolerance</p>
+                  <p className="text-xs text-slate-400">±4hr = Maximum flexibility</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+
+            {/* Memory Length Slider */}
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="bg-slate-800/50 rounded-lg px-4 py-3 border border-slate-700/50">
+                    <div className="flex items-center justify-between text-xs mb-2">
+                      <span className="text-slate-500">Memory Length</span>
+                      <span className="font-medium text-violet-400">
+                        {getMemoryLabel(memoryLength)}
+                      </span>
+                    </div>
+                    <Slider
+                      value={[memoryLength]}
+                      onValueChange={([value]) => handleSliderChange(setMemoryLength, value)}
+                      min={3}
+                      max={12}
+                      step={1}
+                      className="w-full"
+                    />
+                    <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+                      <span>3 Weeks</span>
+                      <span>12 Weeks</span>
+                    </div>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="bg-slate-800 border-slate-700">
+                  <p className="font-medium mb-1 text-slate-100">How much history to learn from</p>
+                  <p className="text-xs text-slate-400">3 weeks = Recent patterns only</p>
+                  <p className="text-xs text-slate-400">7 weeks = Balanced history</p>
+                  <p className="text-xs text-slate-400">12 weeks = Full pattern analysis</p>
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>

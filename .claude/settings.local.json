@@ -16,7 +16,8 @@
       "Bash(pip install:*)",
       "Bash(curl:*)",
       "Bash(node:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(python:*)"
     ],
     "deny": [],
     "ask": []

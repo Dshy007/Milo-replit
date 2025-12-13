@@ -33,6 +33,13 @@ WED_SAT_DAYS = {'wednesday', 'thursday', 'friday', 'saturday'}
 # Drivers with fewer assignments don't have enough data to establish a pattern
 MIN_ASSIGNMENTS_FOR_PATTERN = 8  # ~1 per week over 8-week window
 
+# Rolling interval pattern thresholds
+# If interval std deviation is below this, driver has a rolling interval pattern
+# Set to 1.8 to catch drivers like Adan who work every ~2-4 days (std ~1.5-1.7)
+ROLLING_INTERVAL_STD_THRESHOLD = 1.8  # days
+# If day frequency std is above this, NOT a fixed weekday pattern
+WEEKDAY_PATTERN_STD_THRESHOLD = 2.0
+
 
 class PatternAnalyzer:
     """
@@ -214,6 +221,9 @@ class PatternAnalyzer:
             else:
                 confidence = 0.5
 
+            # Detect rolling interval pattern (like Adan's ~3 day cycle)
+            interval_pattern = self._detect_interval_pattern(assignments)
+
             result[driver_id] = {
                 'patternGroup': pattern_group,
                 'preferredDays': prefs['days'],
@@ -221,7 +231,9 @@ class PatternAnalyzer:
                 'preferredContractType': prefs['contractType'],
                 'consistencyScore': prefs['consistency'],
                 'clusterConfidence': round(confidence, 3),
-                'assignmentsAnalyzed': num_assignments
+                'assignmentsAnalyzed': num_assignments,
+                # Rolling interval pattern (detected from consecutive block spacing)
+                'rollingPattern': interval_pattern
             }
 
         return result
@@ -282,6 +294,109 @@ class PatternAnalyzer:
             print(f"[K-Means DEBUG] Cluster {cluster_id} labeled as: {cluster_profiles[cluster_id]}", file=sys.stderr)
 
         return cluster_profiles
+
+    def _detect_interval_pattern(self, assignments: List[Dict]) -> Dict:
+        """
+        Detect if driver has a rolling interval pattern (like Adan's ~3-day cycle).
+
+        This is fundamentally different from fixed weekday patterns:
+        - Fixed weekday: Works Sat/Sun/Mon every week (calendar-driven)
+        - Rolling interval: Works every N days regardless of weekday (cycle-driven)
+
+        Algorithm:
+        1. Order blocks chronologically by serviceDate
+        2. Calculate interval (days) between consecutive blocks
+        3. Compute interval statistics: median, mean, std deviation
+        4. If std deviation is low → rolling pattern, high → no rolling pattern
+
+        Returns:
+            {
+                'hasRollingPattern': bool,
+                'intervalDays': float,      # Average days between blocks
+                'intervalStdDev': float,    # How consistent the interval is
+                'confidence': float,        # 0-1 confidence in the pattern
+                'intervals': List[int]      # Raw intervals for debugging
+            }
+        """
+        if len(assignments) < 3:
+            return {
+                'hasRollingPattern': False,
+                'intervalDays': None,
+                'intervalStdDev': None,
+                'confidence': 0.0,
+                'intervals': []
+            }
+
+        # Get service dates and sort chronologically
+        df = pd.DataFrame(assignments)
+
+        # Find date column
+        date_col = None
+        for col in ['serviceDate', 'date', 'startTimestamp']:
+            if col in df.columns:
+                date_col = col
+                break
+
+        if date_col is None:
+            return {
+                'hasRollingPattern': False,
+                'intervalDays': None,
+                'intervalStdDev': None,
+                'confidence': 0.0,
+                'intervals': []
+            }
+
+        # Convert to datetime and sort
+        df['_date'] = pd.to_datetime(df[date_col])
+        df = df.sort_values('_date')
+
+        # Calculate intervals between consecutive blocks
+        dates = df['_date'].values
+        intervals = []
+        for i in range(1, len(dates)):
+            diff = (dates[i] - dates[i-1]) / np.timedelta64(1, 'D')  # Convert to days
+            intervals.append(float(diff))
+
+        if not intervals:
+            return {
+                'hasRollingPattern': False,
+                'intervalDays': None,
+                'intervalStdDev': None,
+                'confidence': 0.0,
+                'intervals': []
+            }
+
+        # Calculate statistics
+        intervals_arr = np.array(intervals)
+        median_interval = float(np.median(intervals_arr))
+        mean_interval = float(np.mean(intervals_arr))
+        std_interval = float(np.std(intervals_arr))
+
+        # Determine if this is a rolling pattern
+        # Low std deviation = consistent intervals = rolling pattern
+        has_rolling = std_interval <= ROLLING_INTERVAL_STD_THRESHOLD and len(intervals) >= 4
+
+        # Confidence based on std deviation (lower = more confident)
+        if std_interval > 0:
+            confidence = max(0.0, 1.0 - (std_interval / 5.0))  # Scale: 0-5 days std → 1-0 confidence
+        else:
+            confidence = 1.0
+
+        # Get the most recent work date (for predicting next work date)
+        last_date = df['_date'].max()
+        last_date_str = str(last_date)[:10] if pd.notna(last_date) else None
+
+        print(f"[Interval Pattern] intervals={intervals[:10]}, median={median_interval:.1f}, std={std_interval:.2f}, rolling={has_rolling}, last={last_date_str}", file=sys.stderr)
+
+        return {
+            'hasRollingPattern': has_rolling,
+            'intervalDays': round(mean_interval, 1),
+            'intervalMedian': round(median_interval, 1),
+            'intervalStdDev': round(std_interval, 2),
+            'confidence': round(confidence, 3),
+            'intervals': intervals[:10],  # First 10 for debugging
+            'lastWorkDate': last_date_str  # Most recent date for prediction
+        }
 
     def _calculate_preferences(self, assignments: List[Dict]) -> Dict:
         """
@@ -355,9 +470,13 @@ class PatternAnalyzer:
         2. Time preference match (HEAVILY weighted for consistency)
         3. Historical slot frequency (day+time specific)
         4. Pattern group alignment
+        5. Rolling interval pattern matching (NEW)
 
         TIME CONSISTENCY: Drivers should work the same time slot across days.
         A driver who always works 16:30 should NOT be assigned to 17:30.
+
+        ROLLING PATTERN: For drivers like Adan who work every N days regardless
+        of weekday, we boost blocks that fall on their predicted next work date.
 
         Args:
             drivers: List of driver dicts with id, contractType
@@ -372,11 +491,31 @@ class PatternAnalyzer:
 
         # Pre-compute each driver's PRIMARY time slot (most frequent time worked)
         driver_primary_time = {}
+        driver_last_work_date = {}
         for driver_id, profile in driver_profiles.items():
             preferred_times = profile.get('preferredTimes', [])
             if preferred_times:
                 # First preferred time is the most frequent
                 driver_primary_time[driver_id] = preferred_times[0]
+
+            # Get last work date for rolling pattern calculations
+            rolling = profile.get('rollingPattern', {})
+            if rolling.get('hasRollingPattern'):
+                # We need to find the most recent date from their assignments
+                # This is stored in the profile during _detect_interval_pattern
+                # For now, we'll calculate predicted dates relative to block dates
+                pass
+
+        # Parse block dates for rolling pattern matching
+        block_dates = {}
+        for block in blocks:
+            block_id = block['id']
+            date_str = block.get('serviceDate') or block.get('date')
+            if date_str:
+                try:
+                    block_dates[block_id] = pd.to_datetime(date_str)
+                except:
+                    pass
 
         for driver in drivers:
             driver_id = driver['id']
@@ -386,6 +525,21 @@ class PatternAnalyzer:
             preferred_days = set(profile.get('preferredDays', []))
             preferred_times = profile.get('preferredTimes', [])
             primary_time = driver_primary_time.get(driver_id)
+
+            # Get rolling pattern info for this driver
+            rolling = profile.get('rollingPattern', {})
+            has_rolling = rolling.get('hasRollingPattern', False)
+            interval_days = rolling.get('intervalDays')
+            last_work_date_str = rolling.get('lastWorkDate')
+            rolling_confidence = rolling.get('confidence', 0.0)
+
+            # Parse last work date for rolling pattern matching
+            last_work_date = None
+            if has_rolling and last_work_date_str and interval_days:
+                try:
+                    last_work_date = pd.to_datetime(last_work_date_str)
+                except:
+                    pass
 
             for block in blocks:
                 block_id = block['id']
@@ -421,6 +575,30 @@ class PatternAnalyzer:
                     # A driver who worked monday_16:30 five times gets priority
                     history_bonus = min(0.25, 0.08 * np.log1p(history_count))
                     score += history_bonus
+
+                # ROLLING PATTERN MATCHING (NEW)
+                # For drivers like Adan who work every N days, boost blocks on predicted dates
+                if has_rolling and last_work_date and interval_days and block_id in block_dates:
+                    block_date = block_dates[block_id]
+                    days_since_last = (block_date - last_work_date).days
+
+                    if days_since_last > 0:
+                        # Calculate how close this block is to the predicted next work date(s)
+                        # Predicted dates: lastWorkDate + N*interval for N=1,2,3...
+                        # We check the first 3 predicted dates
+
+                        best_distance = float('inf')
+                        for n in range(1, 4):  # Check next 3 predicted work dates
+                            predicted_days = interval_days * n
+                            distance = abs(days_since_last - predicted_days)
+                            best_distance = min(best_distance, distance)
+
+                        # Bonus based on proximity to predicted date
+                        # 0 days off = +0.25, 1 day off = +0.15, 2 days off = +0.05
+                        if best_distance <= 2:
+                            rolling_bonus = (0.25 - 0.10 * best_distance) * rolling_confidence
+                            score += max(0, rolling_bonus)
+                            # print(f"[Rolling] {driver_id[:8]}.. block {block_date.date()}: days_since={days_since_last}, interval={interval_days}, dist={best_distance:.1f}, bonus={rolling_bonus:.3f}", file=sys.stderr)
 
                 scores[(driver_id, block_id)] = round(min(1.0, score), 3)
 

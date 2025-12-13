@@ -9,9 +9,6 @@ import {
   cleanNumericArray,
   detectType,
 } from "./data-cleaner";
-import {
-  assessDataQuality,
-} from "./statistical-analyzer";
 
 interface ExcelRow {
   blockId: string;

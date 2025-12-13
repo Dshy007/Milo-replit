@@ -1,0 +1,1393 @@
+{
+  "solo_type_classes": [
+    "solo1",
+    "solo2"
+  ],
+  "tractor_classes": [
+    "Tractor_1",
+    "Tractor_10",
+    "Tractor_2",
+    "Tractor_3",
+    "Tractor_4",
+    "Tractor_5",
+    "Tractor_6",
+    "Tractor_7",
+    "Tractor_8",
+    "Tractor_9"
+  ],
+  "driver_classes": [
+    " Michael  Wanjaoh ",
+    "ABBAS AL-RAMAHI",
+    "ABSHIR HIRED",
+    "AUSTIN TYLER FALL",
+    "Adan Sandhool Sabriye",
+    "Brett Michael Baker",
+    "Brian ALLAN Strickland",
+    "Brian Worts",
+    "COURTNEY TYLAND SMITH",
+    "Carlos goforth",
+    "DEVIN WAYNE HILL",
+    "Firas IMAD Tahseen",
+    "Haydee Contreras De Ramirez",
+    "Henry Calhoun",
+    "Isaac Kiragu",
+    "Jacobo Jacquez",
+    "Joshua ALLEN Green",
+    "Kwana Barber",
+    "Lyndon  Wright",
+    "MJ FREEMAN",
+    "Mathew William Ivy",
+    "Michael Shane Burton",
+    "Mitchell Don YOUNG",
+    "Mohammad Abdul Rasool",
+    "Rahmatullah Sangar",
+    "Raymond Jacinto Beeks",
+    "Richard Anthony Ewing niederhauser",
+    "Richard EUGENE Nelson",
+    "Robert Charles, JR Dixon",
+    "Rodolfo Martinez",
+    "Samuel Denholm",
+    "Shalamar D Smith",
+    "Tareef THAMER Mahdi",
+    "Theotis J Harris"
+  ],
+  "slot_ownership": {
+    "solo2|Tractor_6|11:30|6": {
+      "Haydee Contreras De Ramirez": [
+        "2025-12-13",
+        "2025-11-29",
+        "2025-11-15"
+      ],
+      "Rahmatullah Sangar": [
+        "2025-11-01"
+      ]
+    },
+    "solo1|Tractor_9|16:30|6": {
+      "Tareef THAMER Mahdi": [
+        "2025-12-13",
+        "2025-12-06",
+        "2025-11-08",
+        "2025-10-25"
+      ],
+      "Mitchell Don YOUNG": [
+        "2025-11-29"
+      ],
+      "Firas IMAD Tahseen": [
+        "2025-11-22",
+        "2025-11-15",
+        "2025-11-01"
+      ]
+    },
+    "solo1|Tractor_8|00:30|6": {
+      "Brian Worts": [
+        "2025-12-13",
+        "2025-11-29",
+        "2025-11-15",
+        "2025-11-01"
+      ],
+      "Adan Sandhool Sabriye": [
+        "2025-11-22",
+        "2025-11-15"
+      ],
+      "DEVIN WAYNE HILL": [
+        "2025-11-22"
+      ],
+      "Brian ALLAN Strickland": [
+        "2025-11-08"
+      ]
+    },
+    "solo1|Tractor_6|01:30|6": {
+      "Brian ALLAN Strickland": [
+        "2025-12-13"
+      ],
+      "Richard Anthony Ewing niederhauser": [
+        "2025-11-29",
+        "2025-11-15"
+      ],
+      "ABBAS AL-RAMAHI": [
+        "2025-11-08",
+        "2025-11-01"
+      ]
+    },
+    "solo1|Tractor_10|20:30|6": {
+      "Joshua ALLEN Green": [
+        "2025-12-13",
+        "2025-12-06",
+        "2025-11-15"
+      ],
+      "DEVIN WAYNE HILL": [
+        "2025-11-29"
+      ],
+      "Robert Charles, JR Dixon": [
+        "2025-11-08"
+      ],
+      "COURTNEY TYLAND SMITH": [
+        "2025-11-01"
+      ],
+      "Jacobo Jacquez": [
+        "2025-10-25"
+      ]
+    },
+    "solo1|Tractor_3|20:30|6": {
+      "Raymond Jacinto Beeks": [
+        "2025-12-13",
+        "2025-12-06",
+        "2025-11-22",
+        "2025-10-25"
+      ],
+      "Jacobo Jacquez": [
+        "2025-11-29"
+      ],
+      "Richard EUGENE Nelson": [
+        "2025-11-15"
+      ],
+      "Joshua ALLEN Green": [
+        "2025-11-01"
+      ]
+    },
+    "solo1|Tractor_2|20:30|6": {
+      "Rodolfo Martinez": [
+        "2025-12-13"
+      ],
+      "Raymond Jacinto Beeks": [
+        "2025-11-29",
+        "2025-11-15",
+        "2025-11-08",
+        "2025-11-01"
+      ],
+      "Joshua ALLEN Green": [
+        "2025-11-22"
+      ]
+    },
+    "solo2|Tractor_3|21:30|6": {
+      "ABSHIR HIRED": [
+        "2025-12-13",
+        "2025-12-06",
+        "2025-11-22"
+      ],
+      "MJ FREEMAN": [
+        "2025-11-15"
+      ]
+    },
+    "solo2|Tractor_4|08:30|6": {
+      " Michael  Wanjaoh ": [
+        "2025-12-13"
+      ],
+      "Rahmatullah Sangar": [
+        "2025-11-29"
+      ],
+      "Mathew William Ivy": [
+        "2025-11-15"
+      ],
+      "MJ FREEMAN": [
+        "2025-10-25"
+      ]
+    },
+    "solo1|Tractor_5|21:30|6": {
+      "Richard EUGENE Nelson": [
+        "2025-12-13",
+        "2025-12-06",
+        "2025-11-29",
+        "2025-11-22",
+        "2025-11-01"
+      ],
+      "Joshua ALLEN Green": [
+        "2025-11-08"
+      ]
+    },
+    "solo1|Tractor_1|16:30|6": {
+      "Firas IMAD Tahseen": [
+        "2025-12-13",
+        "2025-11-08",
+        "2025-10-25"
+      ],
+      "COURTNEY TYLAND SMITH": [
+        "2025-12-06",
+        "2025-11-22"
+      ],
+      "Tareef THAMER Mahdi": [
+        "2025-11-29"
+      ]
+    },
+    "solo1|Tractor_7|18:30|6": {
+      "Kwana Barber": [
+        "2025-12-13",
+        "2025-12-06",
+        "2025-11-29",
+        "2025-11-22",
+        "2025-11-15",
+        "2025-11-08",
+        "2025-11-01",
+        "2025-10-25"
+      ]
+    },
+    "solo1|Tractor_5|21:30|5": {
+      "Richard EUGENE Nelson": [
+        "2025-12-12",
+        "2025-11-28",
+        "2025-11-21",
+        "2025-11-07"
+      ],
+      "Raymond Jacinto Beeks": [
+        "2025-11-14"
+      ]
+    },
+    "solo1|Tractor_9|16:30|5": {
+      "DEVIN WAYNE HILL": [
+        "2025-12-12"
+      ],
+      "Mitchell Don YOUNG": [
+        "2025-11-28"
+      ],
+      "MJ FREEMAN": [
+        "2025-11-21"
+      ],
+      "COURTNEY TYLAND SMITH": [
+        "2025-11-14"
+      ],
+      "Brian ALLAN Strickland": [
+        "2025-10-31"
+      ]
+    },
+    "solo2|Tractor_1|18:30|5": {
+      "Samuel Denholm": [
+        "2025-12-12"
+      ],
+      "MJ FREEMAN": [
+        "2025-11-28"
+      ]
+    },
+    "solo1|Tractor_4|17:30|5": {
+      "COURTNEY TYLAND SMITH": [
+        "2025-12-12",
+        "2025-11-21",
+        "2025-11-07",
+        "2025-10-31"
+      ],
+      "Brian ALLAN Strickland": [
+        "2025-11-28"
+      ],
+      "Kwana Barber": [
+        "2025-11-14"
+      ]
+    },
+    "solo1|Tractor_7|18:30|5": {
+      "Mohammad Abdul Rasool": [
+        "2025-12-12"
+      ],
+      "Kwana Barber": [
+        "2025-11-28",
+        "2025-11-07",
+        "2025-10-31"
+      ],
+      "Mitchell Don YOUNG": [
+        "2025-11-21"
+      ]
+    },
+    "solo1|Tractor_3|20:30|5": {
+      "Raymond Jacinto Beeks": [
+        "2025-12-12",
+        "2025-11-21"
+      ],
+      "Henry Calhoun": [
+        "2025-11-28"
+      ],
+      "Richard EUGENE Nelson": [
+        "2025-10-31"
+      ]
+    },
+    "solo2|Tractor_5|15:30|5": {
+      "AUSTIN TYLER FALL": [
+        "2025-12-12"
+      ],
+      "Samuel Denholm": [
+        "2025-11-28"
+      ],
+      "Mathew William Ivy": [
+        "2025-11-07"
+      ]
+    },
+    "solo1|Tractor_1|16:30|5": {
+      "Robert Charles, JR Dixon": [
+        "2025-12-12"
+      ],
+      "COURTNEY TYLAND SMITH": [
+        "2025-11-28"
+      ],
+      "Theotis J Harris": [
+        "2025-11-14",
+        "2025-10-31"
+      ],
+      "Raymond Jacinto Beeks": [
+        "2025-11-07"
+      ]
+    },
+    "solo1|Tractor_10|20:30|5": {
+      "Shalamar D Smith": [
+        "2025-12-12"
+      ],
+      "DEVIN WAYNE HILL": [
+        "2025-11-28",
+        "2025-11-14"
+      ],
+      "Mohammad Abdul Rasool": [
+        "2025-11-21"
+      ],
+      "Robert Charles, JR Dixon": [
+        "2025-11-07",
+        "2025-10-31"
+      ]
+    },
+    "solo2|Tractor_7|16:30|5": {
+      "Lyndon  Wright": [
+        "2025-12-12"
+      ],
+      "Mathew William Ivy": [
+        "2025-11-28"
+      ],
+      "ABSHIR HIRED": [
+        "2025-11-07"
+      ]
+    },
+    "solo1|Tractor_6|01:30|5": {
+      "Richard Anthony Ewing niederhauser": [
+        "2025-12-12",
+        "2025-11-21"
+      ],
+      "Henry Calhoun": [
+        "2025-12-05"
+      ],
+      "MJ FREEMAN": [
+        "2025-11-07"
+      ],
+      "ABBAS AL-RAMAHI": [
+        "2025-10-31"
+      ]
+    },
+    "solo2|Tractor_2|23:30|5": {
+      "Adan Sandhool Sabriye": [
+        "2025-12-12",
+        "2025-10-31"
+      ]
+    },
+    "solo1|Tractor_7|18:30|4": {
+      "Kwana Barber": [
+        "2025-12-11",
+        "2025-11-06",
+        "2025-10-30"
+      ],
+      "Shalamar D Smith": [
+        "2025-12-04"
+      ],
+      "DEVIN WAYNE HILL": [
+        "2025-11-20"
+      ]
+    },
+    "solo1|Tractor_2|20:30|4": {
+      "Raymond Jacinto Beeks": [
+        "2025-12-11",
+        "2025-12-04"
+      ],
+      "Brett Michael Baker": [
+        "2025-11-20"
+      ],
+      "Richard EUGENE Nelson": [
+        "2025-11-06"
+      ],
+      "Robert Charles, JR Dixon": [
+        "2025-10-30"
+      ]
+    },
+    "solo2|Tractor_3|21:30|4": {
+      "ABSHIR HIRED": [
+        "2025-12-11",
+        "2025-12-04",
+        "2025-11-20"
+      ]
+    },
+    "solo2|Tractor_4|08:30|4": {
+      "Mathew William Ivy": [
+        "2025-12-11"
+      ],
+      "AUSTIN TYLER FALL": [
+        "2025-11-06"
+      ]
+    },
+    "solo1|Tractor_6|01:30|4": {
+      "Richard Anthony Ewing niederhauser": [
+        "2025-12-11",
+        "2025-12-04",
+        "2025-11-20",
+        "2025-11-06",
+        "2025-10-30"
+      ]
+    },
+    "solo2|Tractor_6|11:30|4": {
+      "Haydee Contreras De Ramirez": [
+        "2025-12-11",
+        "2025-10-30"
+      ]
+    },
+    "solo1|Tractor_5|21:30|4": {
+      "Richard EUGENE Nelson": [
+        "2025-12-11",
+        "2025-12-04",
+        "2025-11-20",
+        "2025-10-30"
+      ]
+    },
+    "solo1|Tractor_4|17:30|4": {
+      "COURTNEY TYLAND SMITH": [
+        "2025-12-11"
+      ],
+      "Raymond Jacinto Beeks": [
+        "2025-11-06"
+      ]
+    },
+    "solo1|Tractor_9|16:30|4": {
+      "Theotis J Harris": [
+        "2025-12-11"
+      ],
+      "COURTNEY TYLAND SMITH": [
+        "2025-12-04",
+        "2025-11-20"
+      ],
+      "ABBAS AL-RAMAHI": [
+        "2025-11-06"
+      ]
+    },
+    "solo1|Tractor_8|00:30|4": {
+      "ABBAS AL-RAMAHI": [
+        "2025-12-11"
+      ],
+      "Brian ALLAN Strickland": [
+        "2025-12-04"
+      ],
+      "Brian Worts": [
+        "2025-11-20",
+        "2025-11-06"
+      ]
+    },
+    "solo1|Tractor_1|16:30|4": {
+      "Isaac Kiragu": [
+        "2025-12-11",
+        "2025-12-04",
+        "2025-11-20"
+      ],
+      "Brian ALLAN Strickland": [
+        "2025-11-06"
+      ],
+      "COURTNEY TYLAND SMITH": [
+        "2025-10-30"
+      ]
+    },
+    "solo1|Tractor_10|20:30|3": {
+      "Joshua ALLEN Green": [
+        "2025-12-10",
+        "2025-11-26"
+      ],
+      "Michael Shane Burton": [
+        "2025-12-03"
+      ],
+      "Raymond Jacinto Beeks": [
+        "2025-11-19"
+      ],
+      "Brett Michael Baker": [
+        "2025-11-05"
+      ]
+    },
+    "solo1|Tractor_5|21:30|3": {
+      "Brett Michael Baker": [
+        "2025-12-10",
+        "2025-11-26",
+        "2025-11-19"
+      ],
+      "Richard EUGENE Nelson": [
+        "2025-11-05"
+      ]
+    },
+    "solo2|Tractor_5|15:30|3": {
+      "AUSTIN TYLER FALL": [
+        "2025-12-10"
+      ],
+      "Mathew William Ivy": [
+        "2025-11-05"
+      ]
+    },
+    "solo1|Tractor_8|00:30|3": {
+      "Brian Worts": [
+        "2025-12-10",
+        "2025-12-03",
+        "2025-11-26",
+        "2025-11-19",
+        "2025-11-05",
+        "2025-10-29"
+      ],
+      "Brett Michael Baker": [
+        "2025-10-29"
+      ]
+    },
+    "solo1|Tractor_7|18:30|3": {
+      "Kwana Barber": [
+        "2025-12-10",
+        "2025-12-03",
+        "2025-11-19",
+        "2025-11-05",
+        "2025-10-29"
+      ],
+      "MJ FREEMAN": [
+        "2025-11-26"
+      ]
+    },
+    "solo2|Tractor_2|23:30|3": {
+      "Adan Sandhool Sabriye": [
+        "2025-12-10",
+        "2025-12-03",
+        "2025-11-19"
+      ],
+      "ABSHIR HIRED": [
+        "2025-10-29"
+      ]
+    },
+    "solo1|Tractor_4|17:30|3": {
+      "COURTNEY TYLAND SMITH": [
+        "2025-12-10",
+        "2025-12-03",
+        "2025-11-05",
+        "2025-10-29"
+      ],
+      " Michael  Wanjaoh ": [
+        "2025-11-26"
+      ],
+      "Brian ALLAN Strickland": [
+        "2025-11-19"
+      ]
+    },
+    "solo1|Tractor_3|20:30|3": {
+      "Richard EUGENE Nelson": [
+        "2025-12-10",
+        "2025-12-03",
+        "2025-11-19"
+      ],
+      "Lyndon  Wright": [
+        "2025-11-26"
+      ],
+      "Joshua ALLEN Green": [
+        "2025-11-05"
+      ]
+    },
+    "solo2|Tractor_7|16:30|3": {
+      "Lyndon  Wright": [
+        "2025-12-10"
+      ],
+      "ABSHIR HIRED": [
+        "2025-11-05"
+      ]
+    },
+    "solo1|Tractor_9|16:30|3": {
+      "Robert Charles, JR Dixon": [
+        "2025-12-10"
+      ],
+      "Raymond Jacinto Beeks": [
+        "2025-12-03",
+        "2025-10-29"
+      ],
+      "COURTNEY TYLAND SMITH": [
+        "2025-11-26",
+        "2025-11-19"
+      ],
+      "Isaac Kiragu": [
+        "2025-11-05"
+      ]
+    },
+    "solo1|Tractor_1|16:30|3": {
+      "Isaac Kiragu": [
+        "2025-12-10",
+        "2025-11-19",
+        "2025-10-29"
+      ],
+      "Theotis J Harris": [
+        "2025-12-03"
+      ],
+      "Raymond Jacinto Beeks": [
+        "2025-11-26",
+        "2025-11-05"
+      ]
+    },
+    "solo1|Tractor_2|20:30|3": {
+      "Raymond Jacinto Beeks": [
+        "2025-12-10"
+      ],
+      "Brett Michael Baker": [
+        "2025-12-03"
+      ],
+      "Robert Charles, JR Dixon": [
+        "2025-11-26"
+      ],
+      "Michael Shane Burton": [
+        "2025-11-19"
+      ],
+      "MJ FREEMAN": [
+        "2025-11-05"
+      ],
+      "Richard EUGENE Nelson": [
+        "2025-10-29"
+      ]
+    },
+    "solo2|Tractor_1|18:30|3": {
+      "Samuel Denholm": [
+        "2025-12-10"
+      ]
+    },
+    "solo1|Tractor_5|21:30|2": {
+      "Brett Michael Baker": [
+        "2025-12-09",
+        "2025-12-02",
+        "2025-11-25",
+        "2025-11-04",
+        "2025-10-28"
+      ]
+    },
+    "solo1|Tractor_8|00:30|2": {
+      "Brian Worts": [
+        "2025-12-09",
+        "2025-11-25",
+        "2025-11-18",
+        "2025-11-04",
+        "2025-10-28"
+      ],
+      "Haydee Contreras De Ramirez": [
+        "2025-12-02"
+      ]
+    },
+    "solo2|Tractor_4|08:30|2": {
+      "Mathew William Ivy": [
+        "2025-12-09",
+        "2025-11-25"
+      ],
+      "DEVIN WAYNE HILL": [
+        "2025-11-04"
+      ]
+    },
+    "solo1|Tractor_6|01:30|2": {
+      "Richard Anthony Ewing niederhauser": [
+        "2025-12-09",
+        "2025-12-02",
+        "2025-11-25",
+        "2025-11-18",
+        "2025-11-04",
+        "2025-10-28"
+      ]
+    },
+    "solo2|Tractor_3|21:30|2": {
+      "ABSHIR HIRED": [
+        "2025-12-09",
+        "2025-12-02",
+        "2025-11-18"
+      ]
+    },
+    "solo1|Tractor_10|20:30|2": {
+      "ABBAS AL-RAMAHI": [
+        "2025-12-09"
+      ],
+      "Robert Charles, JR Dixon": [
+        "2025-12-02"
+      ],
+      "Joshua ALLEN Green": [
+        "2025-11-25",
+        "2025-10-28"
+      ],
+      "Michael Shane Burton": [
+        "2025-11-18"
+      ]
+    },
+    "solo1|Tractor_4|17:30|2": {
+      "Robert Charles, JR Dixon": [
+        "2025-12-09"
+      ],
+      "Brian ALLAN Strickland": [
+        "2025-12-02"
+      ],
+      "Isaac Kiragu": [
+        "2025-11-25"
+      ],
+      "Theotis J Harris": [
+        "2025-11-18",
+        "2025-10-28"
+      ]
+    },
+    "solo1|Tractor_1|16:30|2": {
+      "Isaac Kiragu": [
+        "2025-12-09",
+        "2025-12-02",
+        "2025-11-18"
+      ],
+      "COURTNEY TYLAND SMITH": [
+        "2025-11-25"
+      ],
+      "DEVIN WAYNE HILL": [
+        "2025-10-28"
+      ]
+    },
+    "solo1|Tractor_2|20:30|2": {
+      "Michael Shane Burton": [
+        "2025-12-09"
+      ],
+      "Joshua ALLEN Green": [
+        "2025-12-02",
+        "2025-11-04"
+      ],
+      "Richard EUGENE Nelson": [
+        "2025-11-25",
+        "2025-10-28"
+      ],
+      "Brett Michael Baker": [
+        "2025-11-18"
+      ]
+    },
+    "solo1|Tractor_7|18:30|2": {
+      "Kwana Barber": [
+        "2025-12-09",
+        "2025-12-02",
+        "2025-11-25"
+      ],
+      "DEVIN WAYNE HILL": [
+        "2025-11-18"
+      ],
+      "ABBAS AL-RAMAHI": [
+        "2025-10-28"
+      ]
+    },
+    "solo2|Tractor_6|11:30|2": {
+      "Carlos goforth": [
+        "2025-12-09",
+        "2025-11-25"
+      ],
+      "Haydee Contreras De Ramirez": [
+        "2025-10-28"
+      ]
+    },
+    "solo1|Tractor_3|20:30|2": {
+      "Joshua ALLEN Green": [
+        "2025-12-09",
+        "2025-11-18"
+      ],
+      "Michael Shane Burton": [
+        "2025-12-02"
+      ],
+      "Robert Charles, JR Dixon": [
+        "2025-11-25",
+        "2025-10-28"
+      ],
+      "Richard EUGENE Nelson": [
+        "2025-11-04"
+      ]
+    },
+    "solo1|Tractor_9|16:30|2": {
+      "DEVIN WAYNE HILL": [
+        "2025-12-09"
+      ],
+      "Theotis J Harris": [
+        "2025-12-02",
+        "2025-11-04"
+      ],
+      "Mitchell Don YOUNG": [
+        "2025-11-25"
+      ],
+      "Isaac Kiragu": [
+        "2025-10-28"
+      ]
+    },
+    "solo2|Tractor_5|15:30|1": {
+      "Shalamar D Smith": [
+        "2025-12-08",
+        "2025-11-24"
+      ],
+      "MJ FREEMAN": [
+        "2025-11-03"
+      ]
+    },
+    "solo1|Tractor_2|20:30|1": {
+      "ABBAS AL-RAMAHI": [
+        "2025-12-08"
+      ],
+      "Joshua ALLEN Green": [
+        "2025-12-01"
+      ],
+      "Robert Charles, JR Dixon": [
+        "2025-11-24"
+      ],
+      "DEVIN WAYNE HILL": [
+        "2025-11-17"
+      ]
+    },
+    "solo2|Tractor_1|18:30|1": {
+      " Michael  Wanjaoh ": [
+        "2025-12-08"
+      ],
+      "MJ FREEMAN": [
+        "2025-11-24"
+      ]
+    },
+    "solo1|Tractor_3|20:30|1": {
+      "Joshua ALLEN Green": [
+        "2025-12-08",
+        "2025-11-03",
+        "2025-10-27"
+      ],
+      "Michael Shane Burton": [
+        "2025-12-01",
+        "2025-11-17"
+      ],
+      "Brian ALLAN Strickland": [
+        "2025-11-24"
+      ]
+    },
+    "solo1|Tractor_1|16:30|1": {
+      "Robert Charles, JR Dixon": [
+        "2025-12-08"
+      ],
+      "Isaac Kiragu": [
+        "2025-12-01",
+        "2025-11-03"
+      ],
+      "Firas IMAD Tahseen": [
+        "2025-11-24",
+        "2025-10-27"
+      ],
+      "Theotis J Harris": [
+        "2025-11-17"
+      ]
+    },
+    "solo1|Tractor_10|20:30|1": {
+      "Michael Shane Burton": [
+        "2025-12-08",
+        "2025-11-03"
+      ],
+      "Robert Charles, JR Dixon": [
+        "2025-12-01",
+        "2025-10-27"
+      ],
+      "Joshua ALLEN Green": [
+        "2025-11-24",
+        "2025-11-17"
+      ]
+    },
+    "solo1|Tractor_9|16:30|1": {
+      "Isaac Kiragu": [
+        "2025-12-08",
+        "2025-11-17",
+        "2025-10-27"
+      ],
+      "Theotis J Harris": [
+        "2025-12-01",
+        "2025-11-24"
+      ],
+      "Firas IMAD Tahseen": [
+        "2025-11-03"
+      ]
+    },
+    "solo2|Tractor_2|23:30|1": {
+      "Adan Sandhool Sabriye": [
+        "2025-12-08",
+        "2025-12-01",
+        "2025-10-27"
+      ],
+      "Mohammad Abdul Rasool": [
+        "2025-11-24"
+      ],
+      "MJ FREEMAN": [
+        "2025-11-17"
+      ]
+    },
+    "solo1|Tractor_7|18:30|1": {
+      "Kwana Barber": [
+        "2025-12-08",
+        "2025-12-01"
+      ],
+      "Michael Shane Burton": [
+        "2025-11-24"
+      ],
+      "Robert Charles, JR Dixon": [
+        "2025-11-03"
+      ]
+    },
+    "solo1|Tractor_4|17:30|1": {
+      "DEVIN WAYNE HILL": [
+        "2025-12-08"
+      ],
+      "Firas IMAD Tahseen": [
+        "2025-12-01",
+        "2025-11-17"
+      ],
+      " Michael  Wanjaoh ": [
+        "2025-11-24"
+      ],
+      "Theotis J Harris": [
+        "2025-11-03"
+      ]
+    },
+    "solo1|Tractor_8|00:30|1": {
+      "Haydee Contreras De Ramirez": [
+        "2025-12-08",
+        "2025-10-27"
+      ],
+      "Brian Worts": [
+        "2025-12-01",
+        "2025-11-24"
+      ],
+      "Theotis J Harris": [
+        "2025-10-27"
+      ]
+    },
+    "solo1|Tractor_6|01:30|1": {
+      "Richard Anthony Ewing niederhauser": [
+        "2025-12-08",
+        "2025-12-01",
+        "2025-11-24",
+        "2025-11-17",
+        "2025-10-27"
+      ]
+    },
+    "solo2|Tractor_7|16:30|1": {
+      "MJ FREEMAN": [
+        "2025-12-08"
+      ],
+      "DEVIN WAYNE HILL": [
+        "2025-11-24"
+      ],
+      "Shalamar D Smith": [
+        "2025-11-03"
+      ]
+    },
+    "solo1|Tractor_5|21:30|1": {
+      "Brett Michael Baker": [
+        "2025-12-08",
+        "2025-12-01",
+        "2025-11-24",
+        "2025-11-17",
+        "2025-11-03",
+        "2025-10-27"
+      ]
+    },
+    "solo1|Tractor_7|18:30|0": {
+      "Theotis J Harris": [
+        "2025-12-07",
+        "2025-10-26"
+      ],
+      "Michael Shane Burton": [
+        "2025-11-23",
+        "2025-11-16"
+      ],
+      "Isaac Kiragu": [
+        "2025-11-02"
+      ]
+    },
+    "solo1|Tractor_1|16:30|0": {
+      "Tareef THAMER Mahdi": [
+        "2025-12-07",
+        "2025-11-30",
+        "2025-11-23",
+        "2025-11-02"
+      ],
+      "Rodolfo Martinez": [
+        "2025-11-16"
+      ],
+      "Firas IMAD Tahseen": [
+        "2025-10-26"
+      ]
+    },
+    "solo1|Tractor_5|21:30|0": {
+      "Brett Michael Baker": [
+        "2025-12-07",
+        "2025-11-30",
+        "2025-11-23",
+        "2025-11-16",
+        "2025-11-02",
+        "2025-10-26"
+      ]
+    },
+    "solo2|Tractor_6|11:30|0": {
+      "Carlos goforth": [
+        "2025-12-07"
+      ],
+      "Haydee Contreras De Ramirez": [
+        "2025-11-23"
+      ],
+      "ABBAS AL-RAMAHI": [
+        "2025-10-26"
+      ]
+    },
+    "solo1|Tractor_6|01:30|0": {
+      "Richard Anthony Ewing niederhauser": [
+        "2025-12-07",
+        "2025-11-30",
+        "2025-11-23",
+        "2025-11-16",
+        "2025-10-26"
+      ]
+    },
+    "solo1|Tractor_9|16:30|0": {
+      "Firas IMAD Tahseen": [
+        "2025-12-07",
+        "2025-11-23",
+        "2025-11-02"
+      ],
+      "Isaac Kiragu": [
+        "2025-11-30"
+      ],
+      "Tareef THAMER Mahdi": [
+        "2025-11-16"
+      ],
+      "Rahmatullah Sangar": [
+        "2025-10-26"
+      ]
+    },
+    "solo2|Tractor_4|08:30|0": {
+      "Mohammad Abdul Rasool": [
+        "2025-12-07"
+      ],
+      "Carlos goforth": [
+        "2025-11-23"
+      ],
+      "DEVIN WAYNE HILL": [
+        "2025-11-02"
+      ]
+    },
+    "solo1|Tractor_8|00:30|0": {
+      "Brian Worts": [
+        "2025-12-07",
+        "2025-11-30",
+        "2025-11-23",
+        "2025-11-16",
+        "2025-11-02",
+        "2025-10-26"
+      ]
+    },
+    "solo1|Tractor_4|17:30|0": {
+      "DEVIN WAYNE HILL": [
+        "2025-12-07"
+      ],
+      "Firas IMAD Tahseen": [
+        "2025-11-30",
+        "2025-11-16"
+      ],
+      "Theotis J Harris": [
+        "2025-11-23",
+        "2025-11-02"
+      ],
+      "Isaac Kiragu": [
+        "2025-10-26"
+      ]
+    },
+    "solo1|Tractor_2|20:30|0": {
+      "Brian ALLAN Strickland": [
+        "2025-12-07"
+      ],
+      "Michael Shane Burton": [
+        "2025-11-30"
+      ],
+      "Mitchell Don YOUNG": [
+        "2025-11-23"
+      ],
+      "Joshua ALLEN Green": [
+        "2025-11-02",
+        "2025-10-26"
+      ]
+    },
+    "solo1|Tractor_10|20:30|0": {
+      "Michael Shane Burton": [
+        "2025-12-07"
+      ],
+      "Robert Charles, JR Dixon": [
+        "2025-11-23"
+      ],
+      "Joshua ALLEN Green": [
+        "2025-11-16"
+      ],
+      "Haydee Contreras De Ramirez": [
+        "2025-11-02"
+      ],
+      "Rodolfo Martinez": [
+        "2025-10-26"
+      ]
+    },
+    "solo1|Tractor_3|20:30|0": {
+      "Joshua ALLEN Green": [
+        "2025-12-07",
+        "2025-11-30",
+        "2025-11-23"
+      ],
+      "Michael Shane Burton": [
+        "2025-11-02"
+      ],
+      "Brian ALLAN Strickland": [
+        "2025-10-26"
+      ]
+    },
+    "solo2|Tractor_7|16:30|6": {
+      "MJ FREEMAN": [
+        "2025-12-06",
+        "2025-11-22"
+      ],
+      "Shalamar D Smith": [
+        "2025-11-15"
+      ],
+      "ABSHIR HIRED": [
+        "2025-11-01"
+      ]
+    },
+    "solo2|Tractor_5|15:30|6": {
+      "Lyndon  Wright": [
+        "2025-12-06"
+      ],
+      "AUSTIN TYLER FALL": [
+        "2025-11-22",
+        "2025-11-15"
+      ],
+      "MJ FREEMAN": [
+        "2025-11-01"
+      ]
+    },
+    "solo2|Tractor_1|18:30|6": {
+      " Michael  Wanjaoh ": [
+        "2025-12-06"
+      ],
+      "Samuel Denholm": [
+        "2025-11-22"
+      ],
+      "Brian ALLAN Strickland": [
+        "2025-11-15"
+      ]
+    },
+    "solo2|Tractor_6|11:30|5": {
+      "Haydee Contreras De Ramirez": [
+        "2025-12-05",
+        "2025-11-21",
+        "2025-11-07"
+      ]
+    },
+    "solo1|Tractor_8|00:30|5": {
+      "Brian ALLAN Strickland": [
+        "2025-12-05",
+        "2025-11-14"
+      ],
+      "Adan Sandhool Sabriye": [
+        "2025-11-28"
+      ],
+      "Brian Worts": [
+        "2025-11-21",
+        "2025-11-07",
+        "2025-10-31"
+      ]
+    },
+    "solo2|Tractor_4|08:30|5": {
+      "Mathew William Ivy": [
+        "2025-12-05",
+        "2025-11-21",
+        "2025-10-31"
+      ]
+    },
+    "solo2|Tractor_1|18:30|4": {
+      "Samuel Denholm": [
+        "2025-12-04",
+        "2025-11-20"
+      ],
+      "Carlos goforth": [
+        "2025-11-06"
+      ]
+    },
+    "solo1|Tractor_10|20:30|4": {
+      "Robert Charles, JR Dixon": [
+        "2025-12-04",
+        "2025-11-06"
+      ],
+      "Brian ALLAN Strickland": [
+        "2025-11-20"
+      ],
+      "DEVIN WAYNE HILL": [
+        "2025-10-30"
+      ]
+    },
+    "solo2|Tractor_7|16:30|4": {
+      "MJ FREEMAN": [
+        "2025-12-04"
+      ],
+      "Carlos goforth": [
+        "2025-11-20"
+      ],
+      "Shalamar D Smith": [
+        "2025-10-30"
+      ]
+    },
+    "solo2|Tractor_5|15:30|4": {
+      "Lyndon  Wright": [
+        "2025-12-04"
+      ],
+      "AUSTIN TYLER FALL": [
+        "2025-11-20",
+        "2025-10-30"
+      ]
+    },
+    "solo2|Tractor_6|11:30|3": {
+      "Haydee Contreras De Ramirez": [
+        "2025-12-03",
+        "2025-11-19",
+        "2025-11-05"
+      ]
+    },
+    "solo2|Tractor_4|08:30|3": {
+      "Mathew William Ivy": [
+        "2025-12-03",
+        "2025-11-19",
+        "2025-10-29"
+      ]
+    },
+    "solo1|Tractor_6|01:30|3": {
+      "Henry Calhoun": [
+        "2025-12-03"
+      ],
+      "Richard Anthony Ewing niederhauser": [
+        "2025-11-26",
+        "2025-11-19",
+        "2025-11-05",
+        "2025-10-29"
+      ]
+    },
+    "solo2|Tractor_1|18:30|2": {
+      "Samuel Denholm": [
+        "2025-12-02",
+        "2025-11-18"
+      ],
+      "Carlos goforth": [
+        "2025-11-04"
+      ]
+    },
+    "solo2|Tractor_7|16:30|2": {
+      "Carlos goforth": [
+        "2025-12-02"
+      ],
+      "Shalamar D Smith": [
+        "2025-11-18",
+        "2025-10-28"
+      ]
+    },
+    "solo2|Tractor_5|15:30|2": {
+      "AUSTIN TYLER FALL": [
+        "2025-12-02",
+        "2025-11-18",
+        "2025-10-28"
+      ]
+    },
+    "solo2|Tractor_4|08:30|1": {
+      " Michael  Wanjaoh ": [
+        "2025-12-01"
+      ],
+      "Mohammad Abdul Rasool": [
+        "2025-11-17"
+      ],
+      "MJ FREEMAN": [
+        "2025-10-27"
+      ]
+    },
+    "solo2|Tractor_6|11:30|1": {
+      "DEVIN WAYNE HILL": [
+        "2025-12-01"
+      ],
+      "Carlos goforth": [
+        "2025-11-17"
+      ],
+      "Mohammad Abdul Rasool": [
+        "2025-11-03"
+      ]
+    },
+    "solo2|Tractor_1|18:30|0": {
+      "Shalamar D Smith": [
+        "2025-11-30"
+      ],
+      "AUSTIN TYLER FALL": [
+        "2025-11-02"
+      ]
+    },
+    "solo2|Tractor_7|16:30|0": {
+      "Carlos goforth": [
+        "2025-11-30"
+      ],
+      "DEVIN WAYNE HILL": [
+        "2025-10-26"
+      ]
+    },
+    "solo2|Tractor_3|21:30|0": {
+      "ABSHIR HIRED": [
+        "2025-11-30"
+      ]
+    },
+    "solo2|Tractor_5|15:30|0": {
+      "AUSTIN TYLER FALL": [
+        "2025-11-30"
+      ],
+      "ABSHIR HIRED": [
+        "2025-10-26"
+      ]
+    },
+    "solo2|Tractor_2|23:30|6": {
+      "Mohammad Abdul Rasool": [
+        "2025-11-29"
+      ],
+      "Adan Sandhool Sabriye": [
+        "2025-11-08",
+        "2025-11-01",
+        "2025-10-25"
+      ]
+    },
+    "solo1|Tractor_4|17:30|6": {
+      "Brian ALLAN Strickland": [
+        "2025-11-29"
+      ],
+      "Robert Charles, JR Dixon": [
+        "2025-11-22"
+      ],
+      "Tareef THAMER Mahdi": [
+        "2025-11-15",
+        "2025-11-01"
+      ],
+      "COURTNEY TYLAND SMITH": [
+        "2025-11-08"
+      ]
+    },
+    "solo1|Tractor_2|20:30|5": {
+      "Raymond Jacinto Beeks": [
+        "2025-11-28",
+        "2025-10-31"
+      ],
+      "Brian ALLAN Strickland": [
+        "2025-11-21"
+      ],
+      "ABBAS AL-RAMAHI": [
+        "2025-11-14"
+      ],
+      "Mitchell Don YOUNG": [
+        "2025-11-07"
+      ]
+    },
+    "solo2|Tractor_3|21:30|1": {
+      "Adan Sandhool Sabriye": [
+        "2025-11-24"
+      ]
+    },
+    "solo1|Tractor_3|20:30|4": {
+      "Raymond Jacinto Beeks": [
+        "2025-11-20",
+        "2025-10-30"
+      ],
+      "Michael Shane Burton": [
+        "2025-11-06"
+      ]
+    },
+    "solo2|Tractor_2|23:30|4": {
+      "Adan Sandhool Sabriye": [
+        "2025-11-06"
+      ]
+    }
+  }
+}

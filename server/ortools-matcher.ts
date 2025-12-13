@@ -76,6 +76,8 @@ interface ORToolsAssignment {
 interface DriverHistoryEntry {
   day: string;
   time: string;
+  serviceDate: string;  // yyyy-MM-dd format for interval pattern detection
+  soloType: string;     // solo1/solo2/team for contract type detection
 }
 
 interface DriverSchedulingPreference {
@@ -310,9 +312,10 @@ async function getAllDriverProfiles(
     if (!globalSlotHistory[slot]) globalSlotHistory[slot] = {};
     globalSlotHistory[slot][driverId] = (globalSlotHistory[slot][driverId] || 0) + 1;
 
-    // 6. Driver history entries (for Python ML)
+    // 6. Driver history entries (for Python ML) - include serviceDate for interval pattern detection
     if (!driverHistoryEntries[driverId]) driverHistoryEntries[driverId] = [];
-    driverHistoryEntries[driverId].push({ day: dayName, time });
+    const serviceDateStr = format(serviceDate, "yyyy-MM-dd");
+    driverHistoryEntries[driverId].push({ day: dayName, time, serviceDate: serviceDateStr, soloType });
   }
 
   // ============ BUILD FINAL PROFILES ============
