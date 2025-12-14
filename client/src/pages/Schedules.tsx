@@ -328,6 +328,10 @@ export default function Schedules() {
   // Bulk selection state
   const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set());
 
+  // Delete confirmation state
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+
   // Search state
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -1123,7 +1127,8 @@ export default function Schedules() {
     }
   };
 
-  const deleteSelected = async () => {
+  // Show confirmation dialog before deleting
+  const deleteSelected = () => {
     if (selectedCells.size === 0) {
       toast({
         variant: "destructive",
@@ -1132,6 +1137,13 @@ export default function Schedules() {
       });
       return;
     }
+    // Show confirmation dialog
+    setShowDeleteConfirm(true);
+  };
+
+  // Actually perform the delete after confirmation
+  const confirmDeleteSelected = async () => {
+    setIsDeleting(true);
 
     // Collect unique occurrence IDs to delete (occurrenceId is the database UUID)
     const occurrenceIdsToDelete = new Set<string>();
@@ -1159,6 +1171,8 @@ export default function Schedules() {
         title: "No Blocks Found",
         description: "Could not find blocks to delete",
       });
+      setIsDeleting(false);
+      setShowDeleteConfirm(false);
       return;
     }
 
@@ -1178,10 +1192,11 @@ export default function Schedules() {
 
       toast({
         title: "Blocks Deleted",
-        description: `Deleted ${deletedCount} blocks`,
+        description: `Permanently deleted ${deletedCount} blocks`,
       });
 
       clearSelection();
+      setShowDeleteConfirm(false);
       // Refetch calendar data
       queryClient.invalidateQueries({ queryKey: ['/api/schedules/calendar'] });
     } catch (error: any) {
@@ -1190,6 +1205,8 @@ export default function Schedules() {
         title: "Delete Failed",
         description: error.message || "Failed to delete blocks",
       });
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -3000,6 +3017,45 @@ export default function Schedules() {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               {deleteMutation.isPending ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Delete Selected Blocks Confirmation Dialog */}
+      <AlertDialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+        <AlertDialogContent data-testid="dialog-confirm-delete-selected">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Trash2 className="w-5 h-5 text-destructive" />
+              Delete {selectedCells.size} Selected Block{selectedCells.size !== 1 ? 's' : ''}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This will <strong>permanently delete</strong> the selected blocks from the database.
+              This action cannot be undone. The blocks will need to be re-imported if you want them back.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-delete-selected" disabled={isDeleting}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmDeleteSelected}
+              disabled={isDeleting}
+              data-testid="button-confirm-delete-selected"
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {isDeleting ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  Delete Permanently
+                </>
+              )}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

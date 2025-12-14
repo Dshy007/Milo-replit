@@ -1,59 +1,40 @@
 /**
- * Deterministic Schedule Matcher
+ * Deterministic Schedule Matcher (XGBoost Edition)
  *
- * A fast, predictable scoring-based matcher inspired by Python logic.
+ * A fast, predictable scoring-based matcher using XGBoost ownership model.
  * No AI calls - pure deterministic scoring with transparent results.
  *
- * Scoring System:
- * - Day match: +50 points
- * - Exact time match: +40 points
- * - Time within 2 hours: +30 points
- * - Historical pattern bonus: +10-20 points
+ * Scoring System (XGBoost-based):
+ * - Ownership score: 0-1.0 (from XGBoost slot distribution)
+ * - Availability score: 1.0 if driver works this day, 0.5 otherwise
+ * - Combined: ownership × predictability + availability × (1 - predictability)
+ * - Fairness bonus: prefer drivers with fewer blocks this week
  *
  * Hard Constraints:
  * - Contract type must match (solo1/solo2)
  * - One block per driver per day
+ * - Don't exceed driver's typical_days pattern
  */
 
 import { db } from "./db";
-import { blocks, drivers, driverDnaProfiles, blockAssignments } from "@shared/schema";
+import { blocks, drivers, blockAssignments, contracts } from "@shared/schema";
 import { eq, and, gte, lte } from "drizzle-orm";
-import { format, endOfWeek, subWeeks } from "date-fns";
-
-// Canonical start times lookup
-const CANONICAL_START_TIMES: Record<string, string> = {
-  "solo1_Tractor_1": "16:30",
-  "solo1_Tractor_2": "20:30",
-  "solo1_Tractor_3": "20:30",
-  "solo1_Tractor_4": "17:30",
-  "solo1_Tractor_5": "21:30",
-  "solo1_Tractor_6": "01:30",
-  "solo1_Tractor_7": "18:30",
-  "solo1_Tractor_8": "00:30",
-  "solo1_Tractor_9": "16:30",
-  "solo1_Tractor_10": "20:30",
-  "solo2_Tractor_1": "18:30",
-  "solo2_Tractor_2": "23:30",
-  "solo2_Tractor_3": "21:30",
-  "solo2_Tractor_4": "08:30",
-  "solo2_Tractor_5": "15:30",
-  "solo2_Tractor_6": "11:30",
-  "solo2_Tractor_7": "16:30",
-};
+import { format, endOfWeek } from "date-fns";
+import { getSlotDistribution, getAllDriverPatterns, SlotDistribution, DriverPattern } from "./python-bridge";
 
 const DAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+const DAY_NAMES_UPPER = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
-interface DriverProfile {
+interface DriverInfo {
   id: string;
   name: string;
   contractType: string;
-  preferredDays: string[];
-  preferredTimes: string[];
 }
 
 interface BlockInfo {
   id: string;
-  day: string;
+  dayIndex: number;
+  dayName: string;
   time: string;
   contractType: string;
   serviceDate: string;
@@ -68,84 +49,105 @@ interface MatchResult {
   reasons: string[];
   confidence: number;
   matchType: string;
+  ownershipPct: number;
+  slotType: string;
 }
 
 /**
- * Convert time string to minutes since midnight
+ * Calculate XGBoost-based score for a driver-block pair
  */
-function timeToMinutes(time: string): number {
-  const [h, m] = time.split(':').map(Number);
-  return h * 60 + (m || 0);
-}
-
-/**
- * Calculate score for a driver-block pair
- */
-function calculateScore(
-  driver: DriverProfile,
+function calculateXGBoostScore(
+  driverName: string,
+  driverId: string,
   block: BlockInfo,
-  busyDates: Set<string>
-): { score: number; reasons: string[] } | null {
-  const reasons: string[] = [];
-  let score = 0;
+  ownershipData: SlotDistribution | null,
+  driverPattern: DriverPattern | undefined,
+  currentDayCount: number,
+  busyDates: Set<string>,
+  predictability: number = 0.7
+): { score: number; reasons: string[]; ownershipPct: number; matchType: string } | null {
 
   // HARD CONSTRAINT: Driver already assigned on this date
-  const dateKey = `${driver.id}_${block.serviceDate}`;
+  const dateKey = `${driverId}_${block.serviceDate}`;
   if (busyDates.has(dateKey)) {
     return null;
   }
 
-  // HARD CONSTRAINT: Contract type must match
-  if (driver.contractType !== block.contractType) {
+  // HARD CONSTRAINT: Don't exceed driver's typical days pattern
+  const maxDays = driverPattern?.typical_days ?? 6;
+  if (currentDayCount >= maxDays) {
     return null;
   }
 
-  // DAY MATCH: +50 points
-  const dayMatches = driver.preferredDays.some(d => d.toLowerCase() === block.day.toLowerCase());
-  if (dayMatches) {
-    score += 50;
-    reasons.push(`Day:${block.day}`);
+  const reasons: string[] = [];
+
+  // Get ownership score (0-1) from XGBoost
+  const ownershipScore = ownershipData?.shares?.[driverName] ?? 0;
+  const ownershipPct = Math.round(ownershipScore * 100);
+
+  // Get availability score (does driver work this day?)
+  const dayNameLower = block.dayName.toLowerCase();
+  const worksThisDay = driverPattern?.day_list?.some(
+    d => d.toLowerCase() === dayNameLower
+  ) ?? false;
+  const availabilityScore = worksThisDay ? 1.0 : 0.5;
+
+  // COMBINED SCORE FORMULA:
+  // combined = ownership × predictability + availability × (1 - predictability)
+  const baseScore = (ownershipScore * predictability) + (availabilityScore * (1 - predictability));
+
+  // Fairness bonus: prefer drivers with fewer days this week (max +0.30)
+  const fairnessBonus = Math.max(0, (6 - currentDayCount)) * 0.05;
+
+  const finalScore = baseScore + fairnessBonus;
+
+  // Build reasons and match type
+  let matchType: string;
+
+  if (ownershipScore >= 0.70) {
+    reasons.push(`★ Owns slot (${ownershipPct}%)`);
+    matchType = 'owner';
+  } else if (ownershipScore >= 0.30) {
+    reasons.push(`◐ Shares slot (${ownershipPct}%)`);
+    matchType = 'shared';
+  } else if (worksThisDay) {
+    reasons.push(`○ Works ${DAY_NAMES_UPPER[block.dayIndex]}s`);
+    matchType = 'available';
+  } else {
+    reasons.push(`△ Available`);
+    matchType = 'fallback';
   }
 
-  // TIME MATCH: +40 exact, +30 within 2 hours
-  const blockMinutes = timeToMinutes(block.time);
-  let bestTimeDiff = Infinity;
-  let matchedTime = "";
+  // Add pattern info
+  const typicalDays = driverPattern?.typical_days ?? 6;
+  reasons.push(`${typicalDays}d pattern`);
 
-  for (const prefTime of driver.preferredTimes) {
-    const prefMinutes = timeToMinutes(prefTime);
-    const diff = Math.abs(blockMinutes - prefMinutes);
-    const wrappedDiff = Math.min(diff, 1440 - diff); // Handle overnight wraparound
-    if (wrappedDiff < bestTimeDiff) {
-      bestTimeDiff = wrappedDiff;
-      matchedTime = prefTime;
-    }
+  if (currentDayCount === 0) {
+    reasons.push('NeedsWork');
   }
 
-  if (bestTimeDiff === 0) {
-    score += 40;
-    reasons.push(`Time:${matchedTime}`);
-  } else if (bestTimeDiff <= 120) {
-    score += 30;
-    reasons.push(`~Time:${matchedTime}`);
-  }
-
-  // Must have SOME match to be considered
-  if (score === 0) {
+  // Must have minimum score to be considered
+  if (finalScore < 0.1) {
     return null;
   }
 
-  return { score, reasons };
+  return {
+    score: Math.round(finalScore * 100) / 100,
+    reasons,
+    ownershipPct,
+    matchType
+  };
 }
 
 /**
- * Main deterministic matching function
+ * Main deterministic matching function using XGBoost
  */
 export async function matchDeterministic(
   tenantId: string,
   weekStart: Date,
   contractTypeFilter?: "solo1" | "solo2",
-  minDays: number = 3
+  minDays: number = 3,
+  predictability: number = 0.7
 ): Promise<{
   suggestions: MatchResult[];
   unassigned: string[];
@@ -158,20 +160,17 @@ export async function matchDeterministic(
   };
 }> {
   const weekEnd = endOfWeek(weekStart, { weekStartsOn: 0 });
-  console.log(`[DeterministicMatcher] Starting for ${format(weekStart, "yyyy-MM-dd")} to ${format(weekEnd, "yyyy-MM-dd")}`);
+  console.log(`[XGBoost-Matcher] Starting for ${format(weekStart, "yyyy-MM-dd")} to ${format(weekEnd, "yyyy-MM-dd")}`);
 
-  // 1. Get all drivers with DNA profiles
-  const allDrivers = await db
+  // 1. Get all active drivers (no DNA join needed)
+  const allDriversRaw = await db
     .select({
       id: drivers.id,
       firstName: drivers.firstName,
       lastName: drivers.lastName,
-      contractType: driverDnaProfiles.preferredContractType,
-      preferredDays: driverDnaProfiles.preferredDays,
-      preferredStartTimes: driverDnaProfiles.preferredStartTimes,
+      soloType: drivers.soloType,
     })
     .from(drivers)
-    .leftJoin(driverDnaProfiles, eq(drivers.id, driverDnaProfiles.driverId))
     .where(
       and(
         eq(drivers.tenantId, tenantId),
@@ -179,23 +178,41 @@ export async function matchDeterministic(
       )
     );
 
-  const driverProfiles: DriverProfile[] = allDrivers
-    .filter(d => {
-      const days = (d.preferredDays as string[]) || [];
-      const times = (d.preferredStartTimes as string[]) || [];
-      return days.length > 0 && times.length > 0; // Must have both
+  const driverInfos: DriverInfo[] = allDriversRaw.map(d => ({
+    id: d.id,
+    name: `${d.firstName} ${d.lastName}`.trim(),
+    contractType: (d.soloType || "solo1").toLowerCase(),
+  }));
+
+  console.log(`[XGBoost-Matcher] ${driverInfos.length} active drivers`);
+
+  // 2. Load ALL driver patterns from XGBoost (single call)
+  console.log(`[XGBoost-Matcher] Loading driver patterns from XGBoost...`);
+  const patternsResult = await getAllDriverPatterns();
+  const driverPatterns: Record<string, DriverPattern> =
+    patternsResult.success && patternsResult.data?.patterns
+      ? patternsResult.data.patterns
+      : {};
+  console.log(`[XGBoost-Matcher] Loaded ${Object.keys(driverPatterns).length} driver patterns`);
+
+  // 3. Load canonical start times from contracts table
+  const allContracts = await db
+    .select({
+      type: contracts.type,
+      tractorId: contracts.tractorId,
+      startTime: contracts.startTime,
     })
-    .map(d => ({
-      id: d.id,
-      name: `${d.firstName} ${d.lastName}`,
-      contractType: (d.contractType || "solo1").toLowerCase(),
-      preferredDays: (d.preferredDays as string[]) || [],
-      preferredTimes: (d.preferredStartTimes as string[]) || [],
-    }));
+    .from(contracts)
+    .where(eq(contracts.tenantId, tenantId));
 
-  console.log(`[DeterministicMatcher] ${driverProfiles.length} drivers with complete profiles`);
+  const canonicalStartTimes: Record<string, string> = {};
+  for (const c of allContracts) {
+    const key = `${c.type.toLowerCase()}_${c.tractorId}`;
+    canonicalStartTimes[key] = c.startTime;
+  }
+  console.log(`[XGBoost-Matcher] Loaded ${Object.keys(canonicalStartTimes).length} canonical times from contracts`);
 
-  // 2. Get unassigned blocks for the week
+  // 4. Get unassigned blocks for the week
   const weekEndPlusOne = new Date(weekEnd);
   weekEndPlusOne.setDate(weekEndPlusOne.getDate() + 1);
 
@@ -230,11 +247,12 @@ export async function matchDeterministic(
       const soloType = (b.soloType || "solo1").toLowerCase();
       const tractorId = b.tractorId || "Tractor_1";
       const lookupKey = `${soloType}_${tractorId}`;
-      const time = CANONICAL_START_TIMES[lookupKey] || "00:00";
+      const time = canonicalStartTimes[lookupKey] || "00:00";
 
       return {
         id: b.id,
-        day: dayName,
+        dayIndex,
+        dayName,
         time,
         contractType: soloType,
         serviceDate: format(serviceDate, "yyyy-MM-dd"),
@@ -248,15 +266,15 @@ export async function matchDeterministic(
     return a.time.localeCompare(b.time);
   });
 
-  console.log(`[DeterministicMatcher] ${blockInfos.length} unassigned blocks to match`);
+  console.log(`[XGBoost-Matcher] ${blockInfos.length} unassigned blocks to match`);
 
-  if (blockInfos.length === 0 || driverProfiles.length === 0) {
+  if (blockInfos.length === 0 || driverInfos.length === 0) {
     return {
       suggestions: [],
       unassigned: blockInfos.map(b => b.id),
       stats: {
         totalBlocks: blockInfos.length,
-        totalDrivers: driverProfiles.length,
+        totalDrivers: driverInfos.length,
         assigned: 0,
         unassigned: blockInfos.length,
         solverStatus: blockInfos.length === 0 ? "NO_BLOCKS" : "NO_DRIVERS",
@@ -264,30 +282,81 @@ export async function matchDeterministic(
     };
   }
 
-  // 3. Greedy matching: for each block, find best available driver
+  // 5. Cache slot distributions to avoid redundant XGBoost calls
+  const slotDistributionCache = new Map<string, SlotDistribution | null>();
+
+  async function getSlotDistributionCached(
+    soloType: string,
+    tractorId: string,
+    dayOfWeek: number,
+    canonicalTime: string
+  ): Promise<SlotDistribution | null> {
+    const cacheKey = `${soloType}_${tractorId}_${dayOfWeek}_${canonicalTime}`;
+    if (slotDistributionCache.has(cacheKey)) {
+      return slotDistributionCache.get(cacheKey)!;
+    }
+
+    const result = await getSlotDistribution({
+      soloType,
+      tractorId,
+      dayOfWeek,
+      canonicalTime
+    });
+
+    const data = result.success && result.data ? result.data : null;
+    slotDistributionCache.set(cacheKey, data);
+    return data;
+  }
+
+  // 6. Greedy matching: for each block, find best available driver
   const busyDates = new Set<string>(); // "driverId_date" keys
   const driverBlockCounts = new Map<string, number>(); // Track blocks per driver
   const suggestions: MatchResult[] = [];
   const unassigned: string[] = [];
 
   for (const block of blockInfos) {
+    // Get slot distribution from XGBoost for this block
+    const ownershipData = await getSlotDistributionCached(
+      block.contractType,
+      block.tractorId,
+      block.dayIndex,
+      block.time
+    );
+
     // Filter to drivers with matching contract type
-    const eligibleDrivers = driverProfiles.filter(d => d.contractType === block.contractType);
+    const eligibleDrivers = driverInfos.filter(d => d.contractType === block.contractType);
 
     // Score all eligible drivers for this block
-    const candidates: { driver: DriverProfile; score: number; reasons: string[] }[] = [];
+    const candidates: {
+      driver: DriverInfo;
+      score: number;
+      reasons: string[];
+      ownershipPct: number;
+      matchType: string;
+    }[] = [];
 
     for (const driver of eligibleDrivers) {
-      const result = calculateScore(driver, block, busyDates);
-      if (result && result.score > 0) {
-        // Add fair distribution bonus: prefer drivers with fewer blocks
-        const currentCount = driverBlockCounts.get(driver.id) || 0;
-        const fairnessBonus = Math.max(0, (minDays - currentCount) * 5);
+      const currentCount = driverBlockCounts.get(driver.id) || 0;
+      const pattern = driverPatterns[driver.name];
 
+      const result = calculateXGBoostScore(
+        driver.name,
+        driver.id,
+        block,
+        ownershipData,
+        pattern,
+        currentCount,
+        busyDates,
+        predictability
+      );
+
+      if (result && result.score > 0) {
         candidates.push({
           driver,
-          score: result.score + fairnessBonus,
-          reasons: [...result.reasons, currentCount === 0 ? "NeedsWork" : ""],
+          score: result.score,
+          reasons: result.reasons,
+          ownershipPct: result.ownershipPct,
+          matchType: result.matchType,
         });
       }
     }
@@ -301,25 +370,20 @@ export async function matchDeterministic(
       busyDates.add(dateKey);
       driverBlockCounts.set(winner.driver.id, (driverBlockCounts.get(winner.driver.id) || 0) + 1);
 
-      // Determine match type and confidence
-      let matchType = "assigned";
-      let confidence = 0.5;
-      const hasDay = winner.reasons.some(r => r.startsWith("Day:"));
-      const hasExactTime = winner.reasons.some(r => r.startsWith("Time:") && !r.startsWith("~"));
-      const hasApproxTime = winner.reasons.some(r => r.startsWith("~Time:"));
-
-      if (hasDay && hasExactTime) {
-        confidence = 1.0;
-        matchType = "perfect_match";
-      } else if (hasDay && hasApproxTime) {
-        confidence = 0.9;
-        matchType = "day_time_approx";
-      } else if (hasDay) {
-        confidence = 0.85;
-        matchType = "day_match";
-      } else if (hasExactTime || hasApproxTime) {
-        confidence = 0.75;
-        matchType = "time_match";
+      // Determine confidence based on match type
+      let confidence: number;
+      switch (winner.matchType) {
+        case 'owner':
+          confidence = 1.0;
+          break;
+        case 'shared':
+          confidence = 0.85;
+          break;
+        case 'available':
+          confidence = 0.70;
+          break;
+        default:
+          confidence = 0.50;
       }
 
       suggestions.push({
@@ -329,19 +393,29 @@ export async function matchDeterministic(
         score: winner.score,
         reasons: winner.reasons.filter(r => r !== ""),
         confidence,
-        matchType,
+        matchType: winner.matchType,
+        ownershipPct: winner.ownershipPct,
+        slotType: ownershipData?.slot_type || 'unknown',
       });
     } else {
       unassigned.push(block.id);
     }
   }
 
-  console.log(`[DeterministicMatcher] Complete: ${suggestions.length} assigned, ${unassigned.length} unassigned`);
+  console.log(`[XGBoost-Matcher] Complete: ${suggestions.length} assigned, ${unassigned.length} unassigned`);
+
+  // Log match quality breakdown
+  const ownerMatches = suggestions.filter(s => s.matchType === 'owner').length;
+  const sharedMatches = suggestions.filter(s => s.matchType === 'shared').length;
+  const availableMatches = suggestions.filter(s => s.matchType === 'available').length;
+  const fallbackMatches = suggestions.filter(s => s.matchType === 'fallback').length;
+
+  console.log(`[XGBoost-Matcher] Quality: ${ownerMatches} owner, ${sharedMatches} shared, ${availableMatches} available, ${fallbackMatches} fallback`);
 
   // Log top assignments for debugging
   const topAssignments = suggestions.slice(0, 5);
   for (const s of topAssignments) {
-    console.log(`  ${s.driverName}: ${s.reasons.join(", ")} (score: ${s.score})`);
+    console.log(`  ${s.driverName}: ${s.reasons.join(" · ")} (score: ${s.score})`);
   }
 
   return {
@@ -349,10 +423,10 @@ export async function matchDeterministic(
     unassigned,
     stats: {
       totalBlocks: blockInfos.length,
-      totalDrivers: driverProfiles.length,
+      totalDrivers: driverInfos.length,
       assigned: suggestions.length,
       unassigned: unassigned.length,
-      solverStatus: "DETERMINISTIC_OPTIMAL",
+      solverStatus: "XGBOOST_OPTIMAL",
     },
   };
 }
@@ -405,6 +479,6 @@ export async function applyDeterministicMatches(
     }
   }
 
-  console.log(`[DeterministicMatcher] Applied ${applied} assignments, ${errors.length} errors`);
+  console.log(`[XGBoost-Matcher] Applied ${applied} assignments, ${errors.length} errors`);
   return { applied, errors };
 }

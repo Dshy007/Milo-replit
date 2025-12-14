@@ -34,7 +34,6 @@ async function main() {
     WHERE ba.id IS NULL
       AND b.service_date >= CURRENT_DATE
     ORDER BY b.service_date, b.start_timestamp
-    LIMIT 20
   `);
 
   const blocks = (blocksResult.rows as any[]).map(b => {

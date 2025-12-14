@@ -17,7 +17,8 @@
       "Bash(curl:*)",
       "Bash(node:*)",
       "Bash(cat:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(npm run build:*)"
     ],
     "deny": [],
     "ask": []

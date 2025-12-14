@@ -1073,7 +1073,7 @@ export default function AIScheduler() {
           onImport={() => setIsImportWizardOpen(false)}
           onImportComplete={handleImportComplete}
           currentWeekStart={selectedWeekStart}
-          skipDriverAssignments={true}
+          skipDriverAssignments={false}
         />
       </div>
     </div>

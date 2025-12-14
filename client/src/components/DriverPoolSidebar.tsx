@@ -1185,7 +1185,7 @@ export function DriverPoolSidebar({
             size="sm"
             className="w-full h-9 bg-gradient-to-r from-orange-500 to-amber-600 hover:from-orange-600 hover:to-amber-700 text-white border-0"
             onClick={() => autoMatchMutation.mutate()}
-            disabled={autoMatchMutation.isPending || unassignedOccurrences.length === 0}
+            disabled={autoMatchMutation.isPending}
           >
             {autoMatchMutation.isPending ? (
               <>

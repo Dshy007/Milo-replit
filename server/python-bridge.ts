@@ -266,3 +266,88 @@ export async function getDriverVectorHistory(driverId: string): Promise<PythonRe
 export async function resetVectorStore(): Promise<PythonResult<{ message: string }>> {
   return runPythonScript('vector_store.py', [], JSON.stringify({ action: 'reset' }));
 }
+
+// ============================================================================
+// XGBoost Ownership Model Functions
+// ============================================================================
+
+export interface SlotDistribution {
+  slot_type: 'owned' | 'rotating' | 'unknown';
+  owner: string | null;
+  owner_share: number;
+  shares: Record<string, number>;
+  total_assignments: number;
+  slot?: string;
+}
+
+export interface DriverPattern {
+  driver: string;
+  typical_days: number;
+  day_list: string[];
+  day_counts: Record<string, number>;
+  confidence: number;
+}
+
+/**
+ * Get ownership distribution for a slot from XGBoost model.
+ * Returns who owns the slot and their share percentage.
+ */
+export async function getSlotDistribution(params: {
+  soloType: string;
+  tractorId: string;
+  dayOfWeek: number;
+  canonicalTime?: string;
+}): Promise<PythonResult<SlotDistribution>> {
+  return runPythonScript('xgboost_ownership.py', [], JSON.stringify({
+    action: 'get_distribution',
+    soloType: params.soloType,
+    tractorId: params.tractorId,
+    dayOfWeek: params.dayOfWeek,
+    canonicalTime: params.canonicalTime
+  }));
+}
+
+/**
+ * Get a driver's typical work pattern from XGBoost model.
+ * Returns how many days they typically work and which days.
+ */
+export async function getDriverPattern(driverName: string): Promise<PythonResult<DriverPattern>> {
+  return runPythonScript('xgboost_ownership.py', [], JSON.stringify({
+    action: 'get_driver_pattern',
+    driverName
+  }));
+}
+
+/**
+ * Get patterns for all drivers at once.
+ */
+export async function getAllDriverPatterns(): Promise<PythonResult<{
+  patterns: Record<string, DriverPattern>;
+  count: number;
+}>> {
+  return runPythonScript('xgboost_ownership.py', [], JSON.stringify({
+    action: 'get_all_patterns'
+  }));
+}
+
+/**
+ * Predict slot owner using XGBoost model.
+ */
+export async function predictSlotOwner(params: {
+  soloType: string;
+  tractorId: string;
+  dayOfWeek: number;
+  canonicalTime?: string;
+}): Promise<PythonResult<{
+  driver: string;
+  confidence: number;
+  slot: string;
+}>> {
+  return runPythonScript('xgboost_ownership.py', [], JSON.stringify({
+    action: 'predict',
+    soloType: params.soloType,
+    tractorId: params.tractorId,
+    dayOfWeek: params.dayOfWeek,
+    canonicalTime: params.canonicalTime
+  }));
+}

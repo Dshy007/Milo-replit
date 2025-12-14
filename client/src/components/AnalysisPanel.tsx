@@ -194,7 +194,10 @@ interface StagedAssignment {
   score: number;
   reasons: string[];
   status: "pending" | "accepted" | "rejected";
-  matchType?: string; // 'holy_grail', 'strong', 'contract', 'weak'
+  matchType?: string; // 'owner', 'shared', 'available', 'fallback'
+  ownershipPct?: number;  // XGBoost ownership percentage (0-100)
+  typicalDays?: number;   // XGBoost driver's typical days per week
+  slotType?: string;      // 'owned' | 'rotating' | 'unknown'
 }
 
 // Stats from the API
@@ -242,8 +245,9 @@ function AssignmentSuggestions({
   const solo2Count = stagedAssignments.filter(s => s.blockData.contractType?.toLowerCase() === "solo2").length;
   const acceptedCount = stagedAssignments.filter(s => s.status === "accepted").length;
   const pendingCount = stagedAssignments.filter(s => s.status === "pending").length;
-  const perfectMatchCount = stagedAssignments.filter(s => s.score >= 1.0).length;
-  const strongMatchCount = stagedAssignments.filter(s => s.score >= 0.70 && s.score < 1.0).length;
+  // XGBoost uses 0.90+ for perfect (owner), 0.60+ for strong (shared/available)
+  const perfectMatchCount = stagedAssignments.filter(s => s.score >= 0.90).length;
+  const strongMatchCount = stagedAssignments.filter(s => s.score >= 0.60 && s.score < 0.90).length;
 
   const handleGetSuggestions = async () => {
     if (unassignedBlocks.length === 0) return;
@@ -299,8 +303,8 @@ function AssignmentSuggestions({
         const topRec = rec.recommendations[0];
         const blockData = unassignedBlocks.find(b => b.blockId === rec.block_id);
         if (blockData && topRec.score > 0) {
-          // Auto-accept 100% matches if enabled
-          const isPerfect = topRec.score >= 1.0;
+          // Auto-accept 90%+ matches if enabled (XGBoost uses 0.9 threshold)
+          const isPerfect = topRec.score >= 0.90;
           staged.push({
             blockId: rec.block_id,
             blockData,
@@ -309,6 +313,9 @@ function AssignmentSuggestions({
             score: topRec.score,
             reasons: topRec.reasons || [],
             matchType: topRec.matchType || 'unknown',
+            ownershipPct: topRec.ownershipPct ?? 0,
+            typicalDays: topRec.typicalDays ?? 6,
+            slotType: rec.slot_type || 'unknown',
             status: autoAcceptPerfect && isPerfect ? "accepted" : "pending",
           });
         }
@@ -459,7 +466,7 @@ function AssignmentSuggestions({
               <span className="text-lg text-gray-500">unassigned blocks</span>
             </div>
             <p className="text-xs text-gray-500 mb-4">
-              DNA-based matching uses driver preferences (day + time + contract type)
+              XGBoost ownership model: slot ownership + driver patterns
             </p>
 
             {/* Auto-accept toggle */}
@@ -472,7 +479,7 @@ function AssignmentSuggestions({
                 className="w-4 h-4 rounded border-gray-300"
               />
               <label htmlFor="autoAccept" className="text-sm text-gray-600">
-                Auto-accept 100% matches
+                Auto-accept slot owners (90%+)
               </label>
             </div>
 
@@ -520,19 +527,19 @@ function AssignmentSuggestions({
       {/* Staging Area */}
       {(stagedAssignments.length > 0 || predictionStats?.blocksNoCandidates) && !isLoading && (
         <div className="space-y-3">
-          {/* Match Quality Stats */}
+          {/* Match Quality Stats - XGBoost Ownership */}
           <div className="grid grid-cols-4 gap-2">
             <div className="bg-green-50 border border-green-200 rounded-lg p-2 text-center">
               <div className="text-2xl font-bold text-green-600">{perfectMatchCount}</div>
-              <div className="text-[10px] text-green-700 uppercase font-medium">100% Match</div>
+              <div className="text-[10px] text-green-700 uppercase font-medium">★ Owners</div>
             </div>
             <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 text-center">
               <div className="text-2xl font-bold text-amber-600">{strongMatchCount}</div>
-              <div className="text-[10px] text-amber-700 uppercase font-medium">70%+ Match</div>
+              <div className="text-[10px] text-amber-700 uppercase font-medium">◐ Shared</div>
             </div>
             <div className="bg-gray-50 border border-gray-200 rounded-lg p-2 text-center">
               <div className="text-2xl font-bold text-gray-600">{stagedAssignments.length - perfectMatchCount - strongMatchCount}</div>
-              <div className="text-[10px] text-gray-500 uppercase font-medium">Weaker</div>
+              <div className="text-[10px] text-gray-500 uppercase font-medium">○ Available</div>
             </div>
             <div className="bg-red-50 border border-red-200 rounded-lg p-2 text-center">
               <div className="text-2xl font-bold text-red-600">{predictionStats?.blocksNoCandidates || 0}</div>
@@ -548,7 +555,7 @@ function AssignmentSuggestions({
                 <span className="font-medium">{predictionStats.blocksNoCandidates} blocks have no matching drivers</span>
               </div>
               <p className="text-red-600 text-xs mt-1">
-                These blocks need drivers whose DNA (day + time + contract) matches.
+                No drivers with matching contract type available for these slots.
               </p>
             </div>
           )}
@@ -667,26 +674,34 @@ function AssignmentSuggestions({
                           </Badge>
                         </td>
 
-                        {/* Driver + Reason */}
+                        {/* Driver + XGBoost Info */}
                         <td className="py-2 px-2">
                           <div className="font-medium text-gray-900">{staged.driverName}</div>
-                          <div className="text-[10px] text-gray-500 max-w-[140px] truncate" title={staged.reasons[0]}>
-                            {staged.reasons[0]}
+                          <div className="text-[10px] text-gray-500 flex items-center gap-1">
+                            {staged.ownershipPct && staged.ownershipPct >= 70 ? (
+                              <span className="text-green-600">★ {staged.ownershipPct}% owner</span>
+                            ) : staged.ownershipPct && staged.ownershipPct >= 30 ? (
+                              <span className="text-amber-600">◐ {staged.ownershipPct}% share</span>
+                            ) : (
+                              <span className="text-gray-400">○ available</span>
+                            )}
+                            <span className="text-gray-300">·</span>
+                            <span>{staged.typicalDays ?? 6}d pattern</span>
                           </div>
                         </td>
 
                         {/* Score */}
                         <td className="py-2 px-2 text-center">
-                          {staged.score >= 1.0 ? (
+                          {staged.score >= 0.90 ? (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-bold bg-green-500 text-white text-xs shadow-sm">
-                              ★ 100%
+                              ★ {(staged.score * 100).toFixed(0)}%
                             </span>
                           ) : (
                             <span
                               className={`inline-block px-2 py-0.5 rounded font-bold text-xs ${
-                                staged.score >= 0.70
+                                staged.score >= 0.60
                                   ? "bg-amber-100 text-amber-700"
-                                  : staged.score >= 0.50
+                                  : staged.score >= 0.40
                                   ? "bg-gray-100 text-gray-600"
                                   : "bg-red-50 text-red-600"
                               }`}

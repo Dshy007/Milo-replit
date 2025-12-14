@@ -21,8 +21,8 @@ Solo1 = 1 duty day (the calendar day it starts).
 Solo2 = 2 duty days (the start day and the next calendar day).
 
 Friday files include carryovers: The CSV for the new week also shows Fri/Sat from the previous week. Keep those to compute rolling-6 correctly.
-
-Bump logic (for later driver assignment): Start-time flex ±2h (±3h if explicitly marked “last day”). Same-slot + same-solo next cycle is auto-OK on 10-hour rest.
+Bump logic
+ (for later driver assignment): Start-time flex ±2h (±3h if explicitly marked “last day”). Same-slot + same-solo next cycle is auto-OK on 10-hour rest.
 
 On-bench vs off-bench (only WARN):
 
