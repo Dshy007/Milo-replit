@@ -17,10 +17,153 @@
  */
 
 import { db } from "./db";
-import { blocks, drivers, blockAssignments, contracts } from "@shared/schema";
-import { eq, and, gte, lte } from "drizzle-orm";
-import { format, endOfWeek } from "date-fns";
+import { blocks, drivers, blockAssignments, contracts, specialRequests, protectedDriverRules, type Block, type Driver, type BlockAssignment } from "@shared/schema";
+import { eq, and, gte, lte, or, isNull, sql } from "drizzle-orm";
+import { format, endOfWeek, subWeeks, subDays, eachDayOfInterval, isWithinInterval, parseISO } from "date-fns";
 import { getSlotDistribution, getAllDriverPatterns, SlotDistribution, DriverPattern } from "./python-bridge";
+import { validateBlockAssignment, blockToAssignmentSubject } from "./rolling6-calculator";
+
+/**
+ * Learn driver's primary contract type from their 12-week assignment history.
+ * Uses the 80% rule: if 80%+ of assignments are one type, that's their type.
+ * Otherwise they work "both" types.
+ */
+async function getDriverTypesFromHistory(
+  tenantId: string
+): Promise<Map<string, "solo1" | "solo2" | "both">> {
+  const driverTypes = new Map<string, "solo1" | "solo2" | "both">();
+
+  // Look back 12 weeks
+  const cutoffDate = subWeeks(new Date(), 12);
+
+  // Query all assignments with block info for the last 12 weeks
+  const historicalAssignments = await db
+    .select({
+      driverId: blockAssignments.driverId,
+      soloType: blocks.soloType,
+    })
+    .from(blockAssignments)
+    .innerJoin(blocks, eq(blockAssignments.blockId, blocks.id))
+    .where(
+      and(
+        eq(blockAssignments.tenantId, tenantId),
+        eq(blockAssignments.isActive, true),
+        gte(blocks.serviceDate, cutoffDate)
+      )
+    );
+
+  // Count Solo1 vs Solo2 per driver
+  const driverCounts = new Map<string, { solo1: number; solo2: number }>();
+
+  for (const a of historicalAssignments) {
+    const type = (a.soloType || "solo1").toLowerCase();
+    const counts = driverCounts.get(a.driverId) || { solo1: 0, solo2: 0 };
+
+    if (type === "solo1") {
+      counts.solo1++;
+    } else if (type === "solo2") {
+      counts.solo2++;
+    }
+
+    driverCounts.set(a.driverId, counts);
+  }
+
+  // Apply 80% rule to determine primary type
+  for (const [driverId, counts] of driverCounts) {
+    const total = counts.solo1 + counts.solo2;
+    if (total === 0) {
+      driverTypes.set(driverId, "both"); // No history, can do either
+      continue;
+    }
+
+    const solo1Pct = counts.solo1 / total;
+    const solo2Pct = counts.solo2 / total;
+
+    if (solo1Pct >= 0.80) {
+      driverTypes.set(driverId, "solo1");
+    } else if (solo2Pct >= 0.80) {
+      driverTypes.set(driverId, "solo2");
+    } else {
+      driverTypes.set(driverId, "both"); // Mixed history
+    }
+  }
+
+  console.log(`[XGBoost-Matcher] Learned types for ${driverTypes.size} drivers from 12-week history`);
+  return driverTypes;
+}
+
+/**
+ * Load approved special requests for a date range.
+ * Returns unavailability map and priority drivers map.
+ */
+async function loadSpecialRequests(
+  tenantId: string,
+  weekStart: Date,
+  weekEnd: Date
+): Promise<{
+  unavailableDates: Map<string, Set<string>>; // driverId → Set of "yyyy-MM-dd" dates
+  priorityDrivers: Map<string, number>; // driverId → target days
+}> {
+  const unavailableDates = new Map<string, Set<string>>();
+  const priorityDrivers = new Map<string, number>();
+
+  // Query approved requests that overlap with the week
+  const approvedRequests = await db
+    .select()
+    .from(specialRequests)
+    .where(
+      and(
+        eq(specialRequests.tenantId, tenantId),
+        eq(specialRequests.status, "approved"),
+        or(
+          // Request starts before/during the week
+          lte(specialRequests.startDate, weekEnd),
+          isNull(specialRequests.startDate)
+        )
+      )
+    );
+
+  for (const req of approvedRequests) {
+    if (!req.startDate) continue;
+
+    const reqStart = new Date(req.startDate);
+    const reqEnd = req.endDate ? new Date(req.endDate) : reqStart;
+
+    // Check if request overlaps with the week
+    if (reqEnd < weekStart || reqStart > weekEnd) continue;
+
+    if (req.availabilityType === "unavailable") {
+      // Add all dates in range to unavailable set
+      const dates = eachDayOfInterval({
+        start: reqStart < weekStart ? weekStart : reqStart,
+        end: reqEnd > weekEnd ? weekEnd : reqEnd,
+      });
+
+      let driverUnavail = unavailableDates.get(req.driverId);
+      if (!driverUnavail) {
+        driverUnavail = new Set();
+        unavailableDates.set(req.driverId, driverUnavail);
+      }
+
+      for (const d of dates) {
+        driverUnavail.add(format(d, "yyyy-MM-dd"));
+      }
+    } else if (req.availabilityType === "available") {
+      // This is a "give me more work" request
+      // Count days in the request that fall within the week
+      const dates = eachDayOfInterval({
+        start: reqStart < weekStart ? weekStart : reqStart,
+        end: reqEnd > weekEnd ? weekEnd : reqEnd,
+      });
+
+      const currentTarget = priorityDrivers.get(req.driverId) || 0;
+      priorityDrivers.set(req.driverId, currentTarget + dates.length);
+    }
+  }
+
+  console.log(`[XGBoost-Matcher] Loaded ${unavailableDates.size} drivers with unavailability, ${priorityDrivers.size} priority drivers`);
+  return { unavailableDates, priorityDrivers };
+}
 
 const DAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 const DAY_NAMES_UPPER = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -28,7 +171,7 @@ const DAY_NAMES_UPPER = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday",
 interface DriverInfo {
   id: string;
   name: string;
-  contractType: string;
+  contractType: "solo1" | "solo2" | "both";
 }
 
 interface BlockInfo {
@@ -39,6 +182,8 @@ interface BlockInfo {
   contractType: string;
   serviceDate: string;
   tractorId: string;
+  startTimestamp: Date;
+  endTimestamp: Date;
 }
 
 interface MatchResult {
@@ -55,25 +200,54 @@ interface MatchResult {
 
 /**
  * Calculate XGBoost-based score for a driver-block pair
+ *
+ * NEW: Includes unavailability check, priority boost, rotation penalty, and type matching
  */
 function calculateXGBoostScore(
   driverName: string,
   driverId: string,
+  driverType: "solo1" | "solo2" | "both",
   block: BlockInfo,
   ownershipData: SlotDistribution | null,
   driverPattern: DriverPattern | undefined,
   currentDayCount: number,
   busyDates: Set<string>,
-  predictability: number = 0.7
+  unavailableDates: Map<string, Set<string>>,
+  priorityDrivers: Map<string, number>,
+  predictability: number = 0.7,
+  minDays: number = 3
 ): { score: number; reasons: string[]; ownershipPct: number; matchType: string } | null {
 
-  // HARD CONSTRAINT: Driver already assigned on this date
-  const dateKey = `${driverId}_${block.serviceDate}`;
-  if (busyDates.has(dateKey)) {
-    return null;
+  // HARD CONSTRAINT: Driver already assigned on ANY day this block covers
+  // Solo2 blocks span 38h = 2+ days, so check all days
+  const startDay = new Date(block.startTimestamp);
+  const endDay = new Date(block.endTimestamp);
+  let checkDay = new Date(startDay);
+  checkDay.setHours(0, 0, 0, 0);
+
+  while (checkDay <= endDay) {
+    const dateStr = format(checkDay, "yyyy-MM-dd");
+    if (busyDates.has(`${driverId}_${dateStr}`)) {
+      return null; // Driver busy on one of the days this block covers
+    }
+    checkDay.setDate(checkDay.getDate() + 1);
   }
 
-  // HARD CONSTRAINT: Don't exceed driver's typical days pattern
+  // HARD CONSTRAINT: Driver has approved time-off on ANY day this block covers
+  const driverUnavail = unavailableDates.get(driverId);
+  if (driverUnavail) {
+    checkDay = new Date(startDay);
+    checkDay.setHours(0, 0, 0, 0);
+    while (checkDay <= endDay) {
+      const dateStr = format(checkDay, "yyyy-MM-dd");
+      if (driverUnavail.has(dateStr)) {
+        return null; // Driver has time-off on one of the days
+      }
+      checkDay.setDate(checkDay.getDate() + 1);
+    }
+  }
+
+  // SOFT CONSTRAINT: Don't exceed driver's typical days pattern
   const maxDays = driverPattern?.typical_days ?? 6;
   if (currentDayCount >= maxDays) {
     return null;
@@ -81,25 +255,46 @@ function calculateXGBoostScore(
 
   const reasons: string[] = [];
 
-  // Get ownership score (0-1) from XGBoost
-  const ownershipScore = ownershipData?.shares?.[driverName] ?? 0;
+  // TYPE MATCHING: Disabled - drivers work BOTH Solo1 and Solo2
+  // Typical schedule: 4-5 Solo1 blocks + 2 Solo2 blocks per driver
+  const typeBonus: number = 0;
+
+  // Get ownership score (0-1) from XGBoost - default 0.5 if no data
+  const ownershipScore = ownershipData?.shares?.[driverName] ?? 0.5;
   const ownershipPct = Math.round(ownershipScore * 100);
 
   // Get availability score (does driver work this day?)
   const dayNameLower = block.dayName.toLowerCase();
   const worksThisDay = driverPattern?.day_list?.some(
     d => d.toLowerCase() === dayNameLower
-  ) ?? false;
-  const availabilityScore = worksThisDay ? 1.0 : 0.5;
+  ) ?? true; // Default to true if no pattern (driver is available)
+  const availabilityScore = worksThisDay ? 1.0 : 0.6;
 
-  // COMBINED SCORE FORMULA:
-  // combined = ownership × predictability + availability × (1 - predictability)
+  // COMBINED SCORE FORMULA (same as original):
+  // Base = ownership × predictability + availability × (1 - predictability)
   const baseScore = (ownershipScore * predictability) + (availabilityScore * (1 - predictability));
 
-  // Fairness bonus: prefer drivers with fewer days this week (max +0.30)
-  const fairnessBonus = Math.max(0, (6 - currentDayCount)) * 0.05;
+  // Fairness bonus: prefer drivers with fewer days this week
+  // Increased from 0.05 to 0.08 to better spread work across drivers
+  const fairnessBonus = Math.max(0, (6 - currentDayCount)) * 0.08;
 
-  const finalScore = baseScore + fairnessBonus;
+  // MinDays boost: drivers below minimum should get priority
+  let minDaysBoost = 0;
+  if (currentDayCount < minDays) {
+    // Strong boost for drivers who haven't reached minimum yet
+    minDaysBoost = 0.20;
+    reasons.push(`📊 Below min (${currentDayCount}/${minDays})`);
+  }
+
+  // Priority boost: boost drivers with special "give me more work" requests
+  let priorityBoost = 0;
+  const targetDays = priorityDrivers.get(driverId);
+  if (targetDays && currentDayCount < targetDays) {
+    priorityBoost = 0.15; // Boost for priority drivers
+    reasons.push(`⭐ Priority: ${targetDays}d target`);
+  }
+
+  const finalScore = baseScore + typeBonus + fairnessBonus + minDaysBoost + priorityBoost;
 
   // Build reasons and match type
   let matchType: string;
@@ -162,13 +357,12 @@ export async function matchDeterministic(
   const weekEnd = endOfWeek(weekStart, { weekStartsOn: 0 });
   console.log(`[XGBoost-Matcher] Starting for ${format(weekStart, "yyyy-MM-dd")} to ${format(weekEnd, "yyyy-MM-dd")}`);
 
-  // 1. Get all active drivers (no DNA join needed)
+  // 1. Get all active drivers (no soloType field - will learn from history)
   const allDriversRaw = await db
     .select({
       id: drivers.id,
       firstName: drivers.firstName,
       lastName: drivers.lastName,
-      soloType: drivers.soloType,
     })
     .from(drivers)
     .where(
@@ -178,13 +372,29 @@ export async function matchDeterministic(
       )
     );
 
+  // 2. Learn driver types from 12-week assignment history
+  console.log(`[XGBoost-Matcher] Learning driver types from 12-week history...`);
+  const learnedTypes = await getDriverTypesFromHistory(tenantId);
+
+  // 3. Load approved special requests (unavailability + priority)
+  console.log(`[XGBoost-Matcher] Loading special requests...`);
+  const { unavailableDates, priorityDrivers } = await loadSpecialRequests(tenantId, weekStart, weekEnd);
+
+  // Build driver info with learned types
   const driverInfos: DriverInfo[] = allDriversRaw.map(d => ({
     id: d.id,
     name: `${d.firstName} ${d.lastName}`.trim(),
-    contractType: (d.soloType || "solo1").toLowerCase(),
+    // Use learned type from history, default to "both" if no history
+    contractType: learnedTypes.get(d.id) || "both",
   }));
 
   console.log(`[XGBoost-Matcher] ${driverInfos.length} active drivers`);
+
+  // Log driver type breakdown
+  const solo1Count = driverInfos.filter(d => d.contractType === "solo1").length;
+  const solo2Count = driverInfos.filter(d => d.contractType === "solo2").length;
+  const bothCount = driverInfos.filter(d => d.contractType === "both").length;
+  console.log(`[XGBoost-Matcher] Types: ${solo1Count} Solo1, ${solo2Count} Solo2, ${bothCount} Both`);
 
   // 2. Load ALL driver patterns from XGBoost (single call)
   console.log(`[XGBoost-Matcher] Loading driver patterns from XGBoost...`);
@@ -212,7 +422,68 @@ export async function matchDeterministic(
   }
   console.log(`[XGBoost-Matcher] Loaded ${Object.keys(canonicalStartTimes).length} canonical times from contracts`);
 
-  // 4. Get unassigned blocks for the week
+  // 4. Load full driver records for DOT validation
+  const fullDrivers = await db
+    .select()
+    .from(drivers)
+    .where(
+      and(
+        eq(drivers.tenantId, tenantId),
+        eq(drivers.status, "active")
+      )
+    );
+  const driverMap = new Map(fullDrivers.map(d => [d.id, d]));
+
+  // 5. Load protected driver rules
+  const protectedRules = await db
+    .select()
+    .from(protectedDriverRules)
+    .where(eq(protectedDriverRules.tenantId, tenantId));
+  console.log(`[XGBoost-Matcher] Loaded ${protectedRules.length} protected driver rules`);
+
+  // 6. Load existing assignments WITH blocks for DOT lookback (past 7 days + this week)
+  const lookbackStart = subDays(weekStart, 7);
+  const existingAssignmentsWithBlocks = await db
+    .select({
+      assignment: blockAssignments,
+      block: blocks,
+    })
+    .from(blockAssignments)
+    .innerJoin(blocks, eq(blockAssignments.blockId, blocks.id))
+    .where(
+      and(
+        eq(blockAssignments.tenantId, tenantId),
+        eq(blockAssignments.isActive, true),
+        gte(blocks.serviceDate, lookbackStart)
+      )
+    );
+
+  // Group by driver for quick lookup
+  const assignmentsByDriver = new Map<string, Array<typeof blockAssignments.$inferSelect & { block: typeof blocks.$inferSelect }>>();
+  for (const row of existingAssignmentsWithBlocks) {
+    const driverId = row.assignment.driverId;
+    if (!assignmentsByDriver.has(driverId)) {
+      assignmentsByDriver.set(driverId, []);
+    }
+    assignmentsByDriver.get(driverId)!.push({
+      ...row.assignment,
+      block: row.block,
+    });
+  }
+  console.log(`[XGBoost-Matcher] Loaded ${existingAssignmentsWithBlocks.length} existing assignments for DOT validation`);
+
+  // 7. Get all block assignments for conflict checking
+  const allBlockAssignments = await db
+    .select()
+    .from(blockAssignments)
+    .where(
+      and(
+        eq(blockAssignments.tenantId, tenantId),
+        eq(blockAssignments.isActive, true)
+      )
+    );
+
+  // 8. Get unassigned blocks for the week
   const weekEndPlusOne = new Date(weekEnd);
   weekEndPlusOne.setDate(weekEndPlusOne.getDate() + 1);
 
@@ -230,7 +501,12 @@ export async function matchDeterministic(
   const existingAssignments = await db
     .select({ blockId: blockAssignments.blockId })
     .from(blockAssignments)
-    .where(eq(blockAssignments.isActive, true));
+    .where(
+      and(
+        eq(blockAssignments.tenantId, tenantId),
+        eq(blockAssignments.isActive, true)
+      )
+    );
 
   const assignedBlockIds = new Set(existingAssignments.map(a => a.blockId));
 
@@ -257,6 +533,8 @@ export async function matchDeterministic(
         contractType: soloType,
         serviceDate: format(serviceDate, "yyyy-MM-dd"),
         tractorId,
+        startTimestamp: new Date(b.startTimestamp),
+        endTimestamp: new Date(b.endTimestamp),
       };
     });
 
@@ -282,8 +560,10 @@ export async function matchDeterministic(
     };
   }
 
-  // 5. Cache slot distributions to avoid redundant XGBoost calls
+  // 5. Cache slot distributions from XGBoost ownership model
   const slotDistributionCache = new Map<string, SlotDistribution | null>();
+  let pythonCallCount = 0;
+  const SKIP_PYTHON = false; // Enable XGBoost ownership predictions
 
   async function getSlotDistributionCached(
     soloType: string,
@@ -291,11 +571,17 @@ export async function matchDeterministic(
     dayOfWeek: number,
     canonicalTime: string
   ): Promise<SlotDistribution | null> {
+    // Skip Python calls entirely for speed - rely on patterns + type matching
+    if (SKIP_PYTHON) {
+      return null;
+    }
+
     const cacheKey = `${soloType}_${tractorId}_${dayOfWeek}_${canonicalTime}`;
     if (slotDistributionCache.has(cacheKey)) {
       return slotDistributionCache.get(cacheKey)!;
     }
 
+    pythonCallCount++;
     const result = await getSlotDistribution({
       soloType,
       tractorId,
@@ -308,11 +594,13 @@ export async function matchDeterministic(
     return data;
   }
 
-  // 6. Greedy matching: for each block, find best available driver
-  const busyDates = new Set<string>(); // "driverId_date" keys
+  // 6. Greedy matching: for each block, find best available driver with DOT compliance
   const driverBlockCounts = new Map<string, number>(); // Track blocks per driver
   const suggestions: MatchResult[] = [];
   const unassigned: string[] = [];
+
+  // Track new assignments made during this run (for DOT lookback)
+  const newAssignmentsByDriver = new Map<string, Array<{ block: typeof blocks.$inferSelect }>>();
 
   for (const block of blockInfos) {
     // Get slot distribution from XGBoost for this block
@@ -323,31 +611,79 @@ export async function matchDeterministic(
       block.time
     );
 
-    // Filter to drivers with matching contract type
-    const eligibleDrivers = driverInfos.filter(d => d.contractType === block.contractType);
+    // Get the full block record for DOT validation
+    const fullBlock = allBlocks.find(b => b.id === block.id);
+    if (!fullBlock) {
+      unassigned.push(block.id);
+      continue;
+    }
 
-    // Score all eligible drivers for this block
+    // All drivers are eligible (type penalty removed)
+    const eligibleDrivers = driverInfos;
+
+    // Score all eligible drivers and check DOT compliance
     const candidates: {
       driver: DriverInfo;
       score: number;
       reasons: string[];
       ownershipPct: number;
       matchType: string;
+      dotStatus: string;
     }[] = [];
 
     for (const driver of eligibleDrivers) {
       const currentCount = driverBlockCounts.get(driver.id) || 0;
       const pattern = driverPatterns[driver.name];
 
+      // Get full driver record for DOT validation
+      const fullDriver = driverMap.get(driver.id);
+      if (!fullDriver) continue;
+
+      // Combine existing assignments + new assignments made this run
+      const driverExistingAssignments = assignmentsByDriver.get(driver.id) || [];
+      const driverNewAssignments = newAssignmentsByDriver.get(driver.id) || [];
+      const allDriverAssignments = [
+        ...driverExistingAssignments,
+        ...driverNewAssignments.map(a => ({
+          ...blockAssignments.$inferInsert,
+          id: 'pending',
+          blockId: a.block.id,
+          driverId: driver.id,
+          tenantId,
+          isActive: true,
+          assignmentSource: 'auto' as const,
+          block: a.block,
+        })),
+      ] as Array<typeof blockAssignments.$inferSelect & { block: typeof blocks.$inferSelect }>;
+
+      // Run DOT validation
+      const dotResult = await validateBlockAssignment(
+        fullDriver,
+        blockToAssignmentSubject(fullBlock),
+        allDriverAssignments,
+        protectedRules,
+        allBlockAssignments,
+        fullBlock.id
+      );
+
+      // Skip if DOT validation fails
+      if (!dotResult.canAssign) {
+        continue;
+      }
+
       const result = calculateXGBoostScore(
         driver.name,
         driver.id,
+        driver.contractType,
         block,
         ownershipData,
         pattern,
         currentCount,
-        busyDates,
-        predictability
+        new Set(), // busyDates no longer needed - DOT validation handles it
+        unavailableDates,
+        priorityDrivers,
+        predictability,
+        minDays
       );
 
       if (result && result.score > 0) {
@@ -357,6 +693,7 @@ export async function matchDeterministic(
           reasons: result.reasons,
           ownershipPct: result.ownershipPct,
           matchType: result.matchType,
+          dotStatus: dotResult.validationResult.validationStatus,
         });
       }
     }
@@ -366,8 +703,13 @@ export async function matchDeterministic(
 
     if (candidates.length > 0) {
       const winner = candidates[0];
-      const dateKey = `${winner.driver.id}_${block.serviceDate}`;
-      busyDates.add(dateKey);
+
+      // Track this assignment for subsequent DOT validations
+      if (!newAssignmentsByDriver.has(winner.driver.id)) {
+        newAssignmentsByDriver.set(winner.driver.id, []);
+      }
+      newAssignmentsByDriver.get(winner.driver.id)!.push({ block: fullBlock });
+
       driverBlockCounts.set(winner.driver.id, (driverBlockCounts.get(winner.driver.id) || 0) + 1);
 
       // Determine confidence based on match type
@@ -399,10 +741,15 @@ export async function matchDeterministic(
       });
     } else {
       unassigned.push(block.id);
+      // Debug: Why no candidates? All drivers failed DOT validation
+      if (unassigned.length <= 5) {
+        console.log(`[XGBoost-Matcher] UNMATCHED block ${block.id} (${block.contractType} on ${block.serviceDate})`);
+        console.log(`  All ${eligibleDrivers.length} drivers failed DOT validation (10h rest, rolling hours, or protected rules)`);
+      }
     }
   }
 
-  console.log(`[XGBoost-Matcher] Complete: ${suggestions.length} assigned, ${unassigned.length} unassigned`);
+  console.log(`[XGBoost-Matcher] Complete: ${suggestions.length} assigned, ${unassigned.length} unassigned (${pythonCallCount} Python calls)`);
 
   // Log match quality breakdown
   const ownerMatches = suggestions.filter(s => s.matchType === 'owner').length;
@@ -417,6 +764,14 @@ export async function matchDeterministic(
   for (const s of topAssignments) {
     console.log(`  ${s.driverName}: ${s.reasons.join(" · ")} (score: ${s.score})`);
   }
+
+  // Log driver utilization summary
+  const utilizationCounts = [0, 0, 0, 0, 0, 0, 0]; // 0-6 days
+  for (const [, count] of driverBlockCounts) {
+    if (count <= 6) utilizationCounts[count]++;
+  }
+  const driversWithZero = driverInfos.length - driverBlockCounts.size;
+  console.log(`[XGBoost-Matcher] Driver utilization: ${driversWithZero} with 0d, ${utilizationCounts[1]} with 1d, ${utilizationCounts[2]} with 2d, ${utilizationCounts[3]} with 3d, ${utilizationCounts[4]} with 4d, ${utilizationCounts[5]} with 5d, ${utilizationCounts[6]} with 6d`);
 
   return {
     suggestions,
