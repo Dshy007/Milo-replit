@@ -31,6 +31,7 @@ import { findSwapCandidates, getAllDriverWorkloads } from "./workload-calculator
 import { analyzeCascadeEffect, executeCascadeChange, type CascadeAnalysisRequest } from "./cascade-analyzer";
 import { optimizeWithMilo, applyMiloSchedule } from "./milo-scheduler";
 import { matchDeterministic, applyDeterministicMatches } from "./deterministic-matcher";
+import { regenerateDNAFromBlockAssignments } from "./dna-analyzer";
 
 // Require SESSION_SECRET
 const SESSION_SECRET = process.env.SESSION_SECRET!;
@@ -5236,6 +5237,157 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
     } catch (error: any) {
       console.error("Python coverage analysis error:", error);
       res.status(500).json({ message: "Failed to analyze coverage", error: error.message });
+    }
+  });
+
+  // POST /api/analysis/drivers-xgboost - Analyze drivers using XGBoost patterns
+  // Returns drivers with their historical blocks from last 12 weeks
+  app.post("/api/analysis/drivers-xgboost", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const tenantId = req.session.tenantId!;
+
+      // 1. Query last 12 weeks of block assignments
+      const twelveWeeksAgo = subDays(new Date(), 84);
+
+      const assignments = await db
+        .select({
+          driverId: blockAssignments.driverId,
+          driverFirstName: drivers.firstName,
+          driverLastName: drivers.lastName,
+          blockDbId: blocks.id,
+          blockId: blocks.blockId,
+          serviceDate: blocks.serviceDate,
+          soloType: blocks.soloType,
+          tractorId: blocks.tractorId,
+          contractId: blocks.contractId,
+          startTimestamp: blocks.startTimestamp,
+          duration: blocks.duration,
+        })
+        .from(blockAssignments)
+        .innerJoin(blocks, eq(blockAssignments.blockId, blocks.id))
+        .innerJoin(drivers, eq(blockAssignments.driverId, drivers.id))
+        .where(and(
+          eq(blockAssignments.tenantId, tenantId),
+          eq(blockAssignments.isActive, true),
+          gte(blocks.serviceDate, twelveWeeksAgo)
+        ));
+
+      // 2. Get XGBoost patterns for all drivers
+      const { getAllDriverPatterns } = await import("./python-bridge");
+      const patternsResult = await getAllDriverPatterns();
+
+      const xgboostPatterns = patternsResult.success && patternsResult.data
+        ? patternsResult.data.patterns
+        : {};
+
+      // 3. Group blocks by driver
+      const driverBlocksMap = new Map<string, {
+        driverId: string;
+        driverName: string;
+        blocks: Array<{
+          id: string;
+          blockId: string;
+          serviceDate: Date;
+          soloType: string;
+          tractorId: string;
+          contractId: string;
+          startTimestamp: Date;
+          duration: number;
+        }>;
+      }>();
+
+      for (const assignment of assignments) {
+        const driverName = `${assignment.driverFirstName} ${assignment.driverLastName}`;
+
+        if (!driverBlocksMap.has(assignment.driverId)) {
+          driverBlocksMap.set(assignment.driverId, {
+            driverId: assignment.driverId,
+            driverName,
+            blocks: [],
+          });
+        }
+
+        driverBlocksMap.get(assignment.driverId)!.blocks.push({
+          id: assignment.blockDbId,
+          blockId: assignment.blockId,
+          serviceDate: assignment.serviceDate,
+          soloType: assignment.soloType,
+          tractorId: assignment.tractorId,
+          contractId: assignment.contractId,
+          startTimestamp: assignment.startTimestamp,
+          duration: assignment.duration,
+        });
+      }
+
+      // 4. Build response with driver patterns and their blocks
+      console.log(`[XGBoost Analysis] Processing ${driverBlocksMap.size} drivers, ${assignments.length} assignments`);
+
+      const driversWithBlocks = Array.from(driverBlocksMap.values()).map(driver => {
+        const pattern = xgboostPatterns[driver.driverName];
+
+        return {
+          driverId: driver.driverId,
+          driverName: driver.driverName,
+          matchingBlocks: driver.blocks.map(b => {
+            // Handle null/undefined dates safely
+            let serviceDateStr = '';
+            let startTimeStr = '';
+
+            try {
+              if (b.serviceDate) {
+                serviceDateStr = format(new Date(b.serviceDate), 'yyyy-MM-dd');
+              }
+            } catch (e) {
+              console.log(`[XGBoost] Error formatting serviceDate for block ${b.blockId}:`, b.serviceDate);
+            }
+
+            try {
+              if (b.startTimestamp) {
+                startTimeStr = format(new Date(b.startTimestamp), 'HH:mm');
+              }
+            } catch (e) {
+              console.log(`[XGBoost] Error formatting startTimestamp for block ${b.blockId}:`, b.startTimestamp);
+            }
+
+            return {
+              id: b.id,
+              blockId: b.blockId,
+              serviceDate: serviceDateStr,
+              soloType: b.soloType || '',
+              tractorId: b.tractorId || '',
+              startTime: startTimeStr,
+              duration: b.duration || 0,
+            };
+          }),
+          totalBlocks: driver.blocks.length,
+          pattern: pattern ? {
+            typicalDays: pattern.typical_days,
+            dayList: pattern.day_list,
+            dayCounts: pattern.day_counts,
+            confidence: pattern.confidence,
+          } : null,
+        };
+      });
+
+      // Sort by total blocks descending
+      driversWithBlocks.sort((a, b) => b.totalBlocks - a.totalBlocks);
+
+      console.log(`[XGBoost Analysis] Analyzed ${driversWithBlocks.length} drivers with ${assignments.length} total assignments from last 12 weeks`);
+
+      res.json({
+        success: true,
+        drivers: driversWithBlocks,
+        totalDrivers: driversWithBlocks.length,
+        totalBlocks: assignments.length,
+        analysisWindow: {
+          start: format(twelveWeeksAgo, 'yyyy-MM-dd'),
+          end: format(new Date(), 'yyyy-MM-dd'),
+          weeks: 12,
+        },
+      });
+    } catch (error: any) {
+      console.error("XGBoost driver analysis error:", error);
+      res.status(500).json({ message: "Failed to analyze drivers", error: error.message });
     }
   });
 

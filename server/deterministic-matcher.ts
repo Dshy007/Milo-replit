@@ -163,12 +163,12 @@ export async function matchDeterministic(
   console.log(`[XGBoost-Matcher] Starting for ${format(weekStart, "yyyy-MM-dd")} to ${format(weekEnd, "yyyy-MM-dd")}`);
 
   // 1. Get all active drivers (no DNA join needed)
+  // Note: soloType is NOT on drivers table - we get it from DNA profiles or XGBoost patterns
   const allDriversRaw = await db
     .select({
       id: drivers.id,
       firstName: drivers.firstName,
       lastName: drivers.lastName,
-      soloType: drivers.soloType,
     })
     .from(drivers)
     .where(
@@ -178,10 +178,11 @@ export async function matchDeterministic(
       )
     );
 
+  // Build driver infos - contract type will be determined from XGBoost patterns below
   const driverInfos: DriverInfo[] = allDriversRaw.map(d => ({
     id: d.id,
     name: `${d.firstName} ${d.lastName}`.trim(),
-    contractType: (d.soloType || "solo1").toLowerCase(),
+    contractType: "solo1", // Default, will be updated from XGBoost patterns
   }));
 
   console.log(`[XGBoost-Matcher] ${driverInfos.length} active drivers`);
