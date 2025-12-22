@@ -642,6 +642,29 @@ export function DriverPoolSidebar({
     };
   } | null>(null);
 
+  // XGBoost analysis results - stores historical blocks per driver
+  const [xgboostAnalysis, setXgboostAnalysis] = useState<{
+    drivers: Array<{
+      driverId: string;
+      driverName: string;
+      matchingBlocks: Array<{
+        blockId: string;
+        serviceDate: string;
+        startTime: string;
+        soloType: string;
+        tractorId: string;
+      }>;
+      totalBlocks: number;
+      pattern: {
+        preferredDays: string[];
+        preferredTimes: string[];
+        contractType: string;
+      } | null;
+    }>;
+    totalDrivers: number;
+    totalBlocks: number;
+  } | null>(null);
+
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -682,19 +705,26 @@ export function DriverPoolSidebar({
   });
 
 
-  // DNA Analysis mutation (Re-analyze all drivers)
+  // XGBoost Analysis mutation (Re-analyze all drivers using historical block data)
   const analyzeMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/driver-dna/analyze", {
-        dayThreshold: accuracyToThreshold(analysisAccuracy),
-      });
+      const res = await apiRequest("POST", "/api/analysis/drivers-xgboost", {});
       return res.json();
     },
     onSuccess: (result: any) => {
+      // Store the XGBoost analysis results for flip card display
+      if (result.success && result.drivers) {
+        setXgboostAnalysis({
+          drivers: result.drivers,
+          totalDrivers: result.totalDrivers,
+          totalBlocks: result.totalBlocks,
+        });
+      }
       queryClient.invalidateQueries({ queryKey: ["/api/driver-dna"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
       toast({
         title: "Analysis Complete",
-        description: `Analyzed ${result.totalDrivers} drivers successfully.`,
+        description: `Analyzed ${result.totalDrivers} drivers with ${result.totalBlocks} blocks from last ${result.analysisWindow?.weeks || 12} weeks.`,
       });
     },
     onError: (error: any) => {
@@ -818,6 +848,31 @@ export function DriverPoolSidebar({
   // - After 6 consecutive days: 34 hours off required
   // - Weekly max: Solo2 = 3 blocks, Solo1 = 6 blocks
   const getMatchingBlocks = (driverId: string): MatchingBlock[] => {
+    // If XGBoost analysis results are available, use them to show historical blocks
+    if (xgboostAnalysis) {
+      const driverAnalysis = xgboostAnalysis.drivers.find(d => d.driverId === driverId);
+      if (driverAnalysis && driverAnalysis.matchingBlocks.length > 0) {
+        // Convert XGBoost historical blocks to MatchingBlock format for flip card display
+        return driverAnalysis.matchingBlocks.map(block => ({
+          occurrence: {
+            occurrenceId: `xgboost-${block.blockId}-${block.serviceDate}`,
+            serviceDate: block.serviceDate,
+            startTime: block.startTime,
+            blockId: block.blockId,
+            driverName: driverAnalysis.driverName,
+            driverId: driverId,
+            contractType: block.soloType,
+            status: 'historical',
+            tractorId: block.tractorId,
+            assignmentId: null,
+            bumpMinutes: 0,
+            isCarryover: false,
+          },
+          matchScore: 1.0, // Historical blocks are 100% match (they actually happened)
+        }));
+      }
+    }
+
     const profile = dnaProfileMap.get(driverId);
     if (!profile) {
       return [];
