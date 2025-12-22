@@ -100,9 +100,12 @@ class OwnershipClassifier:
 
     def __init__(self):
         self.model = XGBClassifier(
-            n_estimators=100,
-            max_depth=6,
-            learning_rate=0.1,
+            n_estimators=300,
+            max_depth=8,
+            learning_rate=0.05,
+            min_child_weight=3,
+            subsample=0.8,
+            colsample_bytree=0.8,
             objective='multi:softprob',
             eval_metric='mlogloss',
             random_state=42,

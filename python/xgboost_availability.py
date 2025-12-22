@@ -55,9 +55,12 @@ class AvailabilityClassifier:
 
     def __init__(self):
         self.model = XGBClassifier(
-            n_estimators=100,
-            max_depth=6,
-            learning_rate=0.1,
+            n_estimators=300,
+            max_depth=8,
+            learning_rate=0.05,
+            min_child_weight=3,
+            subsample=0.8,
+            colsample_bytree=0.8,
             objective='binary:logistic',
             eval_metric='logloss',
             random_state=42,
@@ -593,6 +596,61 @@ def main():
             print(json.dumps({'probability': prob}))
         else:
             print(json.dumps({'error': 'Model not found'}))
+
+    elif action == "batch_predict":
+        """
+        Batch prediction for ALL drivers × ALL dates at once.
+        Much faster than calling predict() for each pair.
+
+        Input:
+        {
+            "action": "batch_predict",
+            "drivers": [
+                {"id": "driver1", "name": "Brian", "history": [{serviceDate: ...}, ...]},
+                {"id": "driver2", "name": "Ray", "history": [...]},
+                ...
+            ],
+            "dates": ["2025-12-15", "2025-12-16", ...]
+        }
+
+        Output:
+        {
+            "predictions": {
+                "driver1": {"2025-12-15": 0.9, "2025-12-16": 0.8, ...},
+                "driver2": {"2025-12-15": 0.7, ...},
+                ...
+            }
+        }
+        """
+        drivers = input_data.get('drivers', [])
+        dates = input_data.get('dates', [])
+
+        classifier = AvailabilityClassifier()
+        model_loaded = classifier.load()
+
+        predictions = {}
+
+        for driver in drivers:
+            driver_id = driver.get('id')
+            history = driver.get('history', [])
+
+            # Compute stats once per driver
+            stats = classifier._compute_driver_stats(driver_id, history)
+            classifier.driver_stats[driver_id] = stats
+
+            driver_predictions = {}
+            for date in dates:
+                prob = classifier.predict_availability(driver_id, date, history)
+                driver_predictions[date] = round(prob, 3)
+
+            predictions[driver_id] = driver_predictions
+
+        print(json.dumps({
+            'predictions': predictions,
+            'driverCount': len(drivers),
+            'dateCount': len(dates),
+            'totalPredictions': len(drivers) * len(dates)
+        }))
 
     elif action == "debug_features":
         # Debug: Show exact features for a driver-date pair

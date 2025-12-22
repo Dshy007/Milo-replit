@@ -17,7 +17,7 @@ import {
   insertSpecialRequestSchema, updateSpecialRequestSchema,
   insertDriverAvailabilityPreferenceSchema, updateDriverAvailabilityPreferenceSchema,
   blocks, blockAssignments, assignmentHistory, driverContractStats, drivers, protectedDriverRules,
-  shiftOccurrences, shiftTemplates, contracts, trucks, driverAvailabilityPreferences
+  shiftOccurrences, shiftTemplates, contracts, trucks, driverAvailabilityPreferences, driverDnaProfiles
 } from "@shared/schema";
 import { eq, and, inArray, sql, gte, lte, not, desc } from "drizzle-orm";
 import session from "express-session";
@@ -2803,6 +2803,169 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ==================== DRIVER DNA PROFILES ====================
+
+  // GET /api/driver-dna - Get all DNA profiles for tenant
+  app.get("/api/driver-dna", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+
+      // Get all DNA profiles for this tenant
+      const profiles = await db
+        .select()
+        .from(driverDnaProfiles)
+        .where(eq(driverDnaProfiles.tenantId, tenantId));
+
+      // Get stats
+      const stats = {
+        totalProfiles: profiles.length,
+        sunWedCount: profiles.filter(p => p.patternGroup === 'sunWed').length,
+        wedSatCount: profiles.filter(p => p.patternGroup === 'wedSat').length,
+        mixedCount: profiles.filter(p => p.patternGroup === 'mixed').length,
+        avgConsistency: profiles.length > 0
+          ? profiles.reduce((sum, p) => sum + (parseFloat(p.consistencyScore || '0')), 0) / profiles.length
+          : 0,
+      };
+
+      res.json({ profiles, stats });
+    } catch (error: any) {
+      console.error("Error fetching DNA profiles:", error);
+      res.status(500).json({ message: "Failed to fetch DNA profiles", error: error.message });
+    }
+  });
+
+  // GET /api/driver-dna/profiles - Get profiles as a map (for legacy compatibility)
+  app.get("/api/driver-dna/profiles", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+
+      const profilesList = await db
+        .select()
+        .from(driverDnaProfiles)
+        .where(eq(driverDnaProfiles.tenantId, tenantId));
+
+      // Convert to map keyed by driverId
+      const profiles: Record<string, any> = {};
+      for (const p of profilesList) {
+        profiles[p.driverId] = p;
+      }
+
+      res.json({ profiles });
+    } catch (error: any) {
+      console.error("Error fetching DNA profiles map:", error);
+      res.status(500).json({ message: "Failed to fetch DNA profiles", error: error.message });
+    }
+  });
+
+  // GET /api/driver-dna/:driverId - Get single driver's DNA profile
+  app.get("/api/driver-dna/:driverId", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { driverId } = req.params;
+
+      const profiles = await db
+        .select()
+        .from(driverDnaProfiles)
+        .where(
+          and(
+            eq(driverDnaProfiles.tenantId, tenantId),
+            eq(driverDnaProfiles.driverId, driverId)
+          )
+        )
+        .limit(1);
+
+      if (profiles.length === 0) {
+        return res.status(404).json({ message: "DNA profile not found" });
+      }
+
+      res.json(profiles[0]);
+    } catch (error: any) {
+      console.error("Error fetching DNA profile:", error);
+      res.status(500).json({ message: "Failed to fetch DNA profile", error: error.message });
+    }
+  });
+
+  // PATCH /api/driver-dna/:driverId - Update driver's DNA profile
+  app.patch("/api/driver-dna/:driverId", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { driverId } = req.params;
+      const updates = req.body;
+
+      // Check if profile exists
+      const existing = await db
+        .select()
+        .from(driverDnaProfiles)
+        .where(
+          and(
+            eq(driverDnaProfiles.tenantId, tenantId),
+            eq(driverDnaProfiles.driverId, driverId)
+          )
+        )
+        .limit(1);
+
+      if (existing.length === 0) {
+        // Create new profile
+        const newProfile = await db
+          .insert(driverDnaProfiles)
+          .values({
+            tenantId,
+            driverId,
+            ...updates,
+            lastAnalyzedAt: new Date(),
+          })
+          .returning();
+        return res.json(newProfile[0]);
+      }
+
+      // Update existing
+      const updated = await db
+        .update(driverDnaProfiles)
+        .set({
+          ...updates,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(driverDnaProfiles.tenantId, tenantId),
+            eq(driverDnaProfiles.driverId, driverId)
+          )
+        )
+        .returning();
+
+      res.json(updated[0]);
+    } catch (error: any) {
+      console.error("Error updating DNA profile:", error);
+      res.status(500).json({ message: "Failed to update DNA profile", error: error.message });
+    }
+  });
+
+  // POST /api/driver-dna/analyze - Trigger DNA analysis (stub for now)
+  app.post("/api/driver-dna/analyze", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+
+      // Get count of existing profiles
+      const profiles = await db
+        .select()
+        .from(driverDnaProfiles)
+        .where(eq(driverDnaProfiles.tenantId, tenantId));
+
+      // For now, just return existing profiles count
+      // Full analysis would re-run XGBoost pattern detection
+      res.json({
+        totalDrivers: profiles.length,
+        profilesCreated: 0,
+        profilesUpdated: profiles.length,
+        errors: 0,
+        message: "Using existing DNA profiles from XGBoost analysis",
+      });
+    } catch (error: any) {
+      console.error("Error in DNA analysis:", error);
+      res.status(500).json({ message: "Failed to analyze DNA", error: error.message });
+    }
+  });
+
   // ==================== CSV IMPORT ====================
 
   app.post("/api/import/:entityType", requireAuth, async (req, res) => {
@@ -3794,7 +3957,12 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
 
       const validMinDays = [3, 4, 5].includes(minDays) ? minDays : 3;
 
-      console.log(`[Deterministic API] Calculating matches for week starting ${format(weekStartDate, "yyyy-MM-dd")}`);
+      console.log(`[Deterministic API] ========================================`);
+      console.log(`[Deterministic API] Tenant ID: ${tenantId}`);
+      console.log(`[Deterministic API] Week Start: ${format(weekStartDate, "yyyy-MM-dd")}`);
+      console.log(`[Deterministic API] Contract Type: ${contractType || 'all'}`);
+      console.log(`[Deterministic API] Min Days: ${validMinDays}`);
+      console.log(`[Deterministic API] ========================================`);
 
       const result = await matchDeterministic(
         tenantId,

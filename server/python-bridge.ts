@@ -351,3 +351,66 @@ export async function predictSlotOwner(params: {
     canonicalTime: params.canonicalTime
   }));
 }
+
+// ============================================================
+// AVAILABILITY MODEL FUNCTIONS
+// ============================================================
+
+export interface DriverHistoryItem {
+  serviceDate: string;
+  soloType?: string;
+  tractorId?: string;
+}
+
+export interface BatchAvailabilityResult {
+  predictions: Record<string, Record<string, number>>; // driverId -> date -> probability
+  driverCount: number;
+  dateCount: number;
+  totalPredictions: number;
+}
+
+/**
+ * Get availability predictions for ALL drivers × ALL dates in one call.
+ * Much faster than calling individual predictions.
+ *
+ * @param drivers - Array of {id, name, history} for each driver
+ * @param dates - Array of date strings (YYYY-MM-DD) to predict
+ * @returns Predictions map: driverId -> date -> probability (0.0-1.0)
+ */
+export async function getBatchAvailability(
+  drivers: Array<{
+    id: string;
+    name: string;
+    history: DriverHistoryItem[];
+  }>,
+  dates: string[]
+): Promise<PythonResult<BatchAvailabilityResult>> {
+  console.log(`[Python Bridge] Getting batch availability for ${drivers.length} drivers × ${dates.length} dates`);
+
+  return runPythonScript('xgboost_availability.py', [], JSON.stringify({
+    action: 'batch_predict',
+    drivers: drivers.map(d => ({
+      id: d.id,
+      name: d.name,
+      history: d.history
+    })),
+    dates
+  }));
+}
+
+/**
+ * Get availability prediction for a single driver on a single date.
+ * Use getBatchAvailability() for multiple predictions - it's faster.
+ */
+export async function getDriverAvailability(
+  driverId: string,
+  date: string,
+  history: DriverHistoryItem[]
+): Promise<PythonResult<{ probability: number }>> {
+  return runPythonScript('xgboost_availability.py', [], JSON.stringify({
+    action: 'predict',
+    driverId,
+    date,
+    history
+  }));
+}
