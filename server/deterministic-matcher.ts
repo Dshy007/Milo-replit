@@ -20,7 +20,7 @@ import { db } from "./db";
 import { blocks, drivers, blockAssignments, contracts, specialRequests, protectedDriverRules, type Block, type Driver, type BlockAssignment } from "@shared/schema";
 import { eq, and, gte, lte, or, isNull, sql } from "drizzle-orm";
 import { format, endOfWeek, subWeeks, subDays, eachDayOfInterval, isWithinInterval, parseISO } from "date-fns";
-import { getSlotDistribution, getAllDriverPatterns, getBatchAvailability, SlotDistribution, DriverPattern, DriverHistoryItem } from "./python-bridge";
+import { getSlotDistribution, getAllDriverPatterns, getBatchSlotAffinity, SlotDistribution, DriverPattern, DriverHistoryItem, BlockSlotInfo } from "./python-bridge";
 import { validateBlockAssignment, blockToAssignmentSubject } from "./rolling6-calculator";
 
 /**
@@ -234,7 +234,7 @@ function calculateXGBoostScore(
   busyDates: Set<string>,
   unavailableDates: Map<string, Set<string>>,
   priorityDrivers: Map<string, number>,
-  availabilityCache: Map<string, number>, // XGBoost availability predictions: "driverId_date" -> probability
+  affinityCache: Map<string, number>, // Pattern affinity scores: "driverId_slotKey" -> score (0.0-1.0)
   predictability: number = 0.7,
   minDays: number = 3
 ): { score: number; reasons: string[]; ownershipPct: number; matchType: string } | null {
@@ -301,28 +301,31 @@ function calculateXGBoostScore(
   const ownershipScore = Math.max(0, Math.min(1.0, rawOwnership));
   const ownershipPct = Math.round(ownershipScore * 100);
 
-  // Get availability score from XGBoost availability model
-  // Cache key: "driverId_date" -> probability (0.0 to 1.0)
-  const availabilityCacheKey = `${driverId}_${block.serviceDate}`;
-  const xgboostAvailability = availabilityCache.get(availabilityCacheKey);
+  // Get PATTERN AFFINITY score from XGBoost (how well does this slot match driver's history?)
+  // This is pattern matching, not prediction. 1.0 = strong historical match, 0.0 = no match.
+  // Cache key: "driverId_soloType|tractorId|date" -> affinity score (0.0 to 1.0)
+  const slotKey = `${(block.soloType || 'solo1').toLowerCase()}|${block.tractorId || 'Tractor_1'}|${block.serviceDate}`;
+  const affinityCacheKey = `${driverId}_${slotKey}`;
+  const patternAffinity = affinityCache.get(affinityCacheKey);
 
-  // Use XGBoost prediction if available, otherwise fall back to day-list check
-  let availabilityScore: number;
-  if (xgboostAvailability !== undefined) {
-    // XGBoost returns probability 0.0-1.0 directly
-    availabilityScore = xgboostAvailability;
+  // Use pattern affinity if available, otherwise fall back to day-list check
+  let affinityScore: number;
+  if (patternAffinity !== undefined) {
+    // Pattern affinity score 0.0-1.0 (how well slot matches driver's history)
+    affinityScore = patternAffinity;
   } else {
-    // Fallback: simple day-list check
+    // Fallback: simple day-list check (less accurate)
     const dayNameLower = block.dayName.toLowerCase();
     const worksThisDay = driverPattern?.day_list?.some(
       d => d.toLowerCase() === dayNameLower
     ) ?? true;
-    availabilityScore = worksThisDay ? 1.0 : 0.6;
+    affinityScore = worksThisDay ? 1.0 : 0.6;
   }
 
-  // COMBINED SCORE FORMULA (same as original):
-  // Base = ownership × predictability + availability × (1 - predictability)
-  const baseScore = (ownershipScore * predictability) + (availabilityScore * (1 - predictability));
+  // COMBINED SCORE FORMULA:
+  // Base = ownership × weight + affinity × (1 - weight)
+  // Both scores are pattern-based: ownership (who owns the slot) + affinity (historical fit)
+  const baseScore = (ownershipScore * predictability) + (affinityScore * (1 - predictability));
 
   // Fairness bonus: prefer drivers with fewer days this week
   // Increased from 0.05 to 0.08 to better spread work across drivers
@@ -357,11 +360,11 @@ function calculateXGBoostScore(
   } else if (ownershipScore >= 0.30) {
     reasons.push(`◐ Shares slot (${ownershipPct}%)`);
     matchType = 'shared';
-  } else if (availabilityScore >= 0.70) {
-    reasons.push(`○ Avail ${Math.round(availabilityScore * 100)}%`);
-    matchType = 'available';
+  } else if (affinityScore >= 0.70) {
+    reasons.push(`○ Pattern ${Math.round(affinityScore * 100)}%`);
+    matchType = 'pattern';
   } else {
-    reasons.push(`△ Avail ${Math.round(availabilityScore * 100)}%`);
+    reasons.push(`△ Weak ${Math.round(affinityScore * 100)}%`);
     matchType = 'fallback';
   }
 
@@ -463,8 +466,15 @@ export async function matchDeterministic(
   console.log(`[XGBoost-Matcher] Types: ${solo1Count} Solo1, ${solo2Count} Solo2, ${bothCount} Both`);
 
   // 2. Load ALL driver patterns from XGBoost (single call)
+  // If patterns are stale or missing, this will use the trained model from "Re-analyze" button
   console.log(`[XGBoost-Matcher] Loading driver patterns from XGBoost...`);
-  const patternsResult = await getAllDriverPatterns();
+  let patternsResult = await getAllDriverPatterns();
+
+  // If no patterns found, the model may not be trained - warn user
+  if (!patternsResult.success || !patternsResult.data?.patterns || Object.keys(patternsResult.data.patterns).length === 0) {
+    console.log(`[XGBoost-Matcher] WARNING: No driver patterns found. User should click "Re-analyze Driver Patterns" first.`);
+  }
+
   const driverPatterns: Record<string, DriverPattern> =
     patternsResult.success && patternsResult.data?.patterns
       ? patternsResult.data.patterns
@@ -619,12 +629,18 @@ export async function matchDeterministic(
 
   console.log(`[XGBoost-Matcher] ${blockInfos.length} unassigned blocks to match`);
 
-  // 9. Call XGBoost Availability Model - ONE batch call for ALL drivers × ALL dates
-  const availabilityCache = new Map<string, number>(); // "driverId_date" -> probability
+  // 9. Score Slot Pattern Affinity - ONE batch call for ALL drivers × ALL blocks
+  // This is PATTERN MATCHING, not prediction. We score how well each slot matches each driver's history.
+  // Cache key: "driverId_soloType|tractorId|date" -> affinity score (0.0-1.0)
+  const affinityCache = new Map<string, number>();
 
   if (blockInfos.length > 0 && driverInfos.length > 0) {
-    // Get unique dates from blocks
-    const uniqueDates = [...new Set(blockInfos.map(b => b.serviceDate))];
+    // Build unique block slot info (date + soloType + tractorId combinations)
+    const blockSlots: BlockSlotInfo[] = blockInfos.map(b => ({
+      date: b.serviceDate,
+      soloType: b.soloType || 'solo1',
+      tractorId: b.tractorId || 'Tractor_1',
+    }));
 
     // Build driver history from existing assignments (last 12 weeks)
     const driversWithHistory = driverInfos.map(driver => {
@@ -642,20 +658,21 @@ export async function matchDeterministic(
       };
     });
 
-    console.log(`[XGBoost-Matcher] Calling availability model: ${driversWithHistory.length} drivers × ${uniqueDates.length} dates`);
+    console.log(`[XGBoost-Matcher] Scoring pattern affinity: ${driversWithHistory.length} drivers × ${blockSlots.length} slots`);
 
-    const availResult = await getBatchAvailability(driversWithHistory, uniqueDates);
+    const affinityResult = await getBatchSlotAffinity(driversWithHistory, blockSlots);
 
-    if (availResult.success && availResult.data?.predictions) {
-      // Flatten predictions into cache: "driverId_date" -> probability
-      for (const [driverId, dateProbs] of Object.entries(availResult.data.predictions)) {
-        for (const [date, prob] of Object.entries(dateProbs as Record<string, number>)) {
-          availabilityCache.set(`${driverId}_${date}`, prob);
+    if (affinityResult.success && affinityResult.data?.predictions) {
+      // Cache affinity scores: "driverId_soloType|tractorId|date" -> score
+      for (const [driverId, slotScores] of Object.entries(affinityResult.data.predictions)) {
+        for (const [slotKey, score] of Object.entries(slotScores as Record<string, number>)) {
+          // slotKey is "soloType|tractorId|date"
+          affinityCache.set(`${driverId}_${slotKey}`, score);
         }
       }
-      console.log(`[XGBoost-Matcher] Availability model returned ${availabilityCache.size} predictions`);
+      console.log(`[XGBoost-Matcher] Pattern affinity scored ${affinityCache.size} driver-slot pairs`);
     } else {
-      console.log(`[XGBoost-Matcher] Availability model failed, using fallback: ${availResult.error || 'unknown error'}`);
+      console.log(`[XGBoost-Matcher] Pattern scoring failed, using fallback: ${affinityResult.error || 'unknown error'}`);
     }
   }
 
@@ -802,7 +819,7 @@ export async function matchDeterministic(
         new Set(), // busyDates no longer needed - DOT validation handles it
         unavailableDates,
         priorityDrivers,
-        availabilityCache, // XGBoost availability predictions
+        affinityCache, // Pattern affinity scores (historical fit)
         predictability,
         minDays
       );

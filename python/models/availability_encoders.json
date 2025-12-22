@@ -1,0 +1,18 @@
+{
+  "solo_type_classes": [
+    "solo1",
+    "solo2"
+  ],
+  "tractor_classes": [
+    "Tractor_1",
+    "Tractor_10",
+    "Tractor_2",
+    "Tractor_3",
+    "Tractor_4",
+    "Tractor_5",
+    "Tractor_6",
+    "Tractor_7",
+    "Tractor_8",
+    "Tractor_9"
+  ]
+}

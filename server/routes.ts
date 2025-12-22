@@ -5408,11 +5408,13 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
     }
   });
 
-  // POST /api/analysis/drivers-xgboost - Analyze drivers using XGBoost patterns
-  // Returns drivers with their historical blocks from last 12 weeks
+  // POST /api/analysis/drivers-xgboost - Analyze and TRAIN XGBoost models with real data
+  // This endpoint TRAINS the models using historical block assignments, then returns patterns
   app.post("/api/analysis/drivers-xgboost", requireAuth, async (req: Request, res: Response) => {
     try {
       const tenantId = req.session.tenantId!;
+
+      console.log(`[XGBoost] Starting analysis and training for tenant ${tenantId}`);
 
       // 1. Query last 12 weeks of block assignments
       const twelveWeeksAgo = subDays(new Date(), 84);
@@ -5440,7 +5442,51 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
           gte(blocks.serviceDate, twelveWeeksAgo)
         ));
 
-      // 2. Get XGBoost patterns for all drivers
+      console.log(`[XGBoost] Found ${assignments.length} assignments from last 12 weeks`);
+
+      // 2. Format data for XGBoost training
+      const { trainAllModels } = await import("./python-bridge");
+
+      // Format for Ownership model: each assignment with slot details
+      const trainingAssignments = assignments.map(a => {
+        const serviceDate = new Date(a.serviceDate);
+        const dayOfWeek = serviceDate.getDay(); // 0=Sunday, 6=Saturday
+        const startTime = a.startTimestamp ? format(new Date(a.startTimestamp), 'HH:mm') : '00:00';
+
+        return {
+          driverId: a.driverId,
+          driverName: `${a.driverFirstName} ${a.driverLastName}`.trim(),
+          soloType: (a.soloType || 'solo1').toLowerCase(),
+          tractorId: a.tractorId || 'Tractor_1',
+          dayOfWeek,
+          serviceDate: format(serviceDate, 'yyyy-MM-dd'),
+          startTime,
+        };
+      });
+
+      // Format for Availability model: group by driver
+      const driverHistories: Record<string, DriverHistoryItem[]> = {};
+      for (const a of assignments) {
+        const driverId = a.driverId;
+        if (!driverHistories[driverId]) {
+          driverHistories[driverId] = [];
+        }
+        driverHistories[driverId].push({
+          serviceDate: format(new Date(a.serviceDate), 'yyyy-MM-dd'),
+          soloType: a.soloType || undefined,
+          tractorId: a.tractorId || undefined,
+        });
+      }
+
+      console.log(`[XGBoost] Training models with ${trainingAssignments.length} assignments, ${Object.keys(driverHistories).length} drivers`);
+
+      // 3. TRAIN both XGBoost models with real data
+      const trainingResults = await trainAllModels(trainingAssignments, driverHistories);
+
+      console.log(`[XGBoost] Ownership training: ${trainingResults.ownership.success ? 'SUCCESS' : 'FAILED'}`);
+      console.log(`[XGBoost] Availability training: ${trainingResults.availability.success ? 'SUCCESS' : 'FAILED'}`);
+
+      // 4. Get patterns from freshly trained models
       const { getAllDriverPatterns } = await import("./python-bridge");
       const patternsResult = await getAllDriverPatterns();
 
@@ -5448,7 +5494,7 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
         ? patternsResult.data.patterns
         : {};
 
-      // 3. Group blocks by driver
+      // 5. Group blocks by driver for response
       const driverBlocksMap = new Map<string, {
         driverId: string;
         driverName: string;
@@ -5551,6 +5597,18 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
           start: format(twelveWeeksAgo, 'yyyy-MM-dd'),
           end: format(new Date(), 'yyyy-MM-dd'),
           weeks: 12,
+        },
+        training: {
+          ownership: {
+            success: trainingResults.ownership.success,
+            accuracy: trainingResults.ownership.data?.accuracy,
+            samples: trainingResults.ownership.data?.samples,
+          },
+          availability: {
+            success: trainingResults.availability.success,
+            accuracy: trainingResults.availability.data?.accuracy,
+            samples: trainingResults.availability.data?.samples,
+          },
         },
       });
     } catch (error: any) {

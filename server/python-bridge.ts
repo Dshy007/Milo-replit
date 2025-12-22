@@ -362,30 +362,46 @@ export interface DriverHistoryItem {
   tractorId?: string;
 }
 
-export interface BatchAvailabilityResult {
-  predictions: Record<string, Record<string, number>>; // driverId -> date -> probability
+export interface BatchAffinityResult {
+  // Affinity scores (pattern strength), NOT predictions
+  // Key: driverId -> slotKey -> affinity score (0.0-1.0)
+  predictions: Record<string, Record<string, number>>; // 'predictions' kept for backward compat
   driverCount: number;
-  dateCount: number;
+  blockCount: number;
   totalPredictions: number;
 }
 
+// Backward compatibility alias
+export type BatchAvailabilityResult = BatchAffinityResult;
+
+export interface BlockSlotInfo {
+  date: string;
+  soloType: string;
+  tractorId: string;
+}
+
 /**
- * Get availability predictions for ALL drivers × ALL dates in one call.
- * Much faster than calling individual predictions.
+ * Score slot PATTERN AFFINITY for ALL drivers × ALL blocks.
  *
- * @param drivers - Array of {id, name, history} for each driver
- * @param dates - Array of date strings (YYYY-MM-DD) to predict
- * @returns Predictions map: driverId -> date -> probability (0.0-1.0)
+ * This is PATTERN MATCHING, not prediction.
+ * Question answered: "How well does Solo1_Tractor_1_Monday match Driver X's historical pattern?"
+ * NOT: "Will Driver X work this slot?" (we don't predict the future)
+ *
+ * @param drivers - Array of {id, name, history} for each driver (history must include soloType, tractorId)
+ * @param blocks - Array of {date, soloType, tractorId} to score
+ * @returns Affinity scores: driverId -> "soloType|tractorId|date" -> score (0.0-1.0)
+ *          1.0 = Strong historical match (driver frequently worked this exact slot)
+ *          0.0 = No historical match (driver never worked this slot)
  */
-export async function getBatchAvailability(
+export async function getBatchSlotAffinity(
   drivers: Array<{
     id: string;
     name: string;
     history: DriverHistoryItem[];
   }>,
-  dates: string[]
-): Promise<PythonResult<BatchAvailabilityResult>> {
-  console.log(`[Python Bridge] Getting batch availability for ${drivers.length} drivers × ${dates.length} dates`);
+  blocks: BlockSlotInfo[]
+): Promise<PythonResult<BatchAffinityResult>> {
+  console.log(`[Python Bridge] Scoring pattern affinity for ${drivers.length} drivers × ${blocks.length} slots`);
 
   return runPythonScript('xgboost_availability.py', [], JSON.stringify({
     action: 'batch_predict',
@@ -394,8 +410,33 @@ export async function getBatchAvailability(
       name: d.name,
       history: d.history
     })),
-    dates
+    blocks
   }));
+}
+
+// Backward compatibility alias
+export const getBatchSlotAvailability = getBatchSlotAffinity;
+
+/**
+ * DEPRECATED: Use getBatchSlotAffinity for slot-aware pattern matching.
+ */
+export async function getBatchAvailability(
+  drivers: Array<{
+    id: string;
+    name: string;
+    history: DriverHistoryItem[];
+  }>,
+  dates: string[]
+): Promise<PythonResult<BatchAffinityResult>> {
+  console.log(`[Python Bridge] WARNING: getBatchAvailability is deprecated. Use getBatchSlotAffinity.`);
+
+  const blocks: BlockSlotInfo[] = dates.map(date => ({
+    date,
+    soloType: 'solo1',
+    tractorId: 'Tractor_1'
+  }));
+
+  return getBatchSlotAffinity(drivers, blocks);
 }
 
 /**
@@ -413,4 +454,92 @@ export async function getDriverAvailability(
     date,
     history
   }));
+}
+
+// ============================================================================
+// XGBoost Training Functions
+// ============================================================================
+
+export interface TrainingAssignment {
+  driverId: string;
+  driverName: string;
+  soloType: string;
+  tractorId: string;
+  dayOfWeek: number;
+  serviceDate: string;
+  startTime?: string;
+}
+
+export interface TrainingResult {
+  success: boolean;
+  message?: string;
+  accuracy?: number;
+  samples?: number;
+  drivers?: number;
+  slots?: number;
+}
+
+/**
+ * Train the XGBoost Ownership model with historical assignments.
+ * This teaches the model who typically works each slot (soloType + tractor + day + time).
+ *
+ * @param assignments - Array of historical block assignments
+ * @returns Training result with accuracy metrics
+ */
+export async function trainOwnershipModel(
+  assignments: TrainingAssignment[]
+): Promise<PythonResult<TrainingResult>> {
+  console.log(`[Python Bridge] Training ownership model with ${assignments.length} assignments`);
+
+  return runPythonScript('xgboost_ownership.py', [], JSON.stringify({
+    action: 'train',
+    assignments
+  }));
+}
+
+/**
+ * Train the XGBoost Availability model with driver histories.
+ * This teaches the model which days each driver typically works.
+ *
+ * @param driverHistories - Map of driverId to their assignment history
+ * @returns Training result with accuracy metrics
+ */
+export async function trainAvailabilityModel(
+  driverHistories: Record<string, DriverHistoryItem[]>
+): Promise<PythonResult<TrainingResult>> {
+  console.log(`[Python Bridge] Training availability model with ${Object.keys(driverHistories).length} drivers`);
+
+  return runPythonScript('xgboost_availability.py', [], JSON.stringify({
+    action: 'train',
+    histories: driverHistories
+  }));
+}
+
+/**
+ * Train BOTH XGBoost models (ownership + availability) with historical data.
+ * Call this when user clicks "Re-analyze" to refresh all patterns.
+ *
+ * @param assignments - Historical block assignments for ownership model
+ * @param driverHistories - Driver histories for availability model
+ * @returns Combined training results
+ */
+export async function trainAllModels(
+  assignments: TrainingAssignment[],
+  driverHistories: Record<string, DriverHistoryItem[]>
+): Promise<{
+  ownership: PythonResult<TrainingResult>;
+  availability: PythonResult<TrainingResult>;
+}> {
+  console.log(`[Python Bridge] Training ALL models: ${assignments.length} assignments, ${Object.keys(driverHistories).length} drivers`);
+
+  // Train both models in parallel
+  const [ownershipResult, availabilityResult] = await Promise.all([
+    trainOwnershipModel(assignments),
+    trainAvailabilityModel(driverHistories)
+  ]);
+
+  return {
+    ownership: ownershipResult,
+    availability: availabilityResult
+  };
 }
