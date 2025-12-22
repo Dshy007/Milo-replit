@@ -96,6 +96,12 @@ const navItems = [
     icon: Cpu,
     testId: "nav-ai-scheduler",
   },
+  {
+    title: "Driver Profiles",
+    url: "/driver-profiles",
+    icon: User,
+    testId: "nav-driver-profiles",
+  },
 ];
 
 type Message = {

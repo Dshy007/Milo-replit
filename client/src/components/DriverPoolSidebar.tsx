@@ -12,6 +12,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { Slider } from "@/components/ui/slider";
 import { DNAPatternBadge } from "@/components/DNAPatternBadge";
 import { ContractTypeBadge } from "@/components/ContractTypeBadge";
+import { AutoMatchPreviewModal, type MatchSuggestion } from "@/components/AutoMatchPreviewModal";
+import { DriverCirclePacking, type MatchedBlock } from "@/components/charts/DriverCirclePacking";
 import { useLocation } from "wouter";
 import { getMatchColor, cn } from "@/lib/utils";
 import type { Driver, DriverDnaProfile } from "@shared/schema";
@@ -160,11 +162,13 @@ interface DraggableDriverProps {
   isSelected?: boolean;
   matchingBlocks?: MatchingBlock[];
   onBlockClick?: (occurrenceId: string, driverId: string) => void;
+  onApplyBlocks?: (blockIds: string[], driverId: string) => void;
+  isApplyingBlocks?: boolean;
   totalBlocksAnalyzed?: number;
 }
 
 // Draggable driver flip card component
-function DraggableDriver({ driver, dnaProfile, onHoverStart, onHoverEnd, onSelect, isSelected, matchingBlocks = [], onBlockClick, totalBlocksAnalyzed = 0 }: DraggableDriverProps) {
+function DraggableDriver({ driver, dnaProfile, onHoverStart, onHoverEnd, onSelect, isSelected, matchingBlocks = [], onBlockClick, onApplyBlocks, isApplyingBlocks = false, totalBlocksAnalyzed = 0 }: DraggableDriverProps) {
   // Track blocks that are "floating away" after being assigned
   const [floatingAwayBlocks, setFloatingAwayBlocks] = useState<Set<string>>(new Set());
   const cardRef = useRef<HTMLDivElement>(null);
@@ -214,10 +218,33 @@ function DraggableDriver({ driver, dnaProfile, onHoverStart, onHoverEnd, onSelec
     return sorted.map(d => DAY_ABBREV[d.toLowerCase()] || d.slice(0, 3)).join(", ");
   };
 
-  // Calculate height based on whether it's flipped and how many blocks to show
-  const blocksToShow = Math.min(matchingBlocks.length, 4);
+  // Transform matchingBlocks to CirclePacking format
+  const circlePackingBlocks: MatchedBlock[] = useMemo(() => {
+    return matchingBlocks.map(({ occurrence: occ, matchScore }) => {
+      const date = new Date(occ.serviceDate + 'T00:00:00');
+      const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      return {
+        blockId: occ.occurrenceId,
+        serviceDate: occ.serviceDate,
+        dayOfWeek: dayNames[date.getDay()],
+        startTime: occ.startTime,
+        contractType: occ.contractType || 'Solo1',
+        score: matchScore,
+        tractorId: occ.tractorId || undefined,
+      };
+    });
+  }, [matchingBlocks]);
+
+  // Handle apply blocks from CirclePacking
+  const handleApplyBlocks = (blockIds: string[]) => {
+    if (onApplyBlocks) {
+      onApplyBlocks(blockIds, driver.id);
+    }
+  };
+
+  // Calculate height based on whether it's flipped and if using CirclePacking
   const cardHeight = isFlipped
-    ? (dnaProfile ? 120 + blocksToShow * 32 : 100) // Base height + blocks
+    ? (dnaProfile && matchingBlocks.length > 0 ? 380 : dnaProfile ? 120 : 100) // Taller for CirclePacking
     : 40;
 
   return (
@@ -332,116 +359,16 @@ function DraggableDriver({ driver, dnaProfile, onHoverStart, onHoverEnd, onSelec
                 </span>
               </div>
 
-              {/* Matching Blocks List */}
+              {/* CirclePacking Visualization */}
               {matchingBlocks.length > 0 ? (
-                <div className="space-y-1">
-                  <div className="flex flex-col gap-0.5">
-                    <div className="text-[9px] font-semibold text-purple-700 dark:text-purple-300 flex items-center gap-1">
-                      <Sparkles className="w-2.5 h-2.5" />
-                      Matching Blocks ({matchingBlockCount})
-                    </div>
-                    <div className="text-[8px] text-muted-foreground">
-                      {totalBlocksAnalyzed} blocks analyzed, {matchingBlockCount} matched
-                    </div>
-                  </div>
-                  {matchingBlocks.slice(0, 4).map(({ occurrence: occ, matchScore }) => {
-                    const date = new Date(occ.serviceDate + 'T00:00:00');
-                    const dayAbbrev = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][date.getDay()];
-                    const dateStr = `${date.getMonth() + 1}/${date.getDate()}`;
-                    const scorePercent = Math.round(matchScore * 100);
-                    const scoreColor = scorePercent >= 75 ? 'text-emerald-600 dark:text-emerald-400' :
-                                       scorePercent >= 50 ? 'text-green-600 dark:text-green-400' :
-                                       'text-lime-600 dark:text-lime-400';
-                    const isFloatingAway = floatingAwayBlocks.has(occ.occurrenceId);
-
-                    return (
-                      <button
-                        key={occ.occurrenceId}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (isFloatingAway) return; // Already clicked
-
-                          // Calculate which blocks conflict with this one (DOT rules)
-                          // Solo1: 12hr block + 10hr rest = 22hr from start to next start
-                          // Solo2: 24hr block + 10hr rest = 34hr from start to next start
-                          const clickedDatetime = new Date(`${occ.serviceDate}T${occ.startTime}:00`);
-                          const isSolo2 = dnaProfile?.preferredContractType?.toLowerCase() === 'solo2';
-                          const BLOCK_DURATION_HOURS = isSolo2 ? 24 : 12;
-                          const REST_HOURS = 10;
-                          const minGapMs = (BLOCK_DURATION_HOURS + REST_HOURS) * 60 * 60 * 1000;
-
-                          // Find all conflicting blocks and mark them all as floating away
-                          const conflictingIds = new Set<string>([occ.occurrenceId]);
-                          for (const match of matchingBlocks) {
-                            const matchDatetime = new Date(`${match.occurrence.serviceDate}T${match.occurrence.startTime}:00`);
-                            // Check if match is within gap window after clicked block
-                            const timeDiffForward = matchDatetime.getTime() - clickedDatetime.getTime();
-                            // Check if clicked block is within gap window after match
-                            const timeDiffBackward = clickedDatetime.getTime() - matchDatetime.getTime();
-
-                            // Conflict if either block is within the min gap window of the other
-                            if ((timeDiffForward >= 0 && timeDiffForward < minGapMs) ||
-                                (timeDiffBackward >= 0 && timeDiffBackward < minGapMs)) {
-                              conflictingIds.add(match.occurrence.occurrenceId);
-                            }
-                          }
-
-                          // Mark clicked block AND all conflicting blocks as floating away
-                          setFloatingAwayBlocks(prev => new Set([...prev, ...conflictingIds]));
-
-                          // Call the assignment handler
-                          onBlockClick?.(occ.occurrenceId, driver.id);
-
-                          // Remove from local state after animation completes
-                          // The actual removal from matchingBlocks happens via query invalidation
-                          setTimeout(() => {
-                            setFloatingAwayBlocks(prev => {
-                              const next = new Set(prev);
-                              for (const id of conflictingIds) {
-                                next.delete(id);
-                              }
-                              return next;
-                            });
-                          }, 800);
-                        }}
-                        disabled={isFloatingAway}
-                        className={`
-                          w-full flex items-center justify-between px-1.5 py-1 rounded
-                          border transition-all text-[10px] group
-                          ${isFloatingAway
-                            ? 'animate-float-away bg-green-200 dark:bg-green-800 border-green-400 opacity-0 translate-y-[-20px] scale-95'
-                            : 'bg-white/60 dark:bg-slate-800/60 border-purple-200 dark:border-purple-700 hover:bg-green-100 dark:hover:bg-green-900/40 hover:border-green-400'
-                          }
-                        `}
-                        style={{
-                          transition: isFloatingAway ? 'all 0.6s ease-out' : 'all 0.2s ease',
-                        }}
-                      >
-                        <span className={`font-mono font-medium truncate ${isFloatingAway ? 'text-green-700' : 'group-hover:text-green-700 dark:group-hover:text-green-300'}`}>
-                          {isFloatingAway ? '✓ ' : ''}{occ.blockId}
-                        </span>
-                        <span className="flex items-center gap-1 text-muted-foreground">
-                          <span className={`px-1 py-0.5 rounded text-[8px] font-bold ${
-                            occ.contractType?.toLowerCase() === 'solo2'
-                              ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                              : occ.contractType?.toLowerCase() === 'team'
-                              ? 'bg-orange-500/20 text-orange-400 border border-orange-500/30'
-                              : 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'
-                          }`}>
-                            {occ.contractType?.toUpperCase() || 'S1'}
-                          </span>
-                          <span>{dayAbbrev} {dateStr}</span>
-                          <span>@ {occ.startTime}</span>
-                          <span className={`font-bold ${isFloatingAway ? 'text-green-600' : scoreColor} group-hover:text-green-600`}>{scorePercent}%</span>
-                        </span>
-                      </button>
-                    );
-                  })}
-                  {matchingBlocks.length > 4 && (
-                    <div className="text-[9px] text-center text-muted-foreground">
-                      +{matchingBlocks.length - 4} more
-                    </div>
-                  )}
+                <div className="flex-1 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                  <DriverCirclePacking
+                    driverName={`${driver.firstName} ${driver.lastName}`}
+                    matchedBlocks={circlePackingBlocks}
+                    onApply={handleApplyBlocks}
+                    isApplying={isApplyingBlocks}
+                    height={280}
+                  />
                 </div>
               ) : (
                 <div className="text-[10px] text-center text-muted-foreground py-2 italic">
@@ -471,6 +398,7 @@ interface DriverPoolSidebarProps {
   selectedDriverId?: string | null;
   unassignedOccurrences?: ShiftOccurrence[];
   onBlockClick?: (occurrenceId: string, driverId: string) => void;
+  onApplyBlocks?: (blockIds: string[], driverId: string) => void;
   onMatchingBlocksChange?: (matchingBlockIds: string[]) => void;
 }
 
@@ -690,6 +618,7 @@ export function DriverPoolSidebar({
   selectedDriverId,
   unassignedOccurrences = [],
   onBlockClick,
+  onApplyBlocks,
   onMatchingBlocksChange,
 }: DriverPoolSidebarProps) {
   const [searchQuery, setSearchQuery] = useState("");
@@ -702,14 +631,10 @@ export function DriverPoolSidebar({
   const [strategy, setStrategy] = useState<ScheduleStrategy | null>(null);
   const [showStrategyOptions, setShowStrategyOptions] = useState(false);
   const [analysisAccuracy, setAnalysisAccuracy] = useState(75); // 0-100%, default 75% (confident)
-  const [orToolsResult, setOrToolsResult] = useState<{
-    suggestions: Array<{
-      blockId: string;
-      driverId: string;
-      driverName: string;
-      confidence: number;
-      matchType: string;
-    }>;
+  const [showPreviewModal, setShowPreviewModal] = useState(false);
+  const [previewData, setPreviewData] = useState<{
+    suggestions: MatchSuggestion[];
+    unassigned: string[];
     stats: {
       totalBlocks: number;
       assigned: number;
@@ -732,11 +657,13 @@ export function DriverPoolSidebar({
     },
     onSuccess: (data) => {
       if (data.success) {
-        setOrToolsResult(data);
-        toast({
-          title: "Auto-Match Complete",
-          description: `Found ${data.stats.assigned} matches for ${data.stats.totalBlocks} blocks`,
+        // Open preview modal with suggestions
+        setPreviewData({
+          suggestions: data.suggestions,
+          unassigned: data.unassigned || [],
+          stats: data.stats,
         });
+        setShowPreviewModal(true);
       } else {
         toast({
           title: "Matching Failed",
@@ -754,37 +681,6 @@ export function DriverPoolSidebar({
     },
   });
 
-  // Apply deterministic suggestions mutation
-  const applyMatchesMutation = useMutation({
-    mutationFn: async (assignments: Array<{ blockId: string; driverId: string }>) => {
-      const response = await apiRequest("POST", "/api/matching/deterministic/apply", { assignments });
-      return response.json();
-    },
-    onSuccess: (data) => {
-      if (data.success) {
-        toast({
-          title: "Assignments Applied",
-          description: `Successfully assigned ${data.applied} blocks`,
-        });
-        setOrToolsResult(null);
-        // Invalidate calendar to refresh
-        queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
-      } else {
-        toast({
-          title: "Apply Failed",
-          description: data.message || "Unknown error",
-          variant: "destructive",
-        });
-      }
-    },
-    onError: (error: Error) => {
-      toast({
-        title: "Apply Error",
-        description: error.message,
-        variant: "destructive",
-      });
-    },
-  });
 
   // DNA Analysis mutation (Re-analyze all drivers)
   const analyzeMutation = useMutation({
@@ -1199,46 +1095,6 @@ export function DriverPoolSidebar({
               </>
             )}
           </Button>
-          {orToolsResult && (
-            <div className="mt-2 p-2 rounded-lg bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800">
-              <div className="text-xs text-purple-700 dark:text-purple-300 mb-2">
-                <span className="font-semibold">{orToolsResult.stats.assigned}</span> matches found
-                {orToolsResult.stats.unassigned > 0 && (
-                  <span className="text-amber-600 dark:text-amber-400 ml-2">
-                    ({orToolsResult.stats.unassigned} unmatched)
-                  </span>
-                )}
-              </div>
-              <div className="flex gap-2">
-                <Button
-                  size="sm"
-                  className="flex-1 h-7 text-xs bg-green-600 hover:bg-green-700"
-                  onClick={() => {
-                    const assignments = orToolsResult.suggestions.map(s => ({
-                      blockId: s.blockId,
-                      driverId: s.driverId,
-                    }));
-                    applyMatchesMutation.mutate(assignments);
-                  }}
-                  disabled={applyMatchesMutation.isPending}
-                >
-                  {applyMatchesMutation.isPending ? (
-                    <Loader2 className="w-3 h-3 animate-spin" />
-                  ) : (
-                    "Apply All"
-                  )}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-7 text-xs"
-                  onClick={() => setOrToolsResult(null)}
-                >
-                  Cancel
-                </Button>
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Search */}
@@ -1415,6 +1271,7 @@ export function DriverPoolSidebar({
                     isSelected={true}
                     matchingBlocks={remainingMatches}
                     onBlockClick={onBlockClick}
+                    onApplyBlocks={onApplyBlocks}
                     totalBlocksAnalyzed={unassignedOccurrences.length}
                   />
                   {isAssigned && assignments.length > 0 && (
@@ -1474,6 +1331,7 @@ export function DriverPoolSidebar({
                       isSelected={selectedDriverId === driver.id}
                       matchingBlocks={getMatchingBlocks(driver.id)}
                       onBlockClick={onBlockClick}
+                      onApplyBlocks={onApplyBlocks}
                       totalBlocksAnalyzed={unassignedOccurrences.length}
                     />
                   ))
@@ -1533,6 +1391,7 @@ export function DriverPoolSidebar({
                           isSelected={selectedDriverId === driver.id}
                           matchingBlocks={remainingMatches} // Show remaining matches (excluding assigned dates)
                           onBlockClick={onBlockClick}
+                          onApplyBlocks={onApplyBlocks}
                           totalBlocksAnalyzed={unassignedOccurrences.length}
                         />
                         <div className="text-xs text-blue-700 dark:text-blue-300 font-medium pl-6">
@@ -1599,6 +1458,20 @@ export function DriverPoolSidebar({
           </div>
         </div>
       </ScrollArea>
+
+      {/* Auto-Match Preview Modal */}
+      {previewData && (
+        <AutoMatchPreviewModal
+          isOpen={showPreviewModal}
+          onClose={() => {
+            setShowPreviewModal(false);
+            setPreviewData(null);
+          }}
+          suggestions={previewData.suggestions}
+          unassigned={previewData.unassigned}
+          stats={previewData.stats}
+        />
+      )}
     </div>
   );
 }

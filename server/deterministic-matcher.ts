@@ -20,7 +20,7 @@ import { db } from "./db";
 import { blocks, drivers, blockAssignments, contracts, specialRequests, protectedDriverRules, type Block, type Driver, type BlockAssignment } from "@shared/schema";
 import { eq, and, gte, lte, or, isNull, sql } from "drizzle-orm";
 import { format, endOfWeek, subWeeks, subDays, eachDayOfInterval, isWithinInterval, parseISO } from "date-fns";
-import { getSlotDistribution, getAllDriverPatterns, SlotDistribution, DriverPattern } from "./python-bridge";
+import { getSlotDistribution, getAllDriverPatterns, getBatchAvailability, SlotDistribution, DriverPattern, DriverHistoryItem } from "./python-bridge";
 import { validateBlockAssignment, blockToAssignmentSubject } from "./rolling6-calculator";
 
 /**
@@ -168,6 +168,26 @@ async function loadSpecialRequests(
 const DAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 const DAY_NAMES_UPPER = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
+/**
+ * Normalize a name for matching (handles whitespace differences from CSV imports)
+ */
+function normalizeName(name: string): string {
+  return name.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/**
+ * Find a value in a dictionary using normalized name matching
+ */
+function findByNormalizedName<T>(dict: Record<string, T>, name: string): T | undefined {
+  const normalizedName = normalizeName(name);
+  for (const [key, value] of Object.entries(dict)) {
+    if (normalizeName(key) === normalizedName) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
 interface DriverInfo {
   id: string;
   name: string;
@@ -214,6 +234,7 @@ function calculateXGBoostScore(
   busyDates: Set<string>,
   unavailableDates: Map<string, Set<string>>,
   priorityDrivers: Map<string, number>,
+  availabilityCache: Map<string, number>, // XGBoost availability predictions: "driverId_date" -> probability
   predictability: number = 0.7,
   minDays: number = 3
 ): { score: number; reasons: string[]; ownershipPct: number; matchType: string } | null {
@@ -260,15 +281,44 @@ function calculateXGBoostScore(
   const typeBonus: number = 0;
 
   // Get ownership score (0-1) from XGBoost - default 0.5 if no data
-  const ownershipScore = ownershipData?.shares?.[driverName] ?? 0.5;
+  // Use normalized name matching to handle whitespace differences from CSV imports
+  const foundOwnership = ownershipData?.shares
+    ? findByNormalizedName(ownershipData.shares, driverName)
+    : undefined;
+  const rawOwnership = foundOwnership ?? 0.5;
+
+  // Debug: Log when we find vs miss (only first few to avoid spam)
+  if (ownershipData?.shares && Object.keys(ownershipData.shares).length > 0) {
+    const shareKeys = Object.keys(ownershipData.shares).slice(0, 3).join(', ');
+    if (foundOwnership !== undefined) {
+      console.log(`[XGBoost] MATCH: "${driverName}" -> ${Math.round(foundOwnership * 100)}%`);
+    } else {
+      console.log(`[XGBoost] MISS: "${driverName}" not in [${shareKeys}...]`);
+    }
+  }
+
+  // Clamp to 0-1 range to prevent display issues
+  const ownershipScore = Math.max(0, Math.min(1.0, rawOwnership));
   const ownershipPct = Math.round(ownershipScore * 100);
 
-  // Get availability score (does driver work this day?)
-  const dayNameLower = block.dayName.toLowerCase();
-  const worksThisDay = driverPattern?.day_list?.some(
-    d => d.toLowerCase() === dayNameLower
-  ) ?? true; // Default to true if no pattern (driver is available)
-  const availabilityScore = worksThisDay ? 1.0 : 0.6;
+  // Get availability score from XGBoost availability model
+  // Cache key: "driverId_date" -> probability (0.0 to 1.0)
+  const availabilityCacheKey = `${driverId}_${block.serviceDate}`;
+  const xgboostAvailability = availabilityCache.get(availabilityCacheKey);
+
+  // Use XGBoost prediction if available, otherwise fall back to day-list check
+  let availabilityScore: number;
+  if (xgboostAvailability !== undefined) {
+    // XGBoost returns probability 0.0-1.0 directly
+    availabilityScore = xgboostAvailability;
+  } else {
+    // Fallback: simple day-list check
+    const dayNameLower = block.dayName.toLowerCase();
+    const worksThisDay = driverPattern?.day_list?.some(
+      d => d.toLowerCase() === dayNameLower
+    ) ?? true;
+    availabilityScore = worksThisDay ? 1.0 : 0.6;
+  }
 
   // COMBINED SCORE FORMULA (same as original):
   // Base = ownership × predictability + availability × (1 - predictability)
@@ -294,7 +344,9 @@ function calculateXGBoostScore(
     reasons.push(`⭐ Priority: ${targetDays}d target`);
   }
 
-  const finalScore = baseScore + typeBonus + fairnessBonus + minDaysBoost + priorityBoost;
+  const rawScore = baseScore + typeBonus + fairnessBonus + minDaysBoost + priorityBoost;
+  // Cap final score at 1.0 to prevent display issues
+  const finalScore = Math.min(1.0, rawScore);
 
   // Build reasons and match type
   let matchType: string;
@@ -305,11 +357,11 @@ function calculateXGBoostScore(
   } else if (ownershipScore >= 0.30) {
     reasons.push(`◐ Shares slot (${ownershipPct}%)`);
     matchType = 'shared';
-  } else if (worksThisDay) {
-    reasons.push(`○ Works ${DAY_NAMES_UPPER[block.dayIndex]}s`);
+  } else if (availabilityScore >= 0.70) {
+    reasons.push(`○ Avail ${Math.round(availabilityScore * 100)}%`);
     matchType = 'available';
   } else {
-    reasons.push(`△ Available`);
+    reasons.push(`△ Avail ${Math.round(availabilityScore * 100)}%`);
     matchType = 'fallback';
   }
 
@@ -363,12 +415,16 @@ export async function matchDeterministic(
       id: drivers.id,
       firstName: drivers.firstName,
       lastName: drivers.lastName,
+      isActive: drivers.isActive,
+      daysOff: drivers.daysOff,
     })
     .from(drivers)
     .where(
       and(
         eq(drivers.tenantId, tenantId),
-        eq(drivers.status, "active")
+        eq(drivers.status, "active"),
+        // Filter out drivers marked as inactive in Driver Profiles page
+        or(isNull(drivers.isActive), eq(drivers.isActive, true))
       )
     );
 
@@ -387,6 +443,16 @@ export async function matchDeterministic(
     // Use learned type from history, default to "both" if no history
     contractType: learnedTypes.get(d.id) || "both",
   }));
+
+  // Build map of driver ID to days off (from Driver Profiles page settings)
+  const driverDaysOff = new Map<string, string[]>();
+  for (const d of allDriversRaw) {
+    if (d.daysOff && d.daysOff.length > 0) {
+      // Normalize to lowercase for comparison
+      driverDaysOff.set(d.id, d.daysOff.map(day => day.toLowerCase()));
+    }
+  }
+  console.log(`[XGBoost-Matcher] ${driverDaysOff.size} drivers have days off configured`);
 
   console.log(`[XGBoost-Matcher] ${driverInfos.length} active drivers`);
 
@@ -422,14 +488,16 @@ export async function matchDeterministic(
   }
   console.log(`[XGBoost-Matcher] Loaded ${Object.keys(canonicalStartTimes).length} canonical times from contracts`);
 
-  // 4. Load full driver records for DOT validation
+  // 4. Load full driver records for DOT validation (also filter inactive)
   const fullDrivers = await db
     .select()
     .from(drivers)
     .where(
       and(
         eq(drivers.tenantId, tenantId),
-        eq(drivers.status, "active")
+        eq(drivers.status, "active"),
+        // Filter out drivers marked as inactive in Driver Profiles page
+        or(isNull(drivers.isActive), eq(drivers.isActive, true))
       )
     );
   const driverMap = new Map(fullDrivers.map(d => [d.id, d]));
@@ -487,6 +555,9 @@ export async function matchDeterministic(
   const weekEndPlusOne = new Date(weekEnd);
   weekEndPlusOne.setDate(weekEndPlusOne.getDate() + 1);
 
+  console.log(`[XGBoost-Matcher] DEBUG: Looking for blocks between ${format(weekStart, "yyyy-MM-dd")} and ${format(weekEndPlusOne, "yyyy-MM-dd")}`);
+  console.log(`[XGBoost-Matcher] DEBUG: Tenant ID: ${tenantId}`);
+
   const allBlocks = await db
     .select()
     .from(blocks)
@@ -497,6 +568,8 @@ export async function matchDeterministic(
         lte(blocks.serviceDate, weekEndPlusOne)
       )
     );
+
+  console.log(`[XGBoost-Matcher] DEBUG: Found ${allBlocks.length} total blocks in date range`);
 
   const existingAssignments = await db
     .select({ blockId: blockAssignments.blockId })
@@ -545,6 +618,46 @@ export async function matchDeterministic(
   });
 
   console.log(`[XGBoost-Matcher] ${blockInfos.length} unassigned blocks to match`);
+
+  // 9. Call XGBoost Availability Model - ONE batch call for ALL drivers × ALL dates
+  const availabilityCache = new Map<string, number>(); // "driverId_date" -> probability
+
+  if (blockInfos.length > 0 && driverInfos.length > 0) {
+    // Get unique dates from blocks
+    const uniqueDates = [...new Set(blockInfos.map(b => b.serviceDate))];
+
+    // Build driver history from existing assignments (last 12 weeks)
+    const driversWithHistory = driverInfos.map(driver => {
+      const driverAssignments = assignmentsByDriver.get(driver.id) || [];
+      const history: DriverHistoryItem[] = driverAssignments.map(a => ({
+        serviceDate: format(new Date(a.block.serviceDate), "yyyy-MM-dd"),
+        soloType: a.block.soloType || undefined,
+        tractorId: a.block.tractorId || undefined,
+      }));
+
+      return {
+        id: driver.id,
+        name: driver.name,
+        history,
+      };
+    });
+
+    console.log(`[XGBoost-Matcher] Calling availability model: ${driversWithHistory.length} drivers × ${uniqueDates.length} dates`);
+
+    const availResult = await getBatchAvailability(driversWithHistory, uniqueDates);
+
+    if (availResult.success && availResult.data?.predictions) {
+      // Flatten predictions into cache: "driverId_date" -> probability
+      for (const [driverId, dateProbs] of Object.entries(availResult.data.predictions)) {
+        for (const [date, prob] of Object.entries(dateProbs as Record<string, number>)) {
+          availabilityCache.set(`${driverId}_${date}`, prob);
+        }
+      }
+      console.log(`[XGBoost-Matcher] Availability model returned ${availabilityCache.size} predictions`);
+    } else {
+      console.log(`[XGBoost-Matcher] Availability model failed, using fallback: ${availResult.error || 'unknown error'}`);
+    }
+  }
 
   if (blockInfos.length === 0 || driverInfos.length === 0) {
     return {
@@ -633,11 +746,18 @@ export async function matchDeterministic(
 
     for (const driver of eligibleDrivers) {
       const currentCount = driverBlockCounts.get(driver.id) || 0;
-      const pattern = driverPatterns[driver.name];
+      // Use normalized name matching for patterns (handles whitespace from CSV imports)
+      const pattern = findByNormalizedName(driverPatterns, driver.name);
 
       // Get full driver record for DOT validation
       const fullDriver = driverMap.get(driver.id);
       if (!fullDriver) continue;
+
+      // HARD CONSTRAINT: Skip if this block falls on driver's configured day off
+      const driverOff = driverDaysOff.get(driver.id);
+      if (driverOff && driverOff.includes(block.dayName.toLowerCase())) {
+        continue; // Driver has this day marked as day off in Driver Profiles
+      }
 
       // Combine existing assignments + new assignments made this run
       const driverExistingAssignments = assignmentsByDriver.get(driver.id) || [];
@@ -682,6 +802,7 @@ export async function matchDeterministic(
         new Set(), // busyDates no longer needed - DOT validation handles it
         unavailableDates,
         priorityDrivers,
+        availabilityCache, // XGBoost availability predictions
         predictability,
         minDays
       );

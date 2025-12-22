@@ -617,7 +617,7 @@ export default function ScheduleIntelligence() {
   };
 
   const profiles = data?.profiles?.filter((p) => {
-    const matchesSearch = p.driverName.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesSearch = (p.driverName || '').toLowerCase().includes(searchQuery.toLowerCase());
     const matchesFilter = filter === "all" || p.patternGroup === filter;
     const matchesContract = contractFilter === 'all' || p.preferredContractType?.toLowerCase() === contractFilter;
     return matchesSearch && matchesFilter && matchesContract;

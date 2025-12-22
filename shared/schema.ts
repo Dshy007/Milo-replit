@@ -59,6 +59,9 @@ export const drivers = pgTable("drivers", {
   medicalCertExpiry: timestamp("medical_cert_expiry"), // DOT medical certification
   dateOfBirth: timestamp("date_of_birth"), // To validate age >= 21
   endorsements: text("endorsements"), // H (Hazmat), N (Tank), T (Doubles/Triples), P (Passenger), S (School Bus), X (Hazmat+Tank)
+  // Active/Inactive for XGBoost matching
+  isActive: boolean("is_active").default(true), // If false, XGBoost ignores this driver
+  daysOff: text("days_off").array(), // Days driver is unavailable (e.g., ["sunday", "saturday"])
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

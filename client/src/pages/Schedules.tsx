@@ -2021,6 +2021,19 @@ export default function Schedules() {
     handleBlockClickRef.current = handleBlockClick;
   }, [handleBlockClick]);
 
+  // Handle applying multiple blocks from CirclePacking "Apply to Calendar" button
+  const handleApplyBlocks = useCallback(async (blockIds: string[], driverId: string) => {
+    // Apply each block assignment sequentially
+    for (const blockId of blockIds) {
+      await handleBlockClick(blockId, driverId);
+    }
+
+    toast({
+      title: "Blocks Applied",
+      description: `Applied ${blockIds.length} block${blockIds.length !== 1 ? 's' : ''} to calendar`,
+    });
+  }, [handleBlockClick, toast]);
+
   // Get sorted and filtered contracts for bench display
   const sortedContracts = useMemo(() => {
     let filtered = [...contracts];
@@ -2482,6 +2495,7 @@ export default function Schedules() {
             selectedDriverId={selectedDriverId}
             unassignedOccurrences={unassignedOccurrences}
             onBlockClick={handleBlockClick}
+            onApplyBlocks={handleApplyBlocks}
             onMatchingBlocksChange={setSidebarMatchingBlockIds}
           />
 
