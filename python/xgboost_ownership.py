@@ -433,9 +433,11 @@ class OwnershipClassifier:
         MIN_TOTAL_PER_DAY = 2  # Need 2+ TOTAL assignments on a day to count
 
         if not self.slot_ownership:
+            # FIX #4: Default to 0 (no pattern) instead of 6 (max days)
+            # Drivers with no history should NOT be assigned automatically
             return {
                 'driver': driver_name,
-                'typical_days': 6,  # Default to safety max
+                'typical_days': 0,  # No pattern = 0 days (will be filtered out)
                 'day_list': [],
                 'day_counts': {},
                 'confidence': 0.0
@@ -465,9 +467,11 @@ class OwnershipClassifier:
         typical_days = len(day_counts)
 
         if typical_days == 0:
+            # FIX #4: Default to 0 (no pattern) instead of 6 (max days)
+            # Drivers with insufficient history should NOT be assigned automatically
             return {
                 'driver': driver_name,
-                'typical_days': 6,
+                'typical_days': 0,  # No pattern = 0 days (will be filtered out)
                 'day_list': [],
                 'day_counts': {},
                 'confidence': 0.0

@@ -280,12 +280,14 @@ function calculateXGBoostScore(
   // Typical schedule: 4-5 Solo1 blocks + 2 Solo2 blocks per driver
   const typeBonus: number = 0;
 
-  // Get ownership score (0-1) from XGBoost - default 0.5 if no data
+  // Get ownership score (0-1) from XGBoost
+  // FIX: Default to 0.0 (not 0.5) if driver has no ownership of this slot
+  // A driver with NO history of working a slot should score 0%, not 50%
   // Use normalized name matching to handle whitespace differences from CSV imports
   const foundOwnership = ownershipData?.shares
     ? findByNormalizedName(ownershipData.shares, driverName)
     : undefined;
-  const rawOwnership = foundOwnership ?? 0.5;
+  const rawOwnership = foundOwnership ?? 0.0;
 
   // Debug: Log when we find vs miss (only first few to avoid spam)
   if (ownershipData?.shares && Object.keys(ownershipData.shares).length > 0) {
@@ -314,12 +316,20 @@ function calculateXGBoostScore(
     // Pattern affinity score 0.0-1.0 (how well slot matches driver's history)
     affinityScore = patternAffinity;
   } else {
-    // Fallback: simple day-list check (less accurate)
-    const dayNameLower = block.dayName.toLowerCase();
-    const worksThisDay = driverPattern?.day_list?.some(
-      d => d.toLowerCase() === dayNameLower
-    ) ?? true;
-    affinityScore = worksThisDay ? 1.0 : 0.6;
+    // Fallback: day-list check with proper handling of empty/missing patterns
+    // FIX #2: Empty day_list should NOT default to "works any day"
+    const hasDayList = driverPattern?.day_list && driverPattern.day_list.length > 0;
+
+    if (!hasDayList) {
+      // No pattern data = low affinity (driver has insufficient history)
+      affinityScore = 0.3;
+    } else {
+      const dayNameLower = block.dayName.toLowerCase();
+      const worksThisDay = driverPattern.day_list.some(
+        d => d.toLowerCase() === dayNameLower
+      );
+      affinityScore = worksThisDay ? 1.0 : 0.6;
+    }
   }
 
   // COMBINED SCORE FORMULA:
@@ -327,15 +337,23 @@ function calculateXGBoostScore(
   // Both scores are pattern-based: ownership (who owns the slot) + affinity (historical fit)
   const baseScore = (ownershipScore * predictability) + (affinityScore * (1 - predictability));
 
+  // FIX #5: Cap fairness/minDays bonuses for drivers with weak patterns
+  // Drivers with low confidence patterns should NOT get full bonuses
+  // This prevents inactive drivers from scoring higher than active regulars
+  const patternConfidence = driverPattern?.confidence ?? 0;
+  const confidenceMultiplier = patternConfidence < 0.5 ? 0.5 : 1.0;
+
   // Fairness bonus: prefer drivers with fewer days this week
   // Increased from 0.05 to 0.08 to better spread work across drivers
-  const fairnessBonus = Math.max(0, (6 - currentDayCount)) * 0.08;
+  // Reduced by 50% for drivers with weak patterns (confidence < 0.5)
+  const fairnessBonus = Math.max(0, (6 - currentDayCount)) * 0.08 * confidenceMultiplier;
 
   // MinDays boost: drivers below minimum should get priority
+  // Reduced by 50% for drivers with weak patterns (confidence < 0.5)
   let minDaysBoost = 0;
   if (currentDayCount < minDays) {
     // Strong boost for drivers who haven't reached minimum yet
-    minDaysBoost = 0.20;
+    minDaysBoost = 0.20 * confidenceMultiplier;
     reasons.push(`📊 Below min (${currentDayCount}/${minDays})`);
   }
 
@@ -550,6 +568,26 @@ export async function matchDeterministic(
   }
   console.log(`[XGBoost-Matcher] Loaded ${existingAssignmentsWithBlocks.length} existing assignments for DOT validation`);
 
+  // FIX #1: Filter out drivers with insufficient history (< 12 assignments in 12 weeks)
+  // This excludes part-time/on-call drivers who only work occasionally
+  const MIN_ASSIGNMENTS_12_WEEKS = 12; // Minimum 1 assignment per week average
+  const driversBeforeFilter = driverInfos.length;
+
+  // Filter driverInfos to only include drivers with sufficient history
+  const reliableDriverInfos = driverInfos.filter(driver => {
+    const driverAssignments = assignmentsByDriver.get(driver.id) || [];
+    const assignmentCount = driverAssignments.length;
+
+    if (assignmentCount < MIN_ASSIGNMENTS_12_WEEKS) {
+      console.log(`[XGBoost-Matcher] Excluding ${driver.name}: only ${assignmentCount} assignments in 12 weeks (need ${MIN_ASSIGNMENTS_12_WEEKS})`);
+      return false;
+    }
+
+    return true;
+  });
+
+  console.log(`[XGBoost-Matcher] ${reliableDriverInfos.length}/${driversBeforeFilter} drivers meet minimum assignment threshold (${MIN_ASSIGNMENTS_12_WEEKS}+ in 12 weeks)`);
+
   // 7. Get all block assignments for conflict checking
   const allBlockAssignments = await db
     .select()
@@ -748,8 +786,9 @@ export async function matchDeterministic(
       continue;
     }
 
-    // All drivers are eligible (type penalty removed)
-    const eligibleDrivers = driverInfos;
+    // All reliable drivers are eligible (type penalty removed)
+    // Uses reliableDriverInfos which excludes drivers with < 12 assignments in 12 weeks
+    const eligibleDrivers = reliableDriverInfos;
 
     // Score all eligible drivers and check DOT compliance
     const candidates: {
@@ -765,6 +804,14 @@ export async function matchDeterministic(
       const currentCount = driverBlockCounts.get(driver.id) || 0;
       // Use normalized name matching for patterns (handles whitespace from CSV imports)
       const pattern = findByNormalizedName(driverPatterns, driver.name);
+
+      // FIX #3: Skip drivers with zero-confidence patterns (insufficient history)
+      // A confidence of 0.0 means the driver has no reliable work pattern
+      const patternConfidence = pattern?.confidence ?? 0;
+      if (patternConfidence < 0.1) {
+        console.log(`[XGBoost-Matcher] Skipping ${driver.name}: pattern confidence ${patternConfidence.toFixed(2)} too low`);
+        continue;
+      }
 
       // Get full driver record for DOT validation
       const fullDriver = driverMap.get(driver.id);
