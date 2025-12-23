@@ -80,6 +80,7 @@ function getTimeDifferenceMinutes(time1: string, time2: string): number {
 
 /**
  * Calculate block duration in hours from start and end times
+ * NOTE: This only handles single-day durations. For multi-day blocks, use calculateDurationWithDates.
  */
 function calculateDurationHours(startTime: string, endTime: string): number {
   const startMins = timeToMinutes(startTime);
@@ -94,6 +95,49 @@ function calculateDurationHours(startTime: string, endTime: string): number {
   }
 
   return durationMins / 60;
+}
+
+/**
+ * Calculate block duration in hours using full date+time (handles multi-day spans)
+ * This is the correct way to calculate Solo2 durations which span 38+ hours
+ */
+function calculateDurationWithDates(
+  startDate: string, startTime: string,
+  endDate: string, endTime: string
+): number {
+  try {
+    // Parse start datetime
+    const startMins = timeToMinutes(startTime);
+    const endMins = timeToMinutes(endTime);
+
+    if (startMins < 0 || endMins < 0 || !startDate || !endDate) {
+      return 14; // Default to Solo1 duration if parsing fails
+    }
+
+    // Calculate days difference
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+      return 14; // Default if date parsing fails
+    }
+
+    const daysDiff = Math.floor((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+
+    // Total duration = (days * 24 hours) + (end time - start time in hours)
+    const timeDiffMins = endMins - startMins;
+    const totalHours = (daysDiff * 24) + (timeDiffMins / 60);
+
+    // Sanity check: duration should be positive and reasonable (0-72 hours)
+    if (totalHours < 0 || totalHours > 72) {
+      console.log(`[Duration] WARNING: Calculated duration ${totalHours.toFixed(1)}h seems wrong, using default`);
+      return 14;
+    }
+
+    return totalHours;
+  } catch (error) {
+    return 14; // Default on any error
+  }
 }
 
 /**
@@ -168,6 +212,7 @@ interface TripRow {
   driver: string;
   departureDate: string;
   departureTime: string;  // For fuzzy matching
+  arrivalDate: string;    // For multi-day duration calculation
   arrivalTime: string;    // For duration calculation
   cost: number;
   origin: string;
@@ -380,6 +425,14 @@ export function reconstructBlocksLocally(csvData: string): {
           'Stop 1  Actual Departure Time',
           'Departure Time', 'DepartureTime'
         ]),
+        // MULTI-DAY: Capture arrival DATE for Solo2 duration calculation
+        arrivalDate: findColumn(row, [
+          'Stop 2  Planned Arrival Date',
+          'Stop 2 Planned Arrival Date',
+          'Stop 2 Actual Arrival Date',
+          'Stop 2  Actual Arrival Date',
+          'Arrival Date', 'ArrivalDate'
+        ]),
         // FUZZY MATCHING: Capture arrival TIME for duration calculation
         arrivalTime: findColumn(row, [
           'Stop 2  Planned Arrival Time',
@@ -501,19 +554,43 @@ export function reconstructBlocksLocally(csvData: string): {
         // FUZZY MATCHING: No Tractor_ pattern in Operator ID
         // Use departure time and duration to find best matching tractor
 
-        // Get earliest departure time and latest arrival time for duration calculation
+        // Get earliest departure date/time and latest arrival date/time for duration calculation
+        const departureDates = trips.map(t => parseDate(t.departureDate)).filter(Boolean);
         const departureTimes = trips.map(t => t.departureTime).filter(Boolean);
+        const arrivalDates = trips.map(t => parseDate(t.arrivalDate)).filter(Boolean);
         const arrivalTimes = trips.map(t => t.arrivalTime).filter(Boolean);
 
         // Get first departure time (earliest trip start)
         const blockDepartureTime = departureTimes[0] || '12:00'; // Default to noon if no time found
 
-        // Calculate duration from times, or estimate from trip count
+        // Calculate duration using FULL DATE+TIME for multi-day blocks (Solo2)
         let durationHours = 14; // Default to Solo1 duration
-        if (departureTimes[0] && arrivalTimes[arrivalTimes.length - 1]) {
+
+        // Sort trips by departure to get first departure and last arrival
+        const sortedTrips = [...trips].sort((a, b) => {
+          const dateA = parseDate(a.departureDate);
+          const dateB = parseDate(b.departureDate);
+          if (dateA !== dateB) return dateA.localeCompare(dateB);
+          return (a.departureTime || '').localeCompare(b.departureTime || '');
+        });
+
+        const firstTrip = sortedTrips[0];
+        const lastTrip = sortedTrips[sortedTrips.length - 1];
+
+        // Try to get full date+time duration (handles multi-day Solo2 blocks correctly)
+        const startDateParsed = parseDate(firstTrip.departureDate);
+        const startTimeParsed = firstTrip.departureTime || '00:00';
+        const endDateParsed = parseDate(lastTrip.arrivalDate) || parseDate(lastTrip.departureDate); // Fallback to departure date if no arrival date
+        const endTimeParsed = lastTrip.arrivalTime || '23:59';
+
+        if (startDateParsed && endDateParsed) {
+          durationHours = calculateDurationWithDates(startDateParsed, startTimeParsed, endDateParsed, endTimeParsed);
+          console.log(`[FUZZY] Block ${blockId}: Multi-day duration calc: ${startDateParsed} ${startTimeParsed} → ${endDateParsed} ${endTimeParsed} = ${durationHours.toFixed(1)}h`);
+        } else if (departureTimes[0] && arrivalTimes[arrivalTimes.length - 1]) {
+          // Fallback to same-day calculation
           durationHours = calculateDurationHours(departureTimes[0], arrivalTimes[arrivalTimes.length - 1]);
         } else {
-          // Estimate: more trips usually means longer route
+          // Last resort: estimate from trip count
           durationHours = trips.length > 3 ? 20 : 14;
         }
 

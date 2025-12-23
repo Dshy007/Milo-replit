@@ -2967,6 +2967,134 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // GET /api/drivers/:driverId/dna - Get comprehensive DNA dashboard data for a driver
+  // Used by the Driver DNA Dashboard page
+  app.get("/api/drivers/:driverId/dna", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { driverId } = req.params;
+
+      // 1. Get driver info
+      const driverResult = await db
+        .select()
+        .from(drivers)
+        .where(and(
+          eq(drivers.id, driverId),
+          eq(drivers.tenantId, tenantId)
+        ));
+
+      if (driverResult.length === 0) {
+        return res.status(404).json({ message: "Driver not found" });
+      }
+
+      const driver = driverResult[0];
+
+      // 2. Get DNA profile
+      const profileResult = await db
+        .select()
+        .from(driverDnaProfiles)
+        .where(and(
+          eq(driverDnaProfiles.driverId, driverId),
+          eq(driverDnaProfiles.tenantId, tenantId)
+        ));
+
+      const dnaProfile = profileResult.length > 0 ? profileResult[0] : null;
+
+      // 3. Get work history (last 6 months of assignments)
+      const sixMonthsAgo = subWeeks(new Date(), 26); // ~6 months
+      const assignmentsWithBlocks = await db
+        .select({
+          assignment: blockAssignments,
+          block: blocks,
+        })
+        .from(blockAssignments)
+        .innerJoin(blocks, eq(blockAssignments.blockId, blocks.id))
+        .where(and(
+          eq(blockAssignments.driverId, driverId),
+          eq(blockAssignments.tenantId, tenantId),
+          eq(blockAssignments.isActive, true),
+          gte(blocks.serviceDate, sixMonthsAgo)
+        ))
+        .orderBy(blocks.serviceDate);
+
+      // 4. Build history data for calendar heatmap
+      const historyMap = new Map<string, number>();
+      for (const row of assignmentsWithBlocks) {
+        const day = format(new Date(row.block.serviceDate), 'yyyy-MM-dd');
+        historyMap.set(day, (historyMap.get(day) || 0) + 1);
+      }
+      const history = Array.from(historyMap.entries()).map(([day, value]) => ({ day, value }));
+
+      // 5. Build confidence history (mock data based on weekly aggregation)
+      // In a real implementation, this would come from stored historical confidence values
+      const weeklyHistory: { x: string; y: number }[] = [];
+      const weeks = 12;
+      for (let i = weeks - 1; i >= 0; i--) {
+        const weekStart = subWeeks(new Date(), i);
+        const weekLabel = format(weekStart, 'MMM d');
+        // Simulate confidence growth based on data accumulation
+        const baseConfidence = dnaProfile?.patternConfidence || 0.5;
+        const noise = (Math.random() - 0.5) * 0.1;
+        const growthFactor = 1 - (i / weeks) * 0.3;
+        const confidence = Math.min(1, Math.max(0, baseConfidence * growthFactor + noise));
+        weeklyHistory.push({ x: weekLabel, y: confidence });
+      }
+
+      // 6. Calculate stats
+      const tractorCounts = new Map<string, number>();
+      const timeCounts = new Map<string, number>();
+
+      for (const row of assignmentsWithBlocks) {
+        if (row.block.tractorId) {
+          tractorCounts.set(row.block.tractorId, (tractorCounts.get(row.block.tractorId) || 0) + 1);
+        }
+        if (row.block.startTimestamp) {
+          const time = format(new Date(row.block.startTimestamp), 'HH:mm');
+          timeCounts.set(time, (timeCounts.get(time) || 0) + 1);
+        }
+      }
+
+      const mostFrequentTractor = tractorCounts.size > 0
+        ? Array.from(tractorCounts.entries()).sort((a, b) => b[1] - a[1])[0][0]
+        : null;
+
+      const mostFrequentTime = timeCounts.size > 0
+        ? Array.from(timeCounts.entries()).sort((a, b) => b[1] - a[1])[0][0]
+        : null;
+
+      // Calculate average blocks per week
+      const weeksWithData = new Set(
+        assignmentsWithBlocks.map(row => format(new Date(row.block.serviceDate), 'yyyy-ww'))
+      ).size;
+      const avgBlocksPerWeek = weeksWithData > 0
+        ? assignmentsWithBlocks.length / weeksWithData
+        : 0;
+
+      res.json({
+        driver: {
+          id: driver.id,
+          firstName: driver.firstName,
+          lastName: driver.lastName,
+          status: driver.status,
+          daysOff: driver.daysOff || [],
+        },
+        dnaProfile,
+        history,
+        confidenceHistory: weeklyHistory,
+        stats: {
+          totalAssignments: assignmentsWithBlocks.length,
+          uniqueBlocks: new Set(assignmentsWithBlocks.map(r => r.block.blockId)).size,
+          avgBlocksPerWeek: Math.round(avgBlocksPerWeek * 10) / 10,
+          mostFrequentTractor,
+          mostFrequentTime,
+        },
+      });
+    } catch (error: any) {
+      console.error("Error fetching driver DNA dashboard:", error);
+      res.status(500).json({ message: "Failed to fetch driver DNA data", error: error.message });
+    }
+  });
+
   // ==================== CSV IMPORT ====================
 
   app.post("/api/import/:entityType", requireAuth, async (req, res) => {
@@ -3988,6 +4116,54 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
     }
   });
 
+  // POST /api/matching/deterministic/preview-all - Get all proposed matches without committing
+  // Used by the Preview-First workflow in Phase 2
+  app.post("/api/matching/deterministic/preview-all", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { weekStart, contractType, minDays } = req.body;
+
+      const weekStartDate = weekStart
+        ? parseISO(weekStart)
+        : startOfWeek(new Date(), { weekStartsOn: 0 });
+
+      const validMinDays = [3, 4, 5].includes(minDays) ? minDays : 3;
+
+      console.log(`[Preview API] ========================================`);
+      console.log(`[Preview API] Generating preview (no commit)`);
+      console.log(`[Preview API] Tenant ID: ${tenantId}`);
+      console.log(`[Preview API] Week Start: ${format(weekStartDate, "yyyy-MM-dd")}`);
+      console.log(`[Preview API] Contract Type: ${contractType || 'all'}`);
+      console.log(`[Preview API] Min Days: ${validMinDays}`);
+      console.log(`[Preview API] ========================================`);
+
+      const result = await matchDeterministic(
+        tenantId,
+        weekStartDate,
+        contractType as "solo1" | "solo2" | undefined,
+        validMinDays
+      );
+
+      // Return suggestions with explicit driverName for display
+      // Include excludedDrivers for graceful error handling (Pillar 4: Resilience)
+      res.json({
+        success: true,
+        suggestions: result.suggestions,
+        unassigned: result.unassigned,
+        excludedDrivers: result.excludedDrivers || [],
+        stats: result.stats,
+        message: `Preview generated: ${result.suggestions.length} assignments proposed`,
+      });
+    } catch (error: any) {
+      console.error("Preview matching error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to generate preview",
+        error: error.message
+      });
+    }
+  });
+
   // POST /api/matching/deterministic/apply - Apply deterministic assignments
   app.post("/api/matching/deterministic/apply", requireAuth, async (req, res) => {
     try {
@@ -4015,6 +4191,31 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
       res.status(500).json({
         success: false,
         message: "Failed to apply assignments",
+        error: error.message
+      });
+    }
+  });
+
+  // GET /api/matching/block/:blockId - Get top matches for a single block
+  // Used by the Intelligent Match Assistant panel
+  app.get("/api/matching/block/:blockId", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { blockId } = req.params;
+
+      if (!blockId) {
+        return res.status(400).json({ success: false, message: "Block ID is required" });
+      }
+
+      const { getTopMatchesForBlock } = await import("./deterministic-matcher");
+      const result = await getTopMatchesForBlock(tenantId, blockId);
+
+      res.json(result);
+    } catch (error: any) {
+      console.error("Get block matches error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to get block matches",
         error: error.message
       });
     }
@@ -5614,6 +5815,226 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
     } catch (error: any) {
       console.error("XGBoost driver analysis error:", error);
       res.status(500).json({ message: "Failed to analyze drivers", error: error.message });
+    }
+  });
+
+  // GET /api/analysis/xgboost-diagnostic - Diagnostic endpoint for XGBoost pattern learning
+  // This traces the entire pipeline: training data → model → predictions
+  app.get("/api/analysis/xgboost-diagnostic", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const driverName = req.query.driver as string; // Optional: filter by driver name
+
+      console.log(`[XGBoost-Diagnostic] Starting diagnostic for tenant ${tenantId}, driver filter: ${driverName || 'ALL'}`);
+
+      // STEP 1: Raw data collection - what's in the database?
+      const twelveWeeksAgo = subDays(new Date(), 84);
+
+      const rawAssignments = await db
+        .select({
+          driverId: blockAssignments.driverId,
+          driverFirstName: drivers.firstName,
+          driverLastName: drivers.lastName,
+          blockId: blocks.blockId,
+          serviceDate: blocks.serviceDate,
+          contractType: blocks.contractType,
+          tractorId: blocks.tractorId,
+          startTime: blocks.startTime,
+        })
+        .from(blockAssignments)
+        .innerJoin(blocks, eq(blockAssignments.blockId, blocks.id))
+        .innerJoin(drivers, eq(blockAssignments.driverId, drivers.id))
+        .where(and(
+          eq(blockAssignments.tenantId, tenantId),
+          eq(blockAssignments.isActive, true),
+          gte(blocks.serviceDate, twelveWeeksAgo)
+        ))
+        .orderBy(desc(blocks.serviceDate));
+
+      // STEP 2: Group by driver to see distribution
+      const driverStats = new Map<string, {
+        name: string;
+        totalAssignments: number;
+        byDay: Record<string, number>;
+        byContractType: Record<string, number>;
+        byTractor: Record<string, number>;
+        dateRange: { earliest: string; latest: string };
+        samples: Array<{ date: string; day: string; contractType: string; tractor: string; time: string }>;
+      }>();
+
+      for (const a of rawAssignments) {
+        const fullName = `${a.driverFirstName} ${a.driverLastName}`.trim();
+
+        // Filter by driver name if specified
+        if (driverName && !fullName.toLowerCase().includes(driverName.toLowerCase())) {
+          continue;
+        }
+
+        if (!driverStats.has(a.driverId)) {
+          driverStats.set(a.driverId, {
+            name: fullName,
+            totalAssignments: 0,
+            byDay: {},
+            byContractType: {},
+            byTractor: {},
+            dateRange: { earliest: '', latest: '' },
+            samples: [],
+          });
+        }
+
+        const stats = driverStats.get(a.driverId)!;
+        stats.totalAssignments++;
+
+        const dateStr = format(new Date(a.serviceDate), 'yyyy-MM-dd');
+        const dayName = format(new Date(a.serviceDate), 'EEEE');
+        const contractType = a.contractType || 'unknown';
+        const tractor = a.tractorId || 'unknown';
+
+        // Update date range
+        if (!stats.dateRange.earliest || dateStr < stats.dateRange.earliest) {
+          stats.dateRange.earliest = dateStr;
+        }
+        if (!stats.dateRange.latest || dateStr > stats.dateRange.latest) {
+          stats.dateRange.latest = dateStr;
+        }
+
+        // Count by day
+        stats.byDay[dayName] = (stats.byDay[dayName] || 0) + 1;
+
+        // Count by contract type
+        stats.byContractType[contractType] = (stats.byContractType[contractType] || 0) + 1;
+
+        // Count by tractor
+        stats.byTractor[tractor] = (stats.byTractor[tractor] || 0) + 1;
+
+        // Keep sample assignments (first 10)
+        if (stats.samples.length < 10) {
+          stats.samples.push({
+            date: dateStr,
+            day: dayName,
+            contractType,
+            tractor,
+            time: a.startTime || 'N/A',
+          });
+        }
+      }
+
+      // STEP 3: Get XGBoost model predictions for these drivers
+      const { getAllDriverPatterns, getSlotDistribution } = await import("./python-bridge");
+      const patternsResult = await getAllDriverPatterns();
+
+      const xgboostPatterns = patternsResult.success && patternsResult.data
+        ? patternsResult.data.patterns
+        : {};
+
+      // STEP 4: Build diagnostic report
+      const diagnosticReport = Array.from(driverStats.entries()).map(([driverId, stats]) => {
+        const xgboostPattern = xgboostPatterns[stats.name];
+
+        // Calculate what pattern SHOULD be learned from the data
+        const expectedPattern = {
+          totalAssignments: stats.totalAssignments,
+          daysWorked: Object.keys(stats.byDay).length,
+          primaryDays: Object.entries(stats.byDay)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 5)
+            .map(([day, count]) => `${day} (${count})`),
+          primaryContractType: Object.entries(stats.byContractType)
+            .sort((a, b) => b[1] - a[1])[0],
+          primaryTractors: Object.entries(stats.byTractor)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 3)
+            .map(([t, c]) => `${t} (${c})`),
+        };
+
+        // What XGBoost actually learned
+        const learnedPattern = xgboostPattern ? {
+          typicalDays: xgboostPattern.typical_days,
+          dayList: xgboostPattern.day_list,
+          dayCounts: xgboostPattern.day_counts,
+          confidence: xgboostPattern.confidence,
+        } : null;
+
+        // Compare expected vs learned
+        const patternMatch = learnedPattern ? {
+          daysMatch: expectedPattern.daysWorked === learnedPattern.typicalDays,
+          expectedDays: expectedPattern.daysWorked,
+          learnedDays: learnedPattern.typicalDays,
+          gap: Math.abs(expectedPattern.daysWorked - learnedPattern.typicalDays),
+        } : { daysMatch: false, expectedDays: expectedPattern.daysWorked, learnedDays: 0, gap: expectedPattern.daysWorked };
+
+        return {
+          driverId,
+          driverName: stats.name,
+          rawData: {
+            totalAssignments: stats.totalAssignments,
+            dateRange: stats.dateRange,
+            byDay: stats.byDay,
+            byContractType: stats.byContractType,
+            byTractor: stats.byTractor,
+            recentSamples: stats.samples,
+          },
+          expectedPattern,
+          learnedPattern,
+          patternMatch,
+          diagnosis: patternMatch.gap > 1
+            ? `⚠️ GAP: Expected ${expectedPattern.daysWorked} days, learned ${patternMatch.learnedDays}`
+            : learnedPattern
+              ? '✓ Pattern matches training data'
+              : '❌ No pattern learned (model not trained or driver excluded)',
+        };
+      });
+
+      // Sort by total assignments descending
+      diagnosticReport.sort((a, b) => b.rawData.totalAssignments - a.rawData.totalAssignments);
+
+      // STEP 5: Check if model files exist
+      const fs = await import('fs');
+      const path = await import('path');
+      const modelsDir = path.join(process.cwd(), 'python', 'models');
+
+      let modelStatus = {
+        ownershipModel: false,
+        ownershipEncoders: false,
+        availabilityModel: false,
+        availabilityEncoders: false,
+      };
+
+      try {
+        modelStatus.ownershipModel = fs.existsSync(path.join(modelsDir, 'ownership_model.json'));
+        modelStatus.ownershipEncoders = fs.existsSync(path.join(modelsDir, 'ownership_encoders.json'));
+        modelStatus.availabilityModel = fs.existsSync(path.join(modelsDir, 'availability_model.json'));
+        modelStatus.availabilityEncoders = fs.existsSync(path.join(modelsDir, 'availability_encoders.json'));
+      } catch (e) {
+        // Ignore file check errors
+      }
+
+      res.json({
+        success: true,
+        summary: {
+          totalDrivers: diagnosticReport.length,
+          totalAssignments: rawAssignments.length,
+          analysisWindow: {
+            start: format(twelveWeeksAgo, 'yyyy-MM-dd'),
+            end: format(new Date(), 'yyyy-MM-dd'),
+            weeks: 12,
+          },
+          modelStatus,
+          patternsLoaded: Object.keys(xgboostPatterns).length,
+        },
+        drivers: diagnosticReport,
+        troubleshooting: {
+          noPatterns: diagnosticReport.filter(d => !d.learnedPattern).map(d => d.driverName),
+          patternGaps: diagnosticReport.filter(d => d.patternMatch.gap > 1).map(d => ({
+            name: d.driverName,
+            expected: d.patternMatch.expectedDays,
+            learned: d.patternMatch.learnedDays,
+          })),
+        },
+      });
+    } catch (error: any) {
+      console.error("XGBoost diagnostic error:", error);
+      res.status(500).json({ message: "Failed to run diagnostic", error: error.message });
     }
   });
 

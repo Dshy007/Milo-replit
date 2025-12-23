@@ -21,9 +21,16 @@ export interface MatchSuggestion {
   score: number;
   confidence: number;
   matchType: string;
-  ownershipPct: number;
+  ownershipPct: number;  // Already a percentage 0-100
   slotType: string;
   reasons: string[];
+  blockInfo?: {
+    serviceDate: string;
+    startTime: string;
+    tractorId: string;
+    contractType: string;
+    dayName: string;
+  };
 }
 
 interface AutoMatchPreviewModalProps {
@@ -284,11 +291,34 @@ export function AutoMatchPreviewModal({
                   </div>
 
                   {/* Block Info */}
-                  <div className="w-40">
-                    <div className="font-mono text-sm font-medium">
-                      {suggestion.blockId}
-                    </div>
-                    {parsed && (
+                  <div className="w-48">
+                    {suggestion.blockInfo ? (
+                      <div className="space-y-0.5">
+                        <div className="flex items-center gap-2 text-sm font-medium">
+                          <Calendar className="w-3.5 h-3.5 text-muted-foreground" />
+                          <span>{suggestion.blockInfo.dayName}</span>
+                          <span className="text-muted-foreground">{suggestion.blockInfo.serviceDate}</span>
+                        </div>
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <span className={cn(
+                            "px-1 py-0.5 rounded text-[10px] font-bold",
+                            suggestion.blockInfo.contractType === "solo2"
+                              ? "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-400"
+                              : "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-400"
+                          )}>
+                            {suggestion.blockInfo.contractType.toUpperCase()}
+                          </span>
+                          <span className="flex items-center gap-0.5">
+                            <Truck className="w-3 h-3" />
+                            {suggestion.blockInfo.tractorId}
+                          </span>
+                          <span className="flex items-center gap-0.5">
+                            <Clock className="w-3 h-3" />
+                            {suggestion.blockInfo.startTime}
+                          </span>
+                        </div>
+                      </div>
+                    ) : parsed ? (
                       <div className="flex items-center gap-2 text-xs text-muted-foreground">
                         <span className={cn(
                           "px-1 py-0.5 rounded text-[10px] font-bold",
@@ -307,6 +337,10 @@ export function AutoMatchPreviewModal({
                           {parsed.time}
                         </span>
                       </div>
+                    ) : (
+                      <div className="font-mono text-xs text-muted-foreground truncate">
+                        {suggestion.blockId.slice(0, 8)}...
+                      </div>
                     )}
                   </div>
 
@@ -314,9 +348,9 @@ export function AutoMatchPreviewModal({
                   <div className="flex-1 flex items-center gap-2">
                     <User className="w-4 h-4 text-muted-foreground" />
                     <span className="font-medium">{suggestion.driverName}</span>
-                    {suggestion.ownershipPct > 0.5 && (
+                    {suggestion.ownershipPct > 50 && (
                       <span className="text-xs text-emerald-600 dark:text-emerald-400">
-                        ({Math.round(suggestion.ownershipPct * 100)}% owner)
+                        ({suggestion.ownershipPct}% owner)
                       </span>
                     )}
                   </div>

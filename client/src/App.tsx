@@ -27,6 +27,7 @@ import AutoBuild from "@/pages/AutoBuild";
 import DriverAvailability from "@/pages/DriverAvailability";
 import AIScheduler from "@/pages/AIScheduler";
 import DriverProfiles from "@/pages/DriverProfiles";
+import DriverDnaDashboard from "@/pages/DriverDnaDashboard";
 import NotFound from "@/pages/not-found";
 
 function ProtectedLayout({ children }: { children: ReactNode }) {
@@ -160,6 +161,13 @@ function Router() {
         <ProtectedRoute>
           <ProtectedLayout>
             <DriverProfiles />
+          </ProtectedLayout>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/drivers/:driverId/dna">
+        <ProtectedRoute>
+          <ProtectedLayout>
+            <DriverDnaDashboard />
           </ProtectedLayout>
         </ProtectedRoute>
       </Route>

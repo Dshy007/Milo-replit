@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   User, Trash2, Check, X, Calendar, RefreshCw, Sparkles,
-  ChevronDown, AlertTriangle
+  ChevronDown, AlertTriangle, Dna, ExternalLink
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -56,7 +56,6 @@ export default function DriverProfiles() {
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   // Fetch drivers
   const { data: drivers = [], isLoading: driversLoading } = useQuery({
@@ -126,38 +125,6 @@ export default function DriverProfiles() {
     },
   });
 
-  // Handle analyze button - trigger XGBoost matching
-  const handleAnalyze = async () => {
-    setIsAnalyzing(true);
-    try {
-      const response = await apiRequest("POST", "/api/matching/deterministic/preview");
-      const data = await response.json();
-
-      if (data.success) {
-        toast({
-          title: "Analysis Complete",
-          description: `Found ${data.stats?.assigned || 0} matches for ${data.stats?.totalBlocks || 0} blocks`,
-        });
-        // Navigate to schedules page to see results
-        navigate("/schedules");
-      } else {
-        toast({
-          title: "Analysis Failed",
-          description: data.message || "Unknown error",
-          variant: "destructive",
-        });
-      }
-    } catch (error) {
-      toast({
-        title: "Analysis Error",
-        description: error instanceof Error ? error.message : "Unknown error",
-        variant: "destructive",
-      });
-    } finally {
-      setIsAnalyzing(false);
-    }
-  };
-
   // Toggle day in days off array
   const toggleDayOff = (driverId: string, day: string, currentDaysOff: string[]) => {
     const newDaysOff = currentDaysOff.includes(day)
@@ -187,23 +154,6 @@ export default function DriverProfiles() {
             <Badge variant="outline" className="text-sm">
               {activeDrivers.length} Active / {inactiveDrivers.length} Inactive
             </Badge>
-            <Button
-              onClick={handleAnalyze}
-              disabled={isAnalyzing || activeDrivers.length === 0}
-              className="bg-purple-600 hover:bg-purple-700"
-            >
-              {isAnalyzing ? (
-                <>
-                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-                  Analyzing...
-                </>
-              ) : (
-                <>
-                  <Sparkles className="w-4 h-4 mr-2" />
-                  Analyze
-                </>
-              )}
-            </Button>
           </div>
         </CardHeader>
 
@@ -311,40 +261,51 @@ export default function DriverProfiles() {
                         </DropdownMenu>
                       </TableCell>
                       <TableCell>
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-8 text-red-500 hover:text-red-700 hover:bg-red-50"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>Delete Driver</AlertDialogTitle>
-                              <AlertDialogDescription>
-                                Are you sure you want to delete{" "}
-                                <strong>
-                                  {driver.firstName} {driver.lastName}
-                                </strong>
-                                ? This action cannot be undone.
-                              </AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>Cancel</AlertDialogCancel>
-                              <AlertDialogAction
-                                className="bg-red-600 hover:bg-red-700"
-                                onClick={() =>
-                                  deleteDriverMutation.mutate(driver.id)
-                                }
+                        <div className="flex items-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 text-violet-600 hover:text-violet-700 hover:bg-violet-50 dark:text-violet-400 dark:hover:bg-violet-900/20"
+                            onClick={() => navigate(`/drivers/${driver.id}/dna`)}
+                            title="View DNA Profile"
+                          >
+                            <Dna className="w-4 h-4" />
+                          </Button>
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 text-red-500 hover:text-red-700 hover:bg-red-50"
                               >
-                                Delete
-                              </AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>Delete Driver</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  Are you sure you want to delete{" "}
+                                  <strong>
+                                    {driver.firstName} {driver.lastName}
+                                  </strong>
+                                  ? This action cannot be undone.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                <AlertDialogAction
+                                  className="bg-red-600 hover:bg-red-700"
+                                  onClick={() =>
+                                    deleteDriverMutation.mutate(driver.id)
+                                  }
+                                >
+                                  Delete
+                                </AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
+                        </div>
                       </TableCell>
                     </TableRow>
                   );

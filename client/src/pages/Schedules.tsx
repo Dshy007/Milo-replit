@@ -43,6 +43,9 @@ import type { DriverDnaProfile } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
 import type { Block, BlockAssignment, Driver, Contract } from "@shared/schema";
 import { MiloChat } from "@/components/MiloChat";
+import { IntelligentMatchAssistant, type ShiftOccurrence as MatchShiftOccurrence } from "@/components/IntelligentMatchAssistant";
+import { MatchReviewPanel } from "@/components/MatchReviewPanel";
+import { AnalysisErrorModal } from "@/components/AnalysisErrorModal";
 import { MessageSquare } from "lucide-react";
 
 // Day formatting helpers for DNA profile display (Sunday-Saturday order)
@@ -445,6 +448,25 @@ export default function Schedules() {
   const [sidebarMatchingBlockIds, setSidebarMatchingBlockIds] = useState<string[]>([]);
   // Flip card state moved to sidebar - isCardFlipped and showAllBlocks removed
 
+  // Selected block for Intelligent Match Assistant (right panel)
+  const [selectedBlockForMatching, setSelectedBlockForMatching] = useState<ShiftOccurrence | null>(null);
+
+  // Preview mode state for Phase 2: Preview-First Workflow
+  const [isPreviewMode, setIsPreviewMode] = useState(false);
+  const [isLoadingPreview, setIsLoadingPreview] = useState(false);
+  const [isCommittingPreview, setIsCommittingPreview] = useState(false);
+  const [previewAssignments, setPreviewAssignments] = useState<Map<string, { driverId: string; driverName: string; score: number }>>(new Map());
+
+  // Excluded drivers state for Pillar 4: Resilience (graceful error handling)
+  const [excludedDrivers, setExcludedDrivers] = useState<Array<{
+    id: string;
+    name: string;
+    reason: string;
+    assignmentCount?: number;
+    patternConfidence?: number;
+  }>>([]);
+  const [showExcludedDriversModal, setShowExcludedDriversModal] = useState(false);
+
   // The "active" driver is either selected (sticky) or hovered
   const activeDriverId = selectedDriverId || hoveredDriverId;
 
@@ -533,6 +555,8 @@ export default function Schedules() {
 
 
   const handleOccurrenceClick = (occurrence: ShiftOccurrence) => {
+    // Also set selected block for Intelligent Match Assistant
+    setSelectedBlockForMatching(occurrence);
     setSelectedOccurrence(occurrence);
     setIsAssignmentModalOpen(true);
   };
@@ -1852,6 +1876,9 @@ export default function Schedules() {
   // Two-way matching: Click unassigned block → Find and select matching driver
   // Uses the same Holy Grail matching logic (Contract + Day + Time)
   const handleUnassignedBlockClick = useCallback((occurrence: ShiftOccurrence) => {
+    // Set selected block for Intelligent Match Assistant (right panel)
+    setSelectedBlockForMatching(occurrence);
+
     if (!dnaProfileMap.size || !allDrivers.length) {
       return;
     }
@@ -1936,6 +1963,132 @@ export default function Schedules() {
       description: `${bestMatch.driverName} (${bestMatch.score}% match) for ${occurrence.blockId}`,
     });
   }, [dnaProfileMap, allDrivers, toast, setSelectedDriverId]);
+
+  // Handler for assigning driver from IntelligentMatchAssistant
+  const handleAssignFromMatchAssistant = useCallback(async (occurrenceId: string, driverId: string) => {
+    try {
+      await updateAssignmentMutation.mutateAsync({
+        occurrenceId,
+        driverId,
+      });
+
+      // Clear the selected block since it's now assigned
+      setSelectedBlockForMatching(null);
+
+      toast({
+        title: "Driver Assigned",
+        description: "Successfully assigned driver to block",
+      });
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Assignment Failed",
+        description: error.message || "Failed to assign driver",
+      });
+    }
+  }, [updateAssignmentMutation, toast]);
+
+  // Generate Match Preview - runs matching algorithm but doesn't save
+  const handleGeneratePreview = useCallback(async () => {
+    setIsLoadingPreview(true);
+    try {
+      const response = await apiRequest("POST", "/api/matching/deterministic/preview-all", {
+        weekStart: format(weekRange.weekStart, 'yyyy-MM-dd'),
+      });
+      const data = await response.json();
+
+      if (data.success && data.suggestions) {
+        const assignmentMap = new Map<string, { driverId: string; driverName: string; score: number }>();
+        for (const suggestion of data.suggestions) {
+          assignmentMap.set(suggestion.blockId, {
+            driverId: suggestion.driverId,
+            driverName: suggestion.driverName,
+            score: suggestion.score,
+          });
+        }
+        setPreviewAssignments(assignmentMap);
+        setIsPreviewMode(true);
+
+        // Check for excluded drivers (Pillar 4: Resilience)
+        if (data.excludedDrivers && data.excludedDrivers.length > 0) {
+          setExcludedDrivers(data.excludedDrivers);
+          setShowExcludedDriversModal(true);
+        }
+
+        toast({
+          title: "Preview Generated",
+          description: `${assignmentMap.size} proposed assignments ready for review${
+            data.excludedDrivers?.length > 0
+              ? ` (${data.excludedDrivers.length} drivers excluded)`
+              : ''
+          }`,
+        });
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Preview Failed",
+          description: data.message || "Failed to generate preview",
+        });
+      }
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Preview Failed",
+        description: error.message || "Failed to generate preview",
+      });
+    } finally {
+      setIsLoadingPreview(false);
+    }
+  }, [weekRange.weekStart, toast]);
+
+  // Cancel preview mode
+  const handleCancelPreview = useCallback(() => {
+    setIsPreviewMode(false);
+    setPreviewAssignments(new Map());
+  }, []);
+
+  // Commit all preview assignments
+  const handleCommitPreviewAssignments = useCallback(async () => {
+    if (previewAssignments.size === 0) return;
+
+    setIsCommittingPreview(true);
+    try {
+      const assignmentsToCommit = Array.from(previewAssignments.entries()).map(([blockId, data]) => ({
+        blockId,
+        driverId: data.driverId,
+      }));
+
+      const response = await apiRequest("POST", "/api/matching/deterministic/apply", {
+        assignments: assignmentsToCommit,
+      });
+      const data = await response.json();
+
+      if (data.success) {
+        toast({
+          title: "Assignments Committed!",
+          description: `Successfully assigned ${data.applied || assignmentsToCommit.length} drivers`,
+        });
+        setIsPreviewMode(false);
+        setPreviewAssignments(new Map());
+        // Refresh the calendar data
+        queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Commit Failed",
+          description: data.message || "Failed to commit assignments",
+        });
+      }
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Commit Failed",
+        description: error.message || "Failed to commit assignments",
+      });
+    } finally {
+      setIsCommittingPreview(false);
+    }
+  }, [previewAssignments, toast, queryClient]);
 
   // Click on time slot row header → Find and highlight all matching drivers
   // Shows drivers whose DNA matches this contract type + time slot (EXACT time match only)
@@ -2195,6 +2348,36 @@ export default function Schedules() {
               >
                 <MessageSquare className="w-4 h-4 mr-2" />
                 Ask MILO
+              </Button>
+
+              {/* Generate Match Preview Button */}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleGeneratePreview}
+                disabled={isLoadingPreview || isPreviewMode}
+                className={isPreviewMode
+                  ? "bg-violet-100 border-violet-300 text-violet-700 dark:bg-violet-900/30 dark:border-violet-700 dark:text-violet-300"
+                  : "bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white border-0"
+                }
+                data-testid="button-generate-preview"
+              >
+                {isLoadingPreview ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Generating...
+                  </>
+                ) : isPreviewMode ? (
+                  <>
+                    <Sparkles className="w-4 h-4 mr-2" />
+                    Preview Active
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4 mr-2" />
+                    Generate Match Preview
+                  </>
+                )}
               </Button>
 
               {/* DNA Matching Status Indicator */}
@@ -2471,6 +2654,22 @@ export default function Schedules() {
                   {blockAnalysis.length}
                 </Badge>
               )}
+            </Button>
+
+            {/* Refresh DNA Profiles Button */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => analyzeDnaMutation.mutate()}
+              disabled={analyzeDnaMutation.isPending}
+              className="flex items-center gap-1"
+            >
+              {analyzeDnaMutation.isPending ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Sparkles className="w-4 h-4" />
+              )}
+              Refresh DNA
             </Button>
           </div>
         </div>
@@ -2874,6 +3073,43 @@ export default function Schedules() {
                                       (() => {
                                         // Use pre-computed highlighted IDs for the Unassigned button
                                         const isButtonHighlighted = highlightedOccurrenceIds.has(occ.occurrenceId);
+                                        // Check for preview assignment
+                                        const previewAssignment = isPreviewMode ? previewAssignments.get(occ.blockId) : null;
+                                        const hasPreviewAssignment = !!previewAssignment;
+
+                                        // If in preview mode with assignment, show ghost assignment
+                                        if (hasPreviewAssignment) {
+                                          return (
+                                            <div
+                                              className="w-full p-2 rounded-b-md border-2 border-dashed text-xs transition-all cursor-pointer relative group"
+                                              style={{
+                                                backgroundColor: 'rgba(139, 92, 246, 0.1)', // violet
+                                                borderColor: 'rgba(139, 92, 246, 0.5)',
+                                                boxShadow: '0 0 15px rgba(139, 92, 246, 0.3), inset 0 0 10px rgba(139, 92, 246, 0.1)',
+                                              }}
+                                              onClick={() => handleUnassignedBlockClick(occ)}
+                                              title={`Preview: ${previewAssignment.driverName} (${Math.round(previewAssignment.score * 100)}% match)`}
+                                            >
+                                              <div className="flex items-center gap-1.5">
+                                                <Sparkles className="w-3 h-3 text-violet-500 flex-shrink-0" />
+                                                <span className="font-medium text-violet-700 dark:text-violet-300 truncate">
+                                                  {previewAssignment.driverName}
+                                                </span>
+                                              </div>
+                                              <div className="flex items-center justify-between mt-1">
+                                                <Badge
+                                                  variant="secondary"
+                                                  className="text-[10px] px-1.5 py-0 bg-violet-200 text-violet-700 dark:bg-violet-900/50 dark:text-violet-300"
+                                                >
+                                                  PREVIEW
+                                                </Badge>
+                                                <span className="text-[10px] text-violet-600 dark:text-violet-400 font-mono">
+                                                  {Math.round(previewAssignment.score * 100)}%
+                                                </span>
+                                              </div>
+                                            </div>
+                                          );
+                                        }
 
                                         return (
                                       <div
@@ -2946,6 +3182,14 @@ export default function Schedules() {
           </table>
         </CardContent>
       </Card>
+
+          {/* Intelligent Match Assistant - Right Panel */}
+          <Card className="w-80 flex-shrink-0 overflow-hidden border-l" style={{ backgroundColor: themeMode === 'day' ? undefined : 'rgba(0, 0, 0, 0.2)' }}>
+            <IntelligentMatchAssistant
+              selectedBlock={selectedBlockForMatching as MatchShiftOccurrence | null}
+              onAssignDriver={handleAssignFromMatchAssistant}
+            />
+          </Card>
         </div>
 
           {/* DragOverlay shows a floating clone while dragging - MUST be outside scroll container */}
@@ -3303,6 +3547,35 @@ export default function Schedules() {
 
       {/* MILO Chat */}
       <MiloChat isOpen={isMiloChatOpen} onClose={() => setIsMiloChatOpen(false)} />
+
+      {/* Match Review Panel - shows when in preview mode */}
+      {isPreviewMode && (
+        <MatchReviewPanel
+          previewAssignments={previewAssignments}
+          onCommit={handleCommitPreviewAssignments}
+          onCancel={handleCancelPreview}
+          isCommitting={isCommittingPreview}
+        />
+      )}
+
+      {/* Analysis Error Modal - Pillar 4: Resilience (graceful error handling) */}
+      <AnalysisErrorModal
+        isOpen={showExcludedDriversModal}
+        onClose={() => setShowExcludedDriversModal(false)}
+        excludedDrivers={excludedDrivers}
+        onProceedWithoutExcluded={() => {
+          setShowExcludedDriversModal(false);
+          // Preview is already generated, just close the modal
+        }}
+        onManualAssign={(driverId) => {
+          // Navigate to driver profiles or open assignment modal
+          setShowExcludedDriversModal(false);
+          toast({
+            title: "Manual Assignment",
+            description: "You can manually assign this driver using the calendar grid.",
+          });
+        }}
+      />
 
     </div>
   </div>

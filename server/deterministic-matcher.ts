@@ -216,6 +216,14 @@ interface MatchResult {
   matchType: string;
   ownershipPct: number;
   slotType: string;
+  // Block info for display
+  blockInfo: {
+    serviceDate: string;
+    startTime: string;
+    tractorId: string;
+    contractType: string;
+    dayName: string;
+  };
 }
 
 /**
@@ -410,6 +418,15 @@ function calculateXGBoostScore(
 /**
  * Main deterministic matching function using XGBoost
  */
+// Type for excluded driver information (for graceful error handling)
+export interface ExcludedDriver {
+  id: string;
+  name: string;
+  reason: 'insufficient_history' | 'low_confidence' | 'new_driver';
+  assignmentCount?: number;
+  patternConfidence?: number;
+}
+
 export async function matchDeterministic(
   tenantId: string,
   weekStart: Date,
@@ -419,6 +436,7 @@ export async function matchDeterministic(
 ): Promise<{
   suggestions: MatchResult[];
   unassigned: string[];
+  excludedDrivers: ExcludedDriver[];
   stats: {
     totalBlocks: number;
     totalDrivers: number;
@@ -538,7 +556,7 @@ export async function matchDeterministic(
   console.log(`[XGBoost-Matcher] Loaded ${protectedRules.length} protected driver rules`);
 
   // 6. Load existing assignments WITH blocks for DOT lookback (past 7 days + this week)
-  const lookbackStart = subDays(weekStart, 7);
+  const dotLookbackStart = subDays(weekStart, 7);
   const existingAssignmentsWithBlocks = await db
     .select({
       assignment: blockAssignments,
@@ -550,11 +568,11 @@ export async function matchDeterministic(
       and(
         eq(blockAssignments.tenantId, tenantId),
         eq(blockAssignments.isActive, true),
-        gte(blocks.serviceDate, lookbackStart)
+        gte(blocks.serviceDate, dotLookbackStart)
       )
     );
 
-  // Group by driver for quick lookup
+  // Group by driver for quick lookup (DOT validation)
   const assignmentsByDriver = new Map<string, Array<typeof blockAssignments.$inferSelect & { block: typeof blocks.$inferSelect }>>();
   for (const row of existingAssignmentsWithBlocks) {
     const driverId = row.assignment.driverId;
@@ -568,18 +586,54 @@ export async function matchDeterministic(
   }
   console.log(`[XGBoost-Matcher] Loaded ${existingAssignmentsWithBlocks.length} existing assignments for DOT validation`);
 
+  // 6b. Load 12-week assignment history for driver filtering
+  // This is separate from DOT lookback because we need full 12 weeks for pattern analysis
+  const historyLookbackStart = subWeeks(new Date(), 12);
+  const historicalAssignmentCounts = await db
+    .select({
+      driverId: blockAssignments.driverId,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(blockAssignments)
+    .innerJoin(blocks, eq(blockAssignments.blockId, blocks.id))
+    .where(
+      and(
+        eq(blockAssignments.tenantId, tenantId),
+        eq(blockAssignments.isActive, true),
+        gte(blocks.serviceDate, historyLookbackStart)
+      )
+    )
+    .groupBy(blockAssignments.driverId);
+
+  // Create map of driver ID to 12-week assignment count
+  const driverHistoryCounts = new Map<string, number>();
+  for (const row of historicalAssignmentCounts) {
+    driverHistoryCounts.set(row.driverId, row.count);
+  }
+  console.log(`[XGBoost-Matcher] 12-week history: ${historicalAssignmentCounts.length} drivers with assignments`);
+
   // FIX #1: Filter out drivers with insufficient history (< 12 assignments in 12 weeks)
   // This excludes part-time/on-call drivers who only work occasionally
-  const MIN_ASSIGNMENTS_12_WEEKS = 12; // Minimum 1 assignment per week average
+  // NOTE: Lowered threshold from 12 to 4 to be more lenient for new deployments
+  const MIN_ASSIGNMENTS_12_WEEKS = 4; // Minimum ~1 assignment per 3 weeks
   const driversBeforeFilter = driverInfos.length;
 
+  // Track excluded drivers for graceful error handling (Pillar 4: Resilience)
+  const excludedDrivers: ExcludedDriver[] = [];
+
   // Filter driverInfos to only include drivers with sufficient history
+  // Use the 12-week historical count, not the 7-day DOT lookback
   const reliableDriverInfos = driverInfos.filter(driver => {
-    const driverAssignments = assignmentsByDriver.get(driver.id) || [];
-    const assignmentCount = driverAssignments.length;
+    const assignmentCount = driverHistoryCounts.get(driver.id) || 0;
 
     if (assignmentCount < MIN_ASSIGNMENTS_12_WEEKS) {
       console.log(`[XGBoost-Matcher] Excluding ${driver.name}: only ${assignmentCount} assignments in 12 weeks (need ${MIN_ASSIGNMENTS_12_WEEKS})`);
+      excludedDrivers.push({
+        id: driver.id,
+        name: driver.name,
+        reason: assignmentCount === 0 ? 'new_driver' : 'insufficient_history',
+        assignmentCount,
+      });
       return false;
     }
 
@@ -587,6 +641,27 @@ export async function matchDeterministic(
   });
 
   console.log(`[XGBoost-Matcher] ${reliableDriverInfos.length}/${driversBeforeFilter} drivers meet minimum assignment threshold (${MIN_ASSIGNMENTS_12_WEEKS}+ in 12 weeks)`);
+
+  // Also check for low-confidence patterns among reliable drivers and track them
+  const MIN_PATTERN_CONFIDENCE = 0.1;
+  for (const driver of reliableDriverInfos) {
+    const pattern = findByNormalizedName(driverPatterns, driver.name);
+    const patternConfidence = pattern?.confidence ?? 0;
+    if (patternConfidence < MIN_PATTERN_CONFIDENCE) {
+      // Don't exclude yet, but track for user notification
+      // The per-block loop will skip them, but we want to inform the user
+      excludedDrivers.push({
+        id: driver.id,
+        name: driver.name,
+        reason: 'low_confidence',
+        patternConfidence,
+      });
+    }
+  }
+
+  if (excludedDrivers.length > 0) {
+    console.log(`[XGBoost-Matcher] ${excludedDrivers.length} drivers excluded (will notify user for graceful handling)`);
+  }
 
   // 7. Get all block assignments for conflict checking
   const allBlockAssignments = await db
@@ -718,6 +793,7 @@ export async function matchDeterministic(
     return {
       suggestions: [],
       unassigned: blockInfos.map(b => b.id),
+      excludedDrivers,
       stats: {
         totalBlocks: blockInfos.length,
         totalDrivers: driverInfos.length,
@@ -729,37 +805,62 @@ export async function matchDeterministic(
   }
 
   // 5. Cache slot distributions from XGBoost ownership model
+  // PRE-LOAD all unique slots in parallel for performance (avoids per-block Python calls)
   const slotDistributionCache = new Map<string, SlotDistribution | null>();
   let pythonCallCount = 0;
   const SKIP_PYTHON = false; // Enable XGBoost ownership predictions
 
-  async function getSlotDistributionCached(
+  if (!SKIP_PYTHON && blockInfos.length > 0) {
+    // Collect unique slot combinations
+    const uniqueSlots = new Map<string, { soloType: string; tractorId: string; dayOfWeek: number; time: string }>();
+    for (const block of blockInfos) {
+      const cacheKey = `${block.contractType}_${block.tractorId}_${block.dayIndex}_${block.time}`;
+      if (!uniqueSlots.has(cacheKey)) {
+        uniqueSlots.set(cacheKey, {
+          soloType: block.contractType,
+          tractorId: block.tractorId,
+          dayOfWeek: block.dayIndex,
+          time: block.time,
+        });
+      }
+    }
+
+    console.log(`[XGBoost-Matcher] Pre-loading ${uniqueSlots.size} unique slot distributions...`);
+
+    // Load all slots in parallel (batches of 10 to avoid overwhelming Python)
+    const slotEntries = Array.from(uniqueSlots.entries());
+    const BATCH_SIZE = 10;
+
+    for (let i = 0; i < slotEntries.length; i += BATCH_SIZE) {
+      const batch = slotEntries.slice(i, i + BATCH_SIZE);
+      const promises = batch.map(async ([cacheKey, slot]) => {
+        pythonCallCount++;
+        const result = await getSlotDistribution({
+          soloType: slot.soloType,
+          tractorId: slot.tractorId,
+          dayOfWeek: slot.dayOfWeek,
+          canonicalTime: slot.time,
+        });
+        const data = result.success && result.data ? result.data : null;
+        slotDistributionCache.set(cacheKey, data);
+      });
+      await Promise.all(promises);
+    }
+
+    console.log(`[XGBoost-Matcher] Pre-loaded ${slotDistributionCache.size} slot distributions (${pythonCallCount} Python calls)`);
+  }
+
+  function getSlotDistributionCached(
     soloType: string,
     tractorId: string,
     dayOfWeek: number,
     canonicalTime: string
-  ): Promise<SlotDistribution | null> {
-    // Skip Python calls entirely for speed - rely on patterns + type matching
+  ): SlotDistribution | null {
     if (SKIP_PYTHON) {
       return null;
     }
-
     const cacheKey = `${soloType}_${tractorId}_${dayOfWeek}_${canonicalTime}`;
-    if (slotDistributionCache.has(cacheKey)) {
-      return slotDistributionCache.get(cacheKey)!;
-    }
-
-    pythonCallCount++;
-    const result = await getSlotDistribution({
-      soloType,
-      tractorId,
-      dayOfWeek,
-      canonicalTime
-    });
-
-    const data = result.success && result.data ? result.data : null;
-    slotDistributionCache.set(cacheKey, data);
-    return data;
+    return slotDistributionCache.get(cacheKey) || null;
   }
 
   // 6. Greedy matching: for each block, find best available driver with DOT compliance
@@ -771,8 +872,8 @@ export async function matchDeterministic(
   const newAssignmentsByDriver = new Map<string, Array<{ block: typeof blocks.$inferSelect }>>();
 
   for (const block of blockInfos) {
-    // Get slot distribution from XGBoost for this block
-    const ownershipData = await getSlotDistributionCached(
+    // Get slot distribution from XGBoost for this block (pre-loaded, no await needed)
+    const ownershipData = getSlotDistributionCached(
       block.contractType,
       block.tractorId,
       block.dayIndex,
@@ -923,6 +1024,13 @@ export async function matchDeterministic(
         matchType: winner.matchType,
         ownershipPct: winner.ownershipPct,
         slotType: ownershipData?.slot_type || 'unknown',
+        blockInfo: {
+          serviceDate: block.serviceDate,
+          startTime: block.time,
+          tractorId: block.tractorId,
+          contractType: block.contractType,
+          dayName: block.dayName,
+        },
       });
     } else {
       unassigned.push(block.id);
@@ -961,6 +1069,7 @@ export async function matchDeterministic(
   return {
     suggestions,
     unassigned,
+    excludedDrivers,
     stats: {
       totalBlocks: blockInfos.length,
       totalDrivers: driverInfos.length,
@@ -1021,4 +1130,291 @@ export async function applyDeterministicMatches(
 
   console.log(`[XGBoost-Matcher] Applied ${applied} assignments, ${errors.length} errors`);
   return { applied, errors };
+}
+
+/**
+ * Get top driver matches for a single block
+ * Used by the Intelligent Match Assistant panel
+ */
+export async function getTopMatchesForBlock(
+  tenantId: string,
+  blockDbId: string,
+  limit: number = 10
+): Promise<{
+  success: boolean;
+  blockId: string;
+  blockInfo: {
+    serviceDate: string;
+    startTime: string;
+    contractType: string;
+    tractorId: string;
+    dayName: string;
+  };
+  matches: Array<{
+    driverId: string;
+    driverName: string;
+    score: number;
+    ownershipPct: number;
+    matchType: string;
+    reasons: string[];
+    patternConfidence: number;
+    typicalDays: number;
+    dayList: string[];
+  }>;
+  totalCandidates: number;
+}> {
+  console.log(`[XGBoost-Matcher] Getting top matches for block ${blockDbId}`);
+
+  // 1. Get the block details
+  const blockResult = await db
+    .select()
+    .from(blocks)
+    .where(and(
+      eq(blocks.id, blockDbId),
+      eq(blocks.tenantId, tenantId)
+    ));
+
+  if (blockResult.length === 0) {
+    throw new Error(`Block ${blockDbId} not found`);
+  }
+
+  const block = blockResult[0];
+  const serviceDate = new Date(block.serviceDate);
+  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const dayName = dayNames[serviceDate.getDay()];
+  const dayIndex = serviceDate.getDay();
+
+  // Get start time from timestamp
+  const startTime = block.startTimestamp
+    ? format(new Date(block.startTimestamp), 'HH:mm')
+    : '00:00';
+
+  const blockInfo = {
+    serviceDate: format(serviceDate, 'yyyy-MM-dd'),
+    startTime,
+    contractType: (block.soloType || 'solo1').toLowerCase(),
+    tractorId: block.tractorId || 'Tractor_1',
+    dayName,
+  };
+
+  console.log(`[XGBoost-Matcher] Block info: ${JSON.stringify(blockInfo)}`);
+
+  // 2. Get all active drivers
+  const allDriversRaw = await db
+    .select({
+      id: drivers.id,
+      firstName: drivers.firstName,
+      lastName: drivers.lastName,
+      daysOff: drivers.daysOff,
+    })
+    .from(drivers)
+    .where(
+      and(
+        eq(drivers.tenantId, tenantId),
+        eq(drivers.status, "active"),
+        or(isNull(drivers.isActive), eq(drivers.isActive, true))
+      )
+    );
+
+  // 3. Get driver patterns from XGBoost
+  const { getAllDriverPatterns, getSlotDistribution, getBatchSlotAffinity } = await import("./python-bridge");
+  const patternsResult = await getAllDriverPatterns();
+  const driverPatterns: Record<string, DriverPattern> =
+    patternsResult.success && patternsResult.data?.patterns
+      ? patternsResult.data.patterns
+      : {};
+
+  // 4. Get slot ownership distribution
+  const ownershipData = await getSlotDistribution({
+    soloType: blockInfo.contractType,
+    tractorId: blockInfo.tractorId,
+    dayOfWeek: dayIndex,
+    canonicalTime: startTime,
+  });
+
+  const slotDistribution = ownershipData.success && ownershipData.data ? ownershipData.data : null;
+
+  // 5. Get 12-week historical assignments for filtering
+  const lookbackStart = subWeeks(new Date(), 12);
+  const existingAssignmentsWithBlocks = await db
+    .select({
+      assignment: blockAssignments,
+      block: blocks,
+    })
+    .from(blockAssignments)
+    .innerJoin(blocks, eq(blockAssignments.blockId, blocks.id))
+    .where(
+      and(
+        eq(blockAssignments.tenantId, tenantId),
+        eq(blockAssignments.isActive, true),
+        gte(blocks.serviceDate, lookbackStart)
+      )
+    );
+
+  // Group assignments by driver
+  const assignmentsByDriver = new Map<string, number>();
+  for (const row of existingAssignmentsWithBlocks) {
+    const driverId = row.assignment.driverId;
+    assignmentsByDriver.set(driverId, (assignmentsByDriver.get(driverId) || 0) + 1);
+  }
+
+  // 6. Get batch affinity scores for this block
+  const blockSlots = [{
+    date: blockInfo.serviceDate,
+    soloType: blockInfo.contractType,
+    tractorId: blockInfo.tractorId,
+  }];
+
+  const driversWithHistory = allDriversRaw.map(driver => {
+    const driverAssignments = existingAssignmentsWithBlocks.filter(
+      a => a.assignment.driverId === driver.id
+    );
+    return {
+      id: driver.id,
+      name: `${driver.firstName} ${driver.lastName}`.trim(),
+      history: driverAssignments.map(a => ({
+        serviceDate: format(new Date(a.block.serviceDate), "yyyy-MM-dd"),
+        soloType: a.block.soloType || undefined,
+        tractorId: a.block.tractorId || undefined,
+      })),
+    };
+  });
+
+  // Get affinity scores
+  const affinityResult = await getBatchSlotAffinity(blockSlots, driversWithHistory);
+  const affinityCache = new Map<string, number>();
+
+  if (affinityResult.success && affinityResult.data?.scores) {
+    for (const [key, score] of Object.entries(affinityResult.data.scores)) {
+      affinityCache.set(key, score as number);
+    }
+  }
+
+  // 7. Score each driver
+  const MIN_ASSIGNMENTS_12_WEEKS = 12;
+  const candidates: Array<{
+    driverId: string;
+    driverName: string;
+    score: number;
+    ownershipPct: number;
+    matchType: string;
+    reasons: string[];
+    patternConfidence: number;
+    typicalDays: number;
+    dayList: string[];
+  }> = [];
+
+  for (const driver of allDriversRaw) {
+    const driverName = `${driver.firstName} ${driver.lastName}`.trim();
+    const assignmentCount = assignmentsByDriver.get(driver.id) || 0;
+
+    // Skip drivers with insufficient history
+    if (assignmentCount < MIN_ASSIGNMENTS_12_WEEKS) {
+      continue;
+    }
+
+    // Get driver pattern
+    const pattern = findByNormalizedName(driverPatterns, driverName);
+    const patternConfidence = pattern?.confidence ?? 0;
+
+    // Skip drivers with zero-confidence patterns
+    if (patternConfidence < 0.1) {
+      continue;
+    }
+
+    // Check if driver has this day off
+    if (driver.daysOff && driver.daysOff.includes(dayName.toLowerCase())) {
+      continue;
+    }
+
+    // Get ownership score
+    const foundOwnership = slotDistribution?.shares
+      ? findByNormalizedName(slotDistribution.shares, driverName)
+      : undefined;
+    const ownershipScore = foundOwnership ?? 0.0;
+    const ownershipPct = Math.round(ownershipScore * 100);
+
+    // Get affinity score
+    const slotKey = `${blockInfo.contractType}|${blockInfo.tractorId}|${blockInfo.serviceDate}`;
+    const affinityCacheKey = `${driver.id}_${slotKey}`;
+    let affinityScore = affinityCache.get(affinityCacheKey);
+
+    if (affinityScore === undefined) {
+      // Fallback: day-list check
+      const hasDayList = pattern?.day_list && pattern.day_list.length > 0;
+      if (!hasDayList) {
+        affinityScore = 0.3;
+      } else {
+        const worksThisDay = pattern.day_list.some(
+          d => d.toLowerCase() === dayName.toLowerCase()
+        );
+        affinityScore = worksThisDay ? 1.0 : 0.6;
+      }
+    }
+
+    // Calculate combined score
+    const predictability = 0.7;
+    const baseScore = (ownershipScore * predictability) + (affinityScore * (1 - predictability));
+
+    // Apply confidence multiplier to bonuses
+    const confidenceMultiplier = patternConfidence < 0.5 ? 0.5 : 1.0;
+    const fairnessBonus = 0; // No fairness bonus for single-block matching
+    const minDaysBoost = 0;
+
+    const finalScore = Math.min(1.0, baseScore + fairnessBonus + minDaysBoost);
+
+    // Determine match type
+    let matchType: string;
+    const reasons: string[] = [];
+
+    if (ownershipScore >= 0.70) {
+      matchType = 'owner';
+      reasons.push(`★ Owns slot (${ownershipPct}%)`);
+    } else if (ownershipScore >= 0.30) {
+      matchType = 'shared';
+      reasons.push(`◐ Shares slot (${ownershipPct}%)`);
+    } else if (affinityScore >= 0.70) {
+      matchType = 'pattern';
+      reasons.push(`○ Pattern ${Math.round(affinityScore * 100)}%`);
+    } else {
+      matchType = 'fallback';
+      reasons.push(`△ Weak ${Math.round(affinityScore * 100)}%`);
+    }
+
+    // Add pattern info
+    reasons.push(`${pattern?.typical_days ?? 6}d pattern`);
+
+    // Skip very low scores
+    if (finalScore < 0.1) {
+      continue;
+    }
+
+    candidates.push({
+      driverId: driver.id,
+      driverName,
+      score: Math.round(finalScore * 100) / 100,
+      ownershipPct,
+      matchType,
+      reasons,
+      patternConfidence,
+      typicalDays: pattern?.typical_days ?? 0,
+      dayList: pattern?.day_list ?? [],
+    });
+  }
+
+  // Sort by score descending
+  candidates.sort((a, b) => b.score - a.score);
+
+  // Return top matches
+  const topMatches = candidates.slice(0, limit);
+
+  console.log(`[XGBoost-Matcher] Found ${candidates.length} candidates, returning top ${topMatches.length}`);
+
+  return {
+    success: true,
+    blockId: blockDbId,
+    blockInfo,
+    matches: topMatches,
+    totalCandidates: candidates.length,
+  };
 }
