@@ -18,3 +18,5 @@ PLAN.md
 
 # Claude local settings
 .claude/settings.local.json
+check_call_status.py
+make_urgent_call.py
