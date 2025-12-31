@@ -17,9 +17,10 @@ import {
   insertSpecialRequestSchema, updateSpecialRequestSchema,
   insertDriverAvailabilityPreferenceSchema, updateDriverAvailabilityPreferenceSchema,
   blocks, blockAssignments, assignmentHistory, driverContractStats, drivers, protectedDriverRules,
-  shiftOccurrences, shiftTemplates, contracts, trucks, driverAvailabilityPreferences, driverDnaProfiles
+  shiftOccurrences, shiftTemplates, contracts, trucks, driverAvailabilityPreferences, driverDnaProfiles,
+  dropInSessions, driverPresence, insertDropInSessionSchema, voiceBroadcasts
 } from "@shared/schema";
-import { eq, and, inArray, sql, gte, lte, not, desc } from "drizzle-orm";
+import { eq, and, inArray, sql, gte, lte, not, desc, isNotNull } from "drizzle-orm";
 import session from "express-session";
 import { fromZodError } from "zod-validation-error";
 import bcrypt from "bcryptjs";
@@ -32,6 +33,8 @@ import { analyzeCascadeEffect, executeCascadeChange, type CascadeAnalysisRequest
 import { optimizeWithMilo, applyMiloSchedule } from "./milo-scheduler";
 import { matchDeterministic, applyDeterministicMatches } from "./deterministic-matcher";
 import { regenerateDNAFromBlockAssignments } from "./dna-analyzer";
+import { initWebSocket, getOnlineDrivers, isDriverOnline, getActiveDropIns } from "./websocket";
+import { twilioService } from "./twilio-service";
 
 // Require SESSION_SECRET
 const SESSION_SECRET = process.env.SESSION_SECRET!;
@@ -4146,10 +4149,12 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
 
       // Return suggestions with explicit driverName for display
       // Include excludedDrivers for graceful error handling (Pillar 4: Resilience)
+      // Include unassignedWithReasons for Conflict View (reasons why blocks couldn't be assigned)
       res.json({
         success: true,
         suggestions: result.suggestions,
         unassigned: result.unassigned,
+        unassignedWithReasons: result.unassignedWithReasons || [],
         excludedDrivers: result.excludedDrivers || [],
         stats: result.stats,
         message: `Preview generated: ${result.suggestions.length} assignments proposed`,
@@ -4344,6 +4349,53 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
       res.status(500).json({
         success: false,
         message: "Failed to clear chat history"
+      });
+    }
+  });
+
+
+  // POST /api/milo/schedule/build - Run the agentic scheduling system
+  app.post("/api/milo/schedule/build", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { weekStart } = req.body;
+
+      if (!weekStart) {
+        return res.status(400).json({
+          success: false,
+          message: "weekStart is required (YYYY-MM-DD format)"
+        });
+      }
+
+      console.log(`[API] Starting agentic schedule build for ${weekStart}`);
+
+      const { runSchedulingAgent } = await import("./ai/milo-scheduler");
+      const result = await runSchedulingAgent(tenantId, weekStart);
+
+      console.log(`[API] Schedule build complete: ${result.assigned}/${result.totalBlocks} assigned`);
+
+      res.json({
+        success: result.success,
+        message: result.message,
+        totalBlocks: result.totalBlocks,
+        assigned: result.assigned,
+        unassigned: result.unassigned,
+        reasoning: result.reasoning,
+        decisions: result.decisions.map(d => ({
+          blockId: d.blockId,
+          blockInfo: d.blockInfo,
+          driverId: d.driverId,
+          driverName: d.driverName,
+          action: d.action,
+          reasoning: d.reasoning
+        }))
+      });
+    } catch (error: any) {
+      console.error("Agentic schedule build error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to build schedule",
+        error: error.message
       });
     }
   });
@@ -6748,6 +6800,1426 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
     }
   });
 
+  // ==========================================================================
+  // Fleet Communication API Endpoints
+  // ==========================================================================
+
+  // Get all drivers with their online/offline status
+  app.get("/api/fleet-comm/drivers", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+
+      // Get all drivers
+      const allDrivers = await db.select()
+        .from(drivers)
+        .where(and(
+          eq(drivers.tenantId, tenantId),
+          eq(drivers.isActive, true)
+        ));
+
+      // Get online drivers from WebSocket
+      const onlineDrivers = getOnlineDrivers(tenantId);
+      const onlineDriverIds = new Set(onlineDrivers.map(d => d.driverId));
+
+      // Combine data
+      const driversWithStatus = allDrivers.map(driver => ({
+        ...driver,
+        isOnline: onlineDriverIds.has(driver.id),
+        lastSeen: onlineDrivers.find(d => d.driverId === driver.id)?.lastSeen || null
+      }));
+
+      res.json({
+        success: true,
+        drivers: driversWithStatus,
+        onlineCount: onlineDriverIds.size,
+        totalCount: allDrivers.length
+      });
+    } catch (error: any) {
+      console.error("Get fleet comm drivers error:", error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  // Get active drop-in sessions
+  app.get("/api/fleet-comm/active-sessions", requireAuth, async (req, res) => {
+    try {
+      const activeSessions = getActiveDropIns();
+      res.json({ success: true, sessions: activeSessions });
+    } catch (error: any) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  // Get drop-in session history
+  app.get("/api/fleet-comm/sessions", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const limit = parseInt(req.query.limit as string) || 50;
+
+      const sessions = await db.select()
+        .from(dropInSessions)
+        .where(eq(dropInSessions.tenantId, tenantId))
+        .orderBy(desc(dropInSessions.startedAt))
+        .limit(limit);
+
+      res.json({ success: true, sessions });
+    } catch (error: any) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  // Create a drop-in session record (called when session starts)
+  app.post("/api/fleet-comm/sessions", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const dispatcherId = req.session.userId!;
+
+      const result = insertDropInSessionSchema.safeParse({
+        ...req.body,
+        tenantId,
+        dispatcherId
+      });
+
+      if (!result.success) {
+        return res.status(400).json({
+          success: false,
+          message: fromZodError(result.error).message
+        });
+      }
+
+      const [session] = await db.insert(dropInSessions)
+        .values(result.data)
+        .returning();
+
+      res.json({ success: true, session });
+    } catch (error: any) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  // End a drop-in session
+  app.patch("/api/fleet-comm/sessions/:id/end", requireAuth, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const endedAt = new Date();
+
+      // Get session to calculate duration
+      const [existingSession] = await db.select()
+        .from(dropInSessions)
+        .where(eq(dropInSessions.id, id))
+        .limit(1);
+
+      if (!existingSession) {
+        return res.status(404).json({ success: false, message: "Session not found" });
+      }
+
+      const durationSeconds = Math.floor(
+        (endedAt.getTime() - existingSession.startedAt.getTime()) / 1000
+      );
+
+      const [updatedSession] = await db.update(dropInSessions)
+        .set({
+          status: "ended",
+          endedAt,
+          durationSeconds,
+          notes: req.body.notes
+        })
+        .where(eq(dropInSessions.id, id))
+        .returning();
+
+      res.json({ success: true, session: updatedSession });
+    } catch (error: any) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  // Check if a driver is online (REST fallback)
+  app.get("/api/fleet-comm/drivers/:driverId/status", requireAuth, async (req, res) => {
+    try {
+      const { driverId } = req.params;
+      const isOnline = isDriverOnline(driverId);
+      res.json({ success: true, driverId, isOnline });
+    } catch (error: any) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  // Make a phone call to a driver via Twilio (grandma mode drop-in)
+  app.post("/api/fleet-comm/call", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId;
+      if (!tenantId) {
+        return res.status(401).json({ success: false, message: "No tenant" });
+      }
+
+      const { driverId, phoneNumber, message } = req.body;
+
+      if (!phoneNumber) {
+        return res.status(400).json({ success: false, message: "Phone number required" });
+      }
+
+      // Check if Twilio is configured
+      if (!twilioService.isReady()) {
+        return res.status(503).json({
+          success: false,
+          message: "Phone service not configured. Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_PHONE_NUMBER."
+        });
+      }
+
+      // Default message if none provided
+      const callMessage = message || "Hello, this is dispatch from Freedom Transportation calling to check in with you. Please call us back if you need anything.";
+
+      // Make the call
+      const result = await twilioService.sendCustomBroadcast(tenantId, {
+        driverId: driverId || "unknown",
+        driverPhone: phoneNumber,
+        message: callMessage,
+        broadcastType: "drop_in_call"
+      });
+
+      if (result.success) {
+        res.json({
+          success: true,
+          callSid: result.callSid,
+          broadcastId: result.broadcastId,
+          message: "Call initiated"
+        });
+      } else {
+        res.status(500).json({
+          success: false,
+          message: result.error || "Failed to initiate call"
+        });
+      }
+    } catch (error: any) {
+      console.error("[FleetComm] Phone call error:", error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  // Hang up an active call
+  app.post("/api/fleet-comm/hangup", requireAuth, async (req, res) => {
+    try {
+      const { callSid } = req.body;
+
+      if (!callSid) {
+        return res.status(400).json({ success: false, message: "Call SID required" });
+      }
+
+      // Check if Twilio is configured
+      if (!twilioService.isReady()) {
+        return res.status(503).json({
+          success: false,
+          message: "Phone service not configured"
+        });
+      }
+
+      // Use the Twilio client to update the call status
+      const Twilio = (await import('twilio')).default;
+      const client = Twilio(
+        process.env.TWILIO_ACCOUNT_SID,
+        process.env.TWILIO_AUTH_TOKEN
+      );
+
+      await client.calls(callSid).update({ status: 'completed' });
+
+      console.log(`[FleetComm] Call ${callSid} hung up`);
+
+      res.json({ success: true, message: "Call ended" });
+    } catch (error: any) {
+      console.error("[FleetComm] Hangup error:", error);
+      // Even if Twilio errors, return success (call may have already ended)
+      res.json({ success: true, message: "Call ended" });
+    }
+  });
+
+  // Schedule a call for later
+  app.post("/api/fleet-comm/schedule", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId;
+      if (!tenantId) {
+        return res.status(401).json({ success: false, message: "No tenant" });
+      }
+
+      const { driverId, phoneNumber, scheduledFor, message } = req.body;
+
+      if (!driverId || !phoneNumber || !scheduledFor) {
+        return res.status(400).json({ success: false, message: "Missing required fields" });
+      }
+
+      // Get driver name
+      const [driver] = await db.select().from(drivers).where(eq(drivers.id, driverId)).limit(1);
+      const driverName = driver ? `${driver.firstName} ${driver.lastName}` : "Unknown Driver";
+
+      // Create scheduled call in voice_broadcasts table
+      const [scheduledCall] = await db.insert(voiceBroadcasts).values({
+        tenantId,
+        driverId,
+        broadcastType: "scheduled_call",
+        phoneNumber,
+        message: message || "Hello, this is dispatch from Freedom Transportation calling to check in with you.",
+        status: "pending",
+        scheduledFor: new Date(scheduledFor),
+        metadata: { driverName }
+      }).returning();
+
+      console.log(`[FleetComm] Scheduled call for ${driverName} at ${scheduledFor}`);
+
+      res.json({
+        success: true,
+        scheduledCall: {
+          id: scheduledCall.id,
+          driverId: scheduledCall.driverId,
+          driverName,
+          phoneNumber: scheduledCall.phoneNumber,
+          scheduledFor: scheduledCall.scheduledFor,
+          message: scheduledCall.message,
+          status: scheduledCall.status
+        }
+      });
+    } catch (error: any) {
+      console.error("[FleetComm] Schedule error:", error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  // Get scheduled calls
+  app.get("/api/fleet-comm/scheduled", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId;
+      if (!tenantId) {
+        return res.status(401).json({ success: false, message: "No tenant" });
+      }
+
+      // Get all scheduled calls (pending and recent completed/failed)
+      const scheduledBroadcasts = await db.select()
+        .from(voiceBroadcasts)
+        .where(
+          and(
+            eq(voiceBroadcasts.tenantId, tenantId),
+            eq(voiceBroadcasts.broadcastType, "scheduled_call")
+          )
+        )
+        .orderBy(voiceBroadcasts.scheduledFor);
+
+      const scheduledCalls = scheduledBroadcasts.map(b => ({
+        id: b.id,
+        driverId: b.driverId,
+        driverName: (b.metadata as any)?.driverName || "Unknown",
+        phoneNumber: b.phoneNumber,
+        scheduledFor: b.scheduledFor,
+        message: b.message,
+        status: b.status
+      }));
+
+      res.json({ success: true, scheduledCalls });
+    } catch (error: any) {
+      console.error("[FleetComm] Get scheduled error:", error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  // Cancel a scheduled call
+  app.delete("/api/fleet-comm/scheduled/:id", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId;
+      if (!tenantId) {
+        return res.status(401).json({ success: false, message: "No tenant" });
+      }
+
+      const { id } = req.params;
+
+      // Update status to cancelled
+      await db.update(voiceBroadcasts)
+        .set({ status: "cancelled" })
+        .where(
+          and(
+            eq(voiceBroadcasts.id, id),
+            eq(voiceBroadcasts.tenantId, tenantId),
+            eq(voiceBroadcasts.status, "pending")
+          )
+        );
+
+      console.log(`[FleetComm] Cancelled scheduled call ${id}`);
+
+      res.json({ success: true, message: "Scheduled call cancelled" });
+    } catch (error: any) {
+      console.error("[FleetComm] Cancel scheduled error:", error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  // Update a scheduled call time
+  app.patch("/api/fleet-comm/scheduled/:id", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId;
+      if (!tenantId) {
+        return res.status(401).json({ success: false, message: "No tenant" });
+      }
+
+      const { id } = req.params;
+      const { scheduledFor } = req.body;
+
+      if (!scheduledFor) {
+        return res.status(400).json({ success: false, message: "scheduledFor is required" });
+      }
+
+      // Update the scheduled time
+      await db.update(voiceBroadcasts)
+        .set({ scheduledFor: new Date(scheduledFor) })
+        .where(
+          and(
+            eq(voiceBroadcasts.id, id),
+            eq(voiceBroadcasts.tenantId, tenantId),
+            eq(voiceBroadcasts.status, "pending")
+          )
+        );
+
+      console.log(`[FleetComm] Updated scheduled call ${id} to ${scheduledFor}`);
+
+      res.json({ success: true, message: "Scheduled call updated" });
+    } catch (error: any) {
+      console.error("[FleetComm] Update scheduled error:", error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  // Call now - immediately execute a scheduled call
+  app.post("/api/fleet-comm/call-now/:id", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId;
+      if (!tenantId) {
+        return res.status(401).json({ success: false, message: "No tenant" });
+      }
+
+      const { id } = req.params;
+
+      // Get the scheduled call
+      const [call] = await db.select()
+        .from(voiceBroadcasts)
+        .where(
+          and(
+            eq(voiceBroadcasts.id, id),
+            eq(voiceBroadcasts.tenantId, tenantId),
+            eq(voiceBroadcasts.status, "pending")
+          )
+        );
+
+      if (!call) {
+        return res.status(404).json({ success: false, message: "Scheduled call not found or already processed" });
+      }
+
+      // Import twilioService
+      const { twilioService } = await import("./twilio-service");
+
+      // Make the call immediately
+      console.log(`[FleetComm] Calling now: ${call.phoneNumber}`);
+
+      const callResult = await twilioService.makeCall(
+        call.phoneNumber!,
+        call.message || "Hello, this is a message from Freedom Transportation."
+      );
+
+      if (callResult.success) {
+        // Update status to completed
+        await db.update(voiceBroadcasts)
+          .set({
+            status: "completed",
+            completedAt: new Date(),
+            callSid: callResult.callSid
+          })
+          .where(eq(voiceBroadcasts.id, id));
+
+        console.log(`[FleetComm] Call placed successfully: ${callResult.callSid}`);
+        res.json({ success: true, message: "Call placed", callSid: callResult.callSid });
+      } else {
+        // Update status to failed
+        await db.update(voiceBroadcasts)
+          .set({
+            status: "failed",
+            error: callResult.error
+          })
+          .where(eq(voiceBroadcasts.id, id));
+
+        console.error(`[FleetComm] Call failed: ${callResult.error}`);
+        res.json({ success: false, message: callResult.error || "Call failed" });
+      }
+    } catch (error: any) {
+      console.error("[FleetComm] Call now error:", error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  // ==========================================
+  // QUICK CALL - Natural Language Processing
+  // ==========================================
+
+  // Quick Call - parses natural language like "call Dan in 20 minutes and tell him great job"
+  app.post("/api/fleet-comm/quick-call", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId;
+      if (!tenantId) {
+        return res.status(401).json({ success: false, message: "No tenant" });
+      }
+
+      const { prompt } = req.body;
+
+      if (!prompt || typeof prompt !== "string" || prompt.trim().length === 0) {
+        return res.status(400).json({ success: false, message: "No prompt provided" });
+      }
+
+      // Get all drivers with phone numbers for this tenant
+      const allDrivers = await db.select()
+        .from(drivers)
+        .where(
+          and(
+            eq(drivers.tenantId, tenantId),
+            isNotNull(drivers.phoneNumber)
+          )
+        );
+
+      if (allDrivers.length === 0) {
+        return res.status(404).json({ success: false, message: "No drivers with phone numbers found" });
+      }
+
+      // Import Google Generative AI SDK
+      const { GoogleGenerativeAI } = await import("@google/generative-ai");
+      const genAI = new GoogleGenerativeAI(process.env.GOOGLE_AI_API_KEY || "");
+      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+
+      const driverList = allDrivers.map(d => `${d.firstName} ${d.lastName}`).join(", ");
+
+      // Parse the natural language command
+      const parsePrompt = `You are a dispatcher assistant parsing a quick call command.
+
+Available drivers: ${driverList}
+
+User's command: "${prompt}"
+
+Parse this command and return JSON with:
+1. driverName: The full name of the driver to call (match flexibly: "Dan" = "Daniel", nicknames, etc.)
+2. delayMinutes: How many minutes from now to make the call (0 = call now, "in 20 minutes" = 20, "in an hour" = 60)
+3. message: What to say to the driver. If no specific message given, create a friendly check-in message.
+
+Return ONLY valid JSON, no markdown:
+{"driverName": "Full Name", "delayMinutes": 0, "message": "What to say..."}`;
+
+      const parseResult = await model.generateContent(parsePrompt);
+      let parsed: { driverName: string; delayMinutes: number; message: string };
+
+      try {
+        let parseText = parseResult.response.text().trim();
+        // Remove markdown code blocks if present
+        parseText = parseText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+        parsed = JSON.parse(parseText);
+      } catch (e) {
+        console.error("[QuickCall] Failed to parse AI response:", parseResult.response.text());
+        return res.status(400).json({ success: false, message: "Could not understand the command. Try: 'Call Dan in 20 minutes'" });
+      }
+
+      console.log("[QuickCall] Parsed:", parsed);
+
+      // Find the matching driver
+      const matchedDriver = allDrivers.find(d => {
+        const fullName = `${d.firstName} ${d.lastName}`.toLowerCase();
+        const searchName = parsed.driverName.toLowerCase();
+        return fullName === searchName ||
+               fullName.includes(searchName) ||
+               d.firstName.toLowerCase() === searchName ||
+               d.lastName.toLowerCase() === searchName;
+      });
+
+      if (!matchedDriver) {
+        return res.status(404).json({
+          success: false,
+          message: `Could not find driver "${parsed.driverName}". Available: ${driverList}`
+        });
+      }
+
+      // Generate the actual script using AI
+      const scriptPrompt = `You are Milo, a friendly AI assistant for Freedom Transportation.
+Generate a phone call script for a driver. Keep it conversational, warm, and professional.
+The script should be spoken aloud, so write naturally. Keep it under 50 words.
+Always start with "Hey [FirstName]!" and end with a goodbye.
+
+Driver name: ${matchedDriver.firstName} ${matchedDriver.lastName}
+What the dispatcher wants to say: ${parsed.message}
+
+Generate the script:`;
+
+      const scriptResult = await model.generateContent(scriptPrompt);
+      const script = scriptResult.response.text().trim();
+
+      // Calculate scheduled time
+      const scheduledFor = new Date(Date.now() + parsed.delayMinutes * 60 * 1000);
+      const callNow = parsed.delayMinutes === 0;
+
+      // Create the scheduled call
+      const [broadcast] = await db.insert(voiceBroadcasts).values({
+        tenantId,
+        driverId: matchedDriver.id,
+        phoneNumber: matchedDriver.phoneNumber!,
+        message: script,
+        scheduledFor,
+        status: "pending",
+        broadcastType: "scheduled_call",
+        metadata: { source: "quick-call", originalPrompt: prompt }
+      }).returning();
+
+      console.log(`[QuickCall] Scheduled call for ${matchedDriver.firstName} ${matchedDriver.lastName} at ${scheduledFor.toISOString()}`);
+
+      // If call now, execute immediately
+      if (callNow) {
+        const { twilioService } = await import("./twilio-service");
+
+        console.log(`[QuickCall] Calling now: ${matchedDriver.phoneNumber}`);
+        const callResult = await twilioService.makeCall(
+          matchedDriver.phoneNumber!,
+          script
+        );
+
+        if (callResult.success) {
+          await db.update(voiceBroadcasts)
+            .set({
+              status: "completed",
+              completedAt: new Date(),
+              callSid: callResult.callSid
+            })
+            .where(eq(voiceBroadcasts.id, broadcast.id));
+
+          return res.json({
+            success: true,
+            callNow: true,
+            driverName: `${matchedDriver.firstName} ${matchedDriver.lastName}`,
+            script,
+            callSid: callResult.callSid
+          });
+        } else {
+          await db.update(voiceBroadcasts)
+            .set({ status: "failed", error: callResult.error })
+            .where(eq(voiceBroadcasts.id, broadcast.id));
+
+          return res.json({ success: false, message: callResult.error || "Call failed" });
+        }
+      }
+
+      // Return success for scheduled call
+      res.json({
+        success: true,
+        callNow: false,
+        driverName: `${matchedDriver.firstName} ${matchedDriver.lastName}`,
+        scheduledFor: scheduledFor.toISOString(),
+        script,
+        callId: broadcast.id
+      });
+
+    } catch (error: any) {
+      console.error("[QuickCall] Error:", error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  // ==========================================
+  // AI CALL PLANNER ENDPOINTS
+  // ==========================================
+
+  // Smart AI Call Planner - accepts free-form text, AI extracts drivers and generates scripts
+  app.post("/api/fleet-comm/generate-scripts", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId;
+      if (!tenantId) {
+        return res.status(401).json({ success: false, message: "No tenant" });
+      }
+
+      const { prompt, driverIds } = req.body;
+
+      if (!prompt || typeof prompt !== "string" || prompt.trim().length === 0) {
+        return res.status(400).json({ success: false, message: "No prompt provided" });
+      }
+
+      // Get all drivers with phone numbers for this tenant
+      const allDrivers = await db.select()
+        .from(drivers)
+        .where(
+          and(
+            eq(drivers.tenantId, tenantId),
+            isNotNull(drivers.phoneNumber)
+          )
+        );
+
+      if (allDrivers.length === 0) {
+        return res.status(404).json({ success: false, message: "No drivers with phone numbers found" });
+      }
+
+      // Import Google Generative AI SDK
+      const { GoogleGenerativeAI } = await import("@google/generative-ai");
+      const genAI = new GoogleGenerativeAI(process.env.GOOGLE_AI_API_KEY || "");
+      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+
+      let selectedDrivers: typeof allDrivers = [];
+
+      // If driverIds are provided (legacy mode), use them directly
+      if (driverIds && Array.isArray(driverIds) && driverIds.length > 0) {
+        selectedDrivers = allDrivers.filter(d => driverIds.includes(d.id));
+      } else {
+        // Smart mode: Use AI to extract driver names from the prompt
+        const driverList = allDrivers.map(d => `${d.firstName || ""} ${d.lastName || ""}`.trim()).join(", ");
+
+        const extractionPrompt = `You are analyzing a dispatch message to identify which drivers should receive a phone call.
+
+Available drivers: ${driverList}
+
+User's message:
+${prompt}
+
+Extract ALL driver names mentioned in the message. Match names flexibly:
+- "Dan" matches "Daniel"
+- "Natasha" matches "Natasha Shirey"
+- First names alone should match
+- Be case-insensitive
+
+Return ONLY a JSON array of full driver names that were mentioned, exactly as they appear in the available drivers list.
+If the message mentions "all drivers" or "everyone", return all driver names.
+If no specific drivers are mentioned, return an empty array [].
+
+Example response: ["Daniel James Shirey", "Natasha Shirey"]`;
+
+        try {
+          const extractionResult = await model.generateContent(extractionPrompt);
+          const extractionResponse = await extractionResult.response;
+          const extractionText = extractionResponse.text().trim();
+
+          console.log("[AICallPlanner] Extraction response:", extractionText);
+
+          // Parse the JSON array of names
+          let extractedNames: string[] = [];
+          try {
+            // Find JSON array in the response
+            const jsonMatch = extractionText.match(/\[[\s\S]*\]/);
+            if (jsonMatch) {
+              extractedNames = JSON.parse(jsonMatch[0]);
+            }
+          } catch (parseError) {
+            console.error("[AICallPlanner] Failed to parse extracted names:", parseError);
+          }
+
+          console.log("[AICallPlanner] Extracted names:", extractedNames);
+
+          // Match extracted names to drivers
+          selectedDrivers = allDrivers.filter(driver => {
+            const firstName = driver.firstName || "";
+            const lastName = driver.lastName || "";
+            const fullName = `${firstName} ${lastName}`.toLowerCase().trim();
+            const firstNameLower = firstName.toLowerCase();
+            const lastNameLower = lastName.toLowerCase();
+
+            return extractedNames.some(name => {
+              const nameLower = (name || "").toLowerCase();
+              return fullName === nameLower ||
+                     firstNameLower === nameLower ||
+                     lastNameLower === nameLower ||
+                     fullName.includes(nameLower) ||
+                     nameLower.includes(fullName);
+            });
+          });
+
+          console.log("[AICallPlanner] Matched drivers:", selectedDrivers.map(d => `${d.firstName || ""} ${d.lastName || ""}`.trim()));
+
+        } catch (extractError: any) {
+          console.error("[AICallPlanner] Name extraction failed:", extractError);
+          return res.status(400).json({
+            success: false,
+            message: "Could not identify drivers from your message. Please mention driver names."
+          });
+        }
+      }
+
+      if (selectedDrivers.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "No drivers found matching the names in your message. Please check the names and try again."
+        });
+      }
+
+      // Check if user wants multiple scripts (e.g., "3 times", "3 different ways")
+      const multipleMatch = prompt.match(/(\d+)\s*(?:times|different\s*ways?|variations?|versions?|scripts?)/i);
+      const scriptCount = multipleMatch ? Math.min(parseInt(multipleMatch[1]), 5) : 1; // Max 5 scripts per driver
+
+      // Generate personalized script for each driver
+      const scripts = [];
+      for (const driver of selectedDrivers) {
+        if (!driver.phoneNumber) {
+          continue;
+        }
+
+        const systemPrompt = `You are Milo, a friendly AI assistant for Freedom Transportation.
+Your job is to generate a phone call script that will be spoken aloud via text-to-speech.
+
+CRITICAL RULES:
+1. Output ONLY the spoken words - no stage directions, no quotes around the text
+2. Start with "Hey ${driver.firstName}!"
+3. End with a friendly goodbye
+4. Keep it under 50 words unless asked otherwise
+5. Be conversational, warm, and natural - like a real person talking
+6. If asked to tell a joke, ACTUALLY tell a funny joke - don't just say you're calling to tell a joke
+7. If given specific info (like start times), include it naturally in the script
+8. NEVER echo the instructions - GENERATE creative content based on them
+9. Generate ONLY ONE script - do NOT generate multiple variations in one response`;
+
+        // Generate multiple scripts if requested
+        for (let i = 0; i < scriptCount; i++) {
+          try {
+            const variationNote = scriptCount > 1
+              ? `\n\nThis is variation ${i + 1} of ${scriptCount}. Make it UNIQUE and DIFFERENT from other variations. Be creative!`
+              : '';
+
+            const scriptPrompt = `${systemPrompt}
+
+Generate a phone call script for ${driver.firstName} ${driver.lastName}.
+
+The dispatcher wants you to: ${prompt.replace(/\d+\s*(?:times|different\s*ways?|variations?|versions?|scripts?)/i, '')}${variationNote}
+
+Remember: Output ONLY ONE script with the words to be spoken. Be creative and natural.`;
+
+            const scriptResult = await model.generateContent(scriptPrompt);
+            const scriptResponse = await scriptResult.response;
+            const script = scriptResponse.text();
+
+            scripts.push({
+              driverId: driver.id,
+              driverName: `${driver.firstName} ${driver.lastName}`,
+              phoneNumber: driver.phoneNumber,
+              script: script.trim(),
+              variationNumber: scriptCount > 1 ? i + 1 : undefined
+            });
+          } catch (aiError: any) {
+            console.error(`[AICallPlanner] Error generating script for ${driver.firstName}:`, aiError);
+            scripts.push({
+              driverId: driver.id,
+              driverName: `${driver.firstName} ${driver.lastName}`,
+              phoneNumber: driver.phoneNumber,
+              script: `Hey ${driver.firstName}! This is Milo from Freedom Transportation. Just calling to check in. Have a great day! Goodbye.`
+            });
+          }
+        }
+      }
+
+      console.log(`[AICallPlanner] Generated ${scripts.length} scripts for: ${scripts.map(s => s.driverName).join(", ")}`);
+
+      res.json({ success: true, scripts });
+    } catch (error: any) {
+      console.error("[AICallPlanner] Generate scripts error:", error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  // Schedule a batch of calls
+  app.post("/api/fleet-comm/schedule-batch", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId;
+      if (!tenantId) {
+        return res.status(401).json({ success: false, message: "No tenant" });
+      }
+
+      const { calls } = req.body;
+
+      if (!calls || !Array.isArray(calls) || calls.length === 0) {
+        return res.status(400).json({ success: false, message: "No calls to schedule" });
+      }
+
+      const callIds = [];
+      for (const call of calls) {
+        if (!call.driverId || !call.phoneNumber || !call.message || !call.scheduledFor) {
+          continue; // Skip invalid entries
+        }
+
+        const [broadcast] = await db.insert(voiceBroadcasts).values({
+          tenantId,
+          driverId: call.driverId,
+          broadcastType: "scheduled_call",
+          phoneNumber: call.phoneNumber,
+          message: call.message,
+          scheduledFor: new Date(call.scheduledFor),
+          status: "pending",
+          metadata: {
+            source: "ai-call-planner",
+            driverName: call.driverName || "Unknown"
+          }
+        }).returning();
+
+        callIds.push(broadcast.id);
+      }
+
+      console.log(`[AICallPlanner] Scheduled ${callIds.length} calls`);
+
+      res.json({ success: true, scheduled: callIds.length, callIds });
+    } catch (error: any) {
+      console.error("[AICallPlanner] Schedule batch error:", error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  // Get call summary for a batch
+  app.get("/api/fleet-comm/call-summary", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId;
+      if (!tenantId) {
+        return res.status(401).json({ success: false, message: "No tenant" });
+      }
+
+      const idsParam = req.query.ids as string;
+      if (!idsParam) {
+        return res.status(400).json({ success: false, message: "No call IDs provided" });
+      }
+
+      const callIds = idsParam.split(",").map(id => id.trim()).filter(Boolean);
+
+      if (callIds.length === 0) {
+        return res.status(400).json({ success: false, message: "No valid call IDs" });
+      }
+
+      // Get the calls
+      const callRecords = await db.select()
+        .from(voiceBroadcasts)
+        .where(
+          and(
+            eq(voiceBroadcasts.tenantId, tenantId),
+            inArray(voiceBroadcasts.id, callIds)
+          )
+        );
+
+      // Build summary
+      const summary = {
+        total: callRecords.length,
+        completed: callRecords.filter(c => c.status === "completed").length,
+        noAnswer: callRecords.filter(c => c.status === "failed" && c.errorMessage?.includes("no-answer")).length,
+        failed: callRecords.filter(c => c.status === "failed" && !c.errorMessage?.includes("no-answer")).length,
+        pending: callRecords.filter(c => c.status === "pending" || c.status === "queued" || c.status === "in_progress").length
+      };
+
+      const calls = callRecords.map(c => ({
+        id: c.id,
+        driverName: (c.metadata as any)?.driverName || "Unknown",
+        phoneNumber: c.phoneNumber,
+        status: c.status,
+        attemptCount: c.attemptCount,
+        completedAt: c.completedAt,
+        errorMessage: c.errorMessage
+      }));
+
+      res.json({ success: true, summary, calls });
+    } catch (error: any) {
+      console.error("[AICallPlanner] Call summary error:", error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  // ==========================================
+  // GEMINI TEXT PARSER ENDPOINT
+  // ==========================================
+
+  // Parse pasted schedule text using Gemini to extract driver/route data
+  app.post("/api/fleet-comm/parse-text", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId;
+      if (!tenantId) {
+        return res.status(401).json({ success: false, message: "No tenant" });
+      }
+
+      const { text } = req.body;
+
+      if (!text || !text.trim()) {
+        return res.status(400).json({ success: false, message: "No text provided" });
+      }
+
+      // Get all drivers for context
+      const allDrivers = await db.select()
+        .from(drivers)
+        .where(
+          and(
+            eq(drivers.tenantId, tenantId),
+            isNotNull(drivers.phoneNumber)
+          )
+        );
+
+      const driverList = allDrivers.map(d => `${d.firstName} ${d.lastName}`).join(", ");
+
+      // Import Google Generative AI SDK
+      const { GoogleGenerativeAI } = await import("@google/generative-ai");
+      const genAI = new GoogleGenerativeAI(process.env.GOOGLE_AI_API_KEY || "");
+      const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
+
+      const prompt = `You are a UNIVERSAL EXTRACTION PIPELINE for Freedom Transportation dispatch.
+
+## INPUT TEXT:
+${text}
+
+## OUR DRIVERS DATABASE:
+${driverList}
+
+## EXTRACTION METHODOLOGY:
+
+### STEP 1: IDENTIFY TEXT FORMAT
+Classify what type of text this is:
+- Structured list (bullets, numbered items)
+- Free-form paragraph
+- Table/CSV data
+- Email content
+- Mixed format
+
+### STEP 2: EXTRACT HUMAN-READABLE ANCHORS
+
+**TIME ANCHORS** (the "Go-Time" - most important):
+- Dates: "Jan 2", "01/02", "Friday", "Tomorrow", "Tonight"
+- Times: "6:00 AM", "00:30 CST", "Starts at 7"
+- Relative: "Morning shift", "2 hours", "Next block"
+
+**IDENTITY ANCHORS** (who we need to call):
+- Full names: "Brian Worts", "Richard Ewing"
+- Initials: "B. Worts", "R. Ewing"
+- First names: "Brian", "Dan", "Natasha"
+- Nicknames: "Rick" → Richard, "Dan" → Daniel, "Mike" → Michael, "Bob" → Robert
+
+**LOCATION ANCHORS**:
+- City/State: "Kansas City", "LENEXA, KS"
+- Airport codes: MCI, ORD, DFW, DEN, LAX
+- Warehouse codes: DKC4, MKC1, TUL1
+- Route descriptions: "to Denver", "from Chicago"
+
+**REFERENCE ANCHORS**:
+- Block IDs: B-XXXXXXXX pattern
+- Load numbers, trip IDs
+- Any alphanumeric reference codes
+
+### STEP 3: BUILD OUTPUT
+Match names to our driver database aggressively:
+- "Dan" matches "Daniel"
+- "Rick" or "Dick" matches "Richard"
+- "Mike" matches "Michael"
+- Partial last names count
+
+## RETURN JSON:
+{
+  "format": "structured_list | freeform | table | email | mixed",
+  "confidence": "high | medium | low",
+  "drivers": [
+    {
+      "name": "Name as shown in text",
+      "origin": "Starting location",
+      "destination": "Ending location",
+      "startTime": "Time/date reference",
+      "loadId": "Block ID or reference",
+      "notes": "Other relevant info"
+    }
+  ],
+  "blocks": [
+    {
+      "blockId": "Reference ID if found",
+      "startTime": "Time",
+      "route": "Location info",
+      "driver": "Driver name"
+    }
+  ],
+  "rawText": "Key schedule excerpts",
+  "summary": "X drivers found with Y assignments"
+}
+
+## CRITICAL: Extract ALL names, even if not 100% certain of the match.`;
+
+      console.log("[GeminiText] Processing text...");
+
+      const result = await model.generateContent(prompt);
+      const response = await result.response;
+      const responseText = response.text().trim();
+
+      console.log("[GeminiText] Raw response:", responseText);
+
+      // Parse JSON from response
+      let parsed: any = null;
+      try {
+        const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          parsed = JSON.parse(jsonMatch[0]);
+        }
+      } catch (parseError) {
+        console.error("[GeminiText] Failed to parse response:", parseError);
+      }
+
+      if (parsed) {
+        // Helper function to match "F. LastName" pattern and nicknames
+        const matchDriverName = (searchName: string, dbDriver: any): boolean => {
+          const lastName = dbDriver.lastName.toLowerCase();
+          const firstName = dbDriver.firstName.toLowerCase();
+          const firstInitial = dbDriver.firstName.charAt(0).toLowerCase();
+          const fullName = `${firstName} ${lastName}`;
+          const searchLower = (searchName || "").toLowerCase().trim();
+
+          // Exact match
+          if (fullName === searchLower || firstName === searchLower || lastName === searchLower) {
+            return true;
+          }
+
+          // Initial pattern: "B. Worts" or "B Worts"
+          const initialPattern = /^([a-z])\.?\s*(.+)$/i;
+          const match = searchLower.match(initialPattern);
+          if (match) {
+            const extractedInitial = match[1].toLowerCase();
+            const extractedLastName = match[2].toLowerCase().replace(/[^a-z]/g, '');
+            const dbLastNameClean = lastName.replace(/[^a-z]/g, '');
+            if (extractedInitial === firstInitial &&
+                (dbLastNameClean === extractedLastName || dbLastNameClean.includes(extractedLastName))) {
+              return true;
+            }
+          }
+
+          // Nickname matching
+          const nicknames: Record<string, string[]> = {
+            'richard': ['rick', 'dick', 'ricky'],
+            'daniel': ['dan', 'danny'],
+            'michael': ['mike', 'mikey'],
+            'robert': ['bob', 'bobby', 'rob'],
+            'william': ['bill', 'billy', 'will'],
+            'james': ['jim', 'jimmy'],
+            'joseph': ['joe', 'joey'],
+            'christopher': ['chris'],
+            'natasha': ['tasha', 'nat'],
+            'brian': ['bri'],
+            'matthew': ['matt'],
+            'anthony': ['tony'],
+            'abbas': ['ab']
+          };
+
+          for (const [formal, nicks] of Object.entries(nicknames)) {
+            if (firstName === formal && nicks.some(n => searchLower.includes(n))) {
+              return true;
+            }
+          }
+
+          // Partial matches
+          return fullName.includes(searchLower) || searchLower.includes(firstName) || searchLower.includes(lastName);
+        };
+
+        // Match extracted drivers to our database
+        if (parsed.drivers && Array.isArray(parsed.drivers)) {
+          parsed.drivers = parsed.drivers.map((d: any) => {
+            const matchedDriver = allDrivers.find(dbDriver => matchDriverName(d.name, dbDriver));
+
+            return {
+              ...d,
+              matched: !!matchedDriver,
+              driverId: matchedDriver?.id || null,
+              phoneNumber: matchedDriver?.phoneNumber || null,
+              fullName: matchedDriver ? `${matchedDriver.firstName} ${matchedDriver.lastName}` : d.name
+            };
+          });
+        }
+
+        // Also match blocks if present
+        if (parsed.blocks && Array.isArray(parsed.blocks)) {
+          parsed.blocks = parsed.blocks.map((block: any) => {
+            const matchedDriver = allDrivers.find(dbDriver => matchDriverName(block.driver, dbDriver));
+            return {
+              ...block,
+              matchedDriver: matchedDriver ? {
+                id: matchedDriver.id,
+                fullName: `${matchedDriver.firstName} ${matchedDriver.lastName}`,
+                phoneNumber: matchedDriver.phoneNumber
+              } : null
+            };
+          });
+        }
+
+        res.json({ success: true, data: parsed });
+      } else {
+        res.json({
+          success: true,
+          data: {
+            rawText: text,
+            drivers: [],
+            summary: "Could not parse structured data from text"
+          }
+        });
+      }
+    } catch (error: any) {
+      console.error("[GeminiText] Error:", error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  // ==========================================
+  // GEMINI VISION OCR ENDPOINT
+  // ==========================================
+
+  // Parse image using Gemini vision to extract schedule info (Amazon Relay optimized)
+  app.post("/api/fleet-comm/parse-image", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId;
+      if (!tenantId) {
+        return res.status(401).json({ success: false, message: "No tenant" });
+      }
+
+      const { imageData, mimeType } = req.body;
+
+      if (!imageData) {
+        return res.status(400).json({ success: false, message: "No image data provided" });
+      }
+
+      // Get all drivers for context
+      const allDrivers = await db.select()
+        .from(drivers)
+        .where(
+          and(
+            eq(drivers.tenantId, tenantId),
+            isNotNull(drivers.phoneNumber)
+          )
+        );
+
+      const driverList = allDrivers.map(d => `${d.firstName} ${d.lastName}`).join(", ");
+
+      // Import Google Generative AI SDK
+      const { GoogleGenerativeAI } = await import("@google/generative-ai");
+      const genAI = new GoogleGenerativeAI(process.env.GOOGLE_AI_API_KEY || "");
+      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+
+      // Remove data URL prefix if present
+      let base64Data = imageData;
+      if (imageData.includes(",")) {
+        base64Data = imageData.split(",")[1];
+      }
+
+      const imagePart = {
+        inlineData: {
+          data: base64Data,
+          mimeType: mimeType || "image/png"
+        }
+      };
+
+      const prompt = `You are a UNIVERSAL EXTRACTION PIPELINE for Freedom Transportation dispatch.
+
+## STEP 1: CLASSIFY THE ENVIRONMENT
+First, identify what you're looking at:
+- **Full Screenshot**: Browser window, desktop app, or mobile screen with UI elements (menus, tabs, buttons)
+- **Cropped Schedule**: Just the schedule/table portion without window chrome
+- **Text Document**: Email, spreadsheet, or text-based list
+- **Mixed Content**: Multiple windows or overlapping content
+
+Report the environment type in your response.
+
+## STEP 2: FIND THE SCHEDULE DATA
+Look for the AREA OF INTEREST - the actual schedule content. Ignore:
+- Browser tabs, address bars, bookmarks
+- Desktop icons, taskbar, system tray
+- Application menus and toolbars
+- Other windows or overlapping content
+- Milo dashboard UI elements (if visible)
+
+Focus ONLY on the schedule/dispatch data.
+
+## STEP 3: EXTRACT HUMAN-READABLE ANCHORS
+Find these anchor types in ANY format:
+
+**TIME ANCHORS** (most important - the "Go-Time"):
+- Dates: "Jan 2", "01/02", "Friday", "Tomorrow"
+- Times: "6:00 AM", "00:30 CST", "Starts in 2 hrs"
+- Relative: "Tonight", "Morning shift", "Next block"
+
+**IDENTITY ANCHORS** (who we need to call):
+- Full names: "Brian Worts", "Richard Ewing"
+- Initials: "B. Worts", "R. Ewing", "B.W."
+- First names only: "Brian", "Dan", "Natasha"
+- Nicknames or shortened: "Dick" (Richard), "Mike" (Michael)
+
+**LOCATION ANCHORS**:
+- City/State: "LENEXA, KS", "Kansas City"
+- Airport codes: "MCI", "ORD", "DFW"
+- Warehouse codes: "DKC4", "MKC1", "TUL1"
+- Addresses or landmarks
+
+**REFERENCE ANCHORS**:
+- Block IDs: "B-XXXXXXXX" pattern
+- Load numbers, trip IDs, route numbers
+- Order/shipment references
+
+## STEP 4: BUILD STRUCTURED OUTPUT
+Map extracted data to this standard format:
+
+OUR DRIVERS DATABASE: ${driverList}
+
+Match ANY extracted name to our database using:
+- Exact match: "Brian Worts" → Brian Worts
+- Initial pattern: "B. Worts" → Brian Worts
+- First name: "Brian" → Brian Worts
+- Nickname: "Rick" → Richard, "Dan" → Daniel, "Mike" → Michael
+
+## RETURN JSON:
+{
+  "environment": "full_screenshot | cropped_schedule | text_document | mixed",
+  "confidence": "high | medium | low",
+  "scheduleFound": true/false,
+  "drivers": [
+    {
+      "name": "Name exactly as shown in image",
+      "origin": "Starting location if found",
+      "destination": "Ending location if found",
+      "startTime": "Time/date as shown",
+      "loadId": "Block ID or reference number",
+      "notes": "Any other relevant info"
+    }
+  ],
+  "blocks": [
+    {
+      "blockId": "Reference ID if found",
+      "startTime": "Time as shown",
+      "route": "Location info",
+      "driver": "Driver name as shown"
+    }
+  ],
+  "rawText": "All readable schedule-related text",
+  "summary": "Brief description of what was found"
+}
+
+## CRITICAL RULES:
+1. If this is a FULL SCREENSHOT of a browser/app, locate and focus on just the schedule portion
+2. Extract EVERY driver name you can find, even partial matches
+3. Times are critical - extract all time references
+4. If you see dropdown boxes with names, those are driver ASSIGNMENTS
+5. Return "scheduleFound": false if no schedule data is present
+6. Be aggressive about finding names - partial matches are valuable`;
+
+      console.log("[GeminiVision] Processing image...");
+
+      const result = await model.generateContent([prompt, imagePart]);
+      const response = await result.response;
+      const text = response.text().trim();
+
+      console.log("[GeminiVision] Raw response:", text);
+
+      // Parse JSON from response
+      let parsed: any = null;
+      try {
+        // Find JSON in response (may have markdown code blocks)
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          parsed = JSON.parse(jsonMatch[0]);
+        }
+      } catch (parseError) {
+        console.error("[GeminiVision] Failed to parse response:", parseError);
+      }
+
+      if (parsed) {
+        // Universal driver name matcher with nickname and initial support
+        const matchDriverName = (searchName: string, dbDriver: any): boolean => {
+          const lastName = dbDriver.lastName.toLowerCase();
+          const firstName = dbDriver.firstName.toLowerCase();
+          const firstInitial = dbDriver.firstName.charAt(0).toLowerCase();
+          const fullName = `${firstName} ${lastName}`;
+          const searchLower = (searchName || "").toLowerCase().trim();
+
+          if (!searchLower) return false;
+
+          // Exact match
+          if (fullName === searchLower || firstName === searchLower || lastName === searchLower) {
+            return true;
+          }
+
+          // Initial pattern: "B. Worts" or "B Worts" or "B.Worts"
+          const initialPattern = /^([a-z])\.?\s*(.+)$/i;
+          const match = searchLower.match(initialPattern);
+          if (match) {
+            const extractedInitial = match[1].toLowerCase();
+            const extractedLastName = match[2].toLowerCase().replace(/[^a-z-]/g, '');
+            const dbLastNameClean = lastName.replace(/[^a-z-]/g, '');
+            if (extractedInitial === firstInitial &&
+                (dbLastNameClean === extractedLastName ||
+                 dbLastNameClean.includes(extractedLastName) ||
+                 extractedLastName.includes(dbLastNameClean))) {
+              return true;
+            }
+          }
+
+          // Nickname matching
+          const nicknames: Record<string, string[]> = {
+            'richard': ['rick', 'dick', 'ricky'],
+            'daniel': ['dan', 'danny'],
+            'michael': ['mike', 'mikey'],
+            'robert': ['bob', 'bobby', 'rob'],
+            'william': ['bill', 'billy', 'will'],
+            'james': ['jim', 'jimmy'],
+            'joseph': ['joe', 'joey'],
+            'christopher': ['chris'],
+            'natasha': ['tasha', 'nat'],
+            'brian': ['bri'],
+            'matthew': ['matt'],
+            'anthony': ['tony'],
+            'abbas': ['ab']
+          };
+
+          for (const [formal, nicks] of Object.entries(nicknames)) {
+            if (firstName === formal && nicks.some(n => searchLower.includes(n))) {
+              return true;
+            }
+          }
+
+          // Last name only match
+          if (searchLower.includes(lastName) || lastName.includes(searchLower)) {
+            return true;
+          }
+
+          // Partial matches
+          return fullName.includes(searchLower) || searchLower.includes(firstName);
+        };
+
+        // Match extracted drivers to our database
+        if (parsed.drivers && Array.isArray(parsed.drivers)) {
+          parsed.drivers = parsed.drivers.map((d: any) => {
+            const matchedDriver = allDrivers.find(dbDriver => matchDriverName(d.name, dbDriver));
+
+            return {
+              ...d,
+              matched: !!matchedDriver,
+              driverId: matchedDriver?.id || null,
+              phoneNumber: matchedDriver?.phoneNumber || null,
+              fullName: matchedDriver ? `${matchedDriver.firstName} ${matchedDriver.lastName}` : d.name
+            };
+          });
+        }
+
+        // Also match blocks if present (new format)
+        if (parsed.blocks && Array.isArray(parsed.blocks)) {
+          parsed.blocks = parsed.blocks.map((block: any) => {
+            const matchedDriver = allDrivers.find(dbDriver => matchDriverName(block.driver, dbDriver));
+
+            return {
+              ...block,
+              matchedDriver: matchedDriver ? {
+                id: matchedDriver.id,
+                fullName: `${matchedDriver.firstName} ${matchedDriver.lastName}`,
+                phoneNumber: matchedDriver.phoneNumber
+              } : null
+            };
+          });
+        }
+
+        res.json({ success: true, data: parsed });
+      } else {
+        res.json({
+          success: true,
+          data: {
+            rawText: text,
+            drivers: [],
+            summary: "Could not parse structured data from image"
+          }
+        });
+      }
+    } catch (error: any) {
+      console.error("[GeminiVision] Error:", error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
   const httpServer = createServer(app);
+
+  // Initialize WebSocket server for fleet communication
+  initWebSocket(httpServer);
+
   return httpServer;
 }

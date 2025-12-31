@@ -1,7 +1,7 @@
 import React, { useState, useMemo, memo, useCallback, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format, startOfWeek, addWeeks, subWeeks, eachDayOfInterval, addDays } from "date-fns";
-import { ChevronLeft, ChevronRight, Calendar, User, Upload, X, LayoutGrid, List, UserMinus, Undo2, Redo2, CheckSquare, XSquare, Moon, Sun, Zap, Cpu, AlertTriangle, Search, Sparkles, Loader2, Dna, Clock, Truck, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Calendar, User, Upload, X, LayoutGrid, List, UserMinus, Undo2, Redo2, CheckSquare, XSquare, Moon, Sun, Zap, Cpu, AlertTriangle, Search, Sparkles, Loader2, Dna, Clock, Truck, Trash2, Brain, Settings, ChevronDown, AlertOctagon, Info } from "lucide-react";
 import { ImportOverlay } from "@/components/ImportOverlay";
 import { ImportWizard } from "@/components/ImportWizard";
 import { ActualsComparisonReview } from "@/components/ActualsComparisonReview";
@@ -31,6 +31,14 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient } from "@/lib/queryClient";
 import { DriverAssignmentModal } from "@/components/DriverAssignmentModal";
@@ -455,7 +463,30 @@ export default function Schedules() {
   const [isPreviewMode, setIsPreviewMode] = useState(false);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const [isCommittingPreview, setIsCommittingPreview] = useState(false);
-  const [previewAssignments, setPreviewAssignments] = useState<Map<string, { driverId: string; driverName: string; score: number }>>(new Map());
+  // Enhanced preview data with reasoning (ownership score, DOT status, match reasons)
+  const [previewAssignments, setPreviewAssignments] = useState<Map<string, {
+    driverId: string;
+    driverName: string;
+    score: number;
+    ownershipPct: number;
+    matchType: string;
+    reasons: string[];
+    confidence: number;
+  }>>(new Map());
+  // Conflict tracking for unassigned blocks with reasons
+  const [previewConflicts, setPreviewConflicts] = useState<Map<string, {
+    blockId: string;
+    reason: string;
+    details: string[];
+    blockInfo?: {
+      serviceDate: string;
+      startTime: string;
+      tractorId: string;
+      contractType: string;
+    };
+  }>>(new Map());
+  // Selected conflict for detail view
+  const [selectedConflict, setSelectedConflict] = useState<string | null>(null);
 
   // Excluded drivers state for Pillar 4: Resilience (graceful error handling)
   const [excludedDrivers, setExcludedDrivers] = useState<Array<{
@@ -466,6 +497,26 @@ export default function Schedules() {
     patternConfidence?: number;
   }>>([]);
   const [showExcludedDriversModal, setShowExcludedDriversModal] = useState(false);
+
+  // AI Build (Agentic Scheduling) state
+  const [isAIBuilding, setIsAIBuilding] = useState(false);
+  const [aiBuildResult, setAIBuildResult] = useState<{
+    success: boolean;
+    message: string;
+    totalBlocks: number;
+    assigned: number;
+    unassigned: number;
+    reasoning: string[];
+    decisions: Array<{
+      blockId: string;
+      blockInfo: string;
+      driverId: string | null;
+      driverName: string | null;
+      action: string;
+      reasoning: string;
+    }>;
+  } | null>(null);
+  const [showAIBuildModal, setShowAIBuildModal] = useState(false);
 
   // The "active" driver is either selected (sticky) or hovered
   const activeDriverId = selectedDriverId || hoveredDriverId;
@@ -837,15 +888,15 @@ export default function Schedules() {
 
   const clearAllMutation = useMutation({
     mutationFn: async ({ weekStart, weekEnd }: { weekStart: string; weekEnd: string }) => {
-      // Clear driver assignments from blocks (keeps blocks intact for re-matching)
-      const [shiftsResponse, assignmentsResponse] = await Promise.all([
+      // Clear everything: shift occurrences, imported blocks, and their assignments
+      const [shiftsResponse, blocksResponse] = await Promise.all([
         fetch('/api/shift-occurrences/clear-week', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
           body: JSON.stringify({ weekStart, weekEnd }),
         }),
-        fetch('/api/assignments/clear-week', {
+        fetch('/api/blocks/clear-week', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
@@ -858,26 +909,26 @@ export default function Schedules() {
         throw new Error(error.message || 'Failed to clear shifts');
       }
 
-      if (!assignmentsResponse.ok) {
-        const error = await assignmentsResponse.json();
-        throw new Error(error.message || 'Failed to clear assignments');
+      if (!blocksResponse.ok) {
+        const error = await blocksResponse.json();
+        throw new Error(error.message || 'Failed to clear blocks');
       }
 
-      const [shiftsResult, assignmentsResult] = await Promise.all([
+      const [shiftsResult, blocksResult] = await Promise.all([
         shiftsResponse.json(),
-        assignmentsResponse.json(),
+        blocksResponse.json(),
       ]);
 
       return {
         shiftsCount: shiftsResult.count || 0,
-        assignmentsCount: assignmentsResult.count || 0
+        blocksCount: blocksResult.count || 0
       };
     },
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
       toast({
-        title: "Assignments Cleared",
-        description: `Cleared ${result.shiftsCount} shifts and ${result.assignmentsCount} block assignments`,
+        title: "Schedule Cleared",
+        description: `Cleared ${result.shiftsCount} shifts and ${result.blocksCount} imported blocks`,
       });
       setShowClearAllDialog(false);
     },
@@ -1998,15 +2049,61 @@ export default function Schedules() {
       const data = await response.json();
 
       if (data.success && data.suggestions) {
-        const assignmentMap = new Map<string, { driverId: string; driverName: string; score: number }>();
+        // Enhanced assignment map with reasoning data
+        const assignmentMap = new Map<string, {
+          driverId: string;
+          driverName: string;
+          score: number;
+          ownershipPct: number;
+          matchType: string;
+          reasons: string[];
+          confidence: number;
+        }>();
         for (const suggestion of data.suggestions) {
           assignmentMap.set(suggestion.blockId, {
             driverId: suggestion.driverId,
             driverName: suggestion.driverName,
             score: suggestion.score,
+            ownershipPct: suggestion.ownershipPct || 0,
+            matchType: suggestion.matchType || 'unknown',
+            reasons: suggestion.reasons || [],
+            confidence: suggestion.confidence || 0,
           });
         }
         setPreviewAssignments(assignmentMap);
+
+        // Build conflict map from unassigned blocks with reasons
+        const conflictMap = new Map<string, {
+          blockId: string;
+          reason: string;
+          details: string[];
+          blockInfo?: {
+            serviceDate: string;
+            startTime: string;
+            tractorId: string;
+            contractType: string;
+          };
+        }>();
+        if (data.unassignedWithReasons) {
+          for (const conflict of data.unassignedWithReasons) {
+            conflictMap.set(conflict.blockId, {
+              blockId: conflict.blockId,
+              reason: conflict.reason || 'No eligible drivers',
+              details: conflict.details || [],
+              blockInfo: conflict.blockInfo,
+            });
+          }
+        } else if (data.unassigned) {
+          // Fallback for simple unassigned array
+          for (const blockId of data.unassigned) {
+            conflictMap.set(blockId, {
+              blockId,
+              reason: 'No eligible drivers found',
+              details: ['Pre-pass constraint check failed for all drivers'],
+            });
+          }
+        }
+        setPreviewConflicts(conflictMap);
         setIsPreviewMode(true);
 
         // Check for excluded drivers (Pillar 4: Resilience)
@@ -2015,9 +2112,12 @@ export default function Schedules() {
           setShowExcludedDriversModal(true);
         }
 
+        const unassignedCount = conflictMap.size;
         toast({
           title: "Preview Generated",
-          description: `${assignmentMap.size} proposed assignments ready for review${
+          description: `${assignmentMap.size} proposed assignments${
+            unassignedCount > 0 ? `, ${unassignedCount} conflicts` : ''
+          }${
             data.excludedDrivers?.length > 0
               ? ` (${data.excludedDrivers.length} drivers excluded)`
               : ''
@@ -2041,10 +2141,52 @@ export default function Schedules() {
     }
   }, [weekRange.weekStart, toast]);
 
+  // AI Build - Run the agentic scheduling agent
+  const handleAIBuild = useCallback(async () => {
+    setIsAIBuilding(true);
+    setAIBuildResult(null);
+    try {
+      const response = await apiRequest("POST", "/api/milo/schedule/build", {
+        weekStart: format(weekRange.weekStart, 'yyyy-MM-dd'),
+      });
+      const data = await response.json();
+
+      if (data.success) {
+        setAIBuildResult(data);
+        setShowAIBuildModal(true);
+
+        // Invalidate queries to refresh the schedule view
+        queryClient.invalidateQueries({ queryKey: ["/api/block-assignments"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/blocks"] });
+
+        toast({
+          title: "AI Build Complete",
+          description: `${data.assigned}/${data.totalBlocks} blocks assigned`,
+        });
+      } else {
+        toast({
+          variant: "destructive",
+          title: "AI Build Failed",
+          description: data.message || "Failed to build schedule",
+        });
+      }
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "AI Build Failed",
+        description: error.message || "Failed to build schedule",
+      });
+    } finally {
+      setIsAIBuilding(false);
+    }
+  }, [weekRange.weekStart, toast]);
+
   // Cancel preview mode
   const handleCancelPreview = useCallback(() => {
     setIsPreviewMode(false);
     setPreviewAssignments(new Map());
+    setPreviewConflicts(new Map());
+    setSelectedConflict(null);
   }, []);
 
   // Commit all preview assignments
@@ -2070,6 +2212,8 @@ export default function Schedules() {
         });
         setIsPreviewMode(false);
         setPreviewAssignments(new Map());
+        setPreviewConflicts(new Map());
+        setSelectedConflict(null);
         // Refresh the calendar data
         queryClient.invalidateQueries({ queryKey: ["/api/schedules/calendar"] });
       } else {
@@ -2293,7 +2437,7 @@ export default function Schedules() {
       />
 
       <div
-        className="flex flex-col h-full"
+        className="flex flex-col h-full bg-slate-50 dark:bg-slate-950"
         onClick={handleClickOutside}
       >
       {/* Main Content Area */}
@@ -2315,70 +2459,166 @@ export default function Schedules() {
             </div>
           </div>
 
-          {/* Toolbar - All controls under headline */}
+          {/* Toolbar - Simplified layout with clear hierarchy */}
           <div className="flex items-center gap-3 flex-wrap">
-            {/* Navigation & Import */}
+            {/* PRIMARY ACTION: Auto-Match */}
+            <div className="flex items-center gap-2">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    size="lg"
+                    disabled={isLoadingPreview || isAIBuilding}
+                    className={isPreviewMode
+                      ? "bg-violet-600 hover:bg-violet-700 text-white px-6 shadow-lg"
+                      : "bg-orange-500 hover:bg-orange-600 text-white px-6 shadow-lg shadow-orange-500/25"
+                    }
+                    data-testid="button-auto-match"
+                  >
+                    {isLoadingPreview ? (
+                      <>
+                        <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                        Matching...
+                      </>
+                    ) : isPreviewMode ? (
+                      <>
+                        <Sparkles className="w-5 h-5 mr-2" />
+                        Preview Active
+                        <ChevronDown className="w-4 h-4 ml-2" />
+                      </>
+                    ) : (
+                      <>
+                        <Zap className="w-5 h-5 mr-2" />
+                        Auto-Match
+                        <ChevronDown className="w-4 h-4 ml-2" />
+                      </>
+                    )}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-56">
+                  <DropdownMenuLabel>Match Options</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onClick={handleGeneratePreview}
+                    disabled={isLoadingPreview || isPreviewMode}
+                  >
+                    <Sparkles className="w-4 h-4 mr-2" />
+                    Preview All Matches
+                  </DropdownMenuItem>
+                  {isPreviewMode && (
+                    <>
+                      <DropdownMenuItem onClick={handleCommitPreviewAssignments} disabled={isCommittingPreview}>
+                        <CheckSquare className="w-4 h-4 mr-2" />
+                        Apply All ({previewAssignments.size})
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={handleCancelPreview}>
+                        <X className="w-4 h-4 mr-2" />
+                        Cancel Preview
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel className="text-xs text-muted-foreground">Filter by Type</DropdownMenuLabel>
+                  <DropdownMenuItem onClick={() => {
+                    setFilterType("solo1");
+                    handleGeneratePreview();
+                  }}>
+                    Match Solo1 Only
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => {
+                    setFilterType("solo2");
+                    handleGeneratePreview();
+                  }}>
+                    Match Solo2 Only
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              {/* Conflict indicator badge */}
+              {isPreviewMode && previewConflicts.size > 0 && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Badge variant="destructive" className="cursor-pointer flex items-center gap-1">
+                      <AlertOctagon className="w-3 h-3" />
+                      {previewConflicts.size} conflicts
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>{previewConflicts.size} blocks could not be assigned</p>
+                    <p className="text-xs text-muted-foreground">Click on a conflict block for details</p>
+                  </TooltipContent>
+                </Tooltip>
+              )}
+            </div>
+
+            {/* SECONDARY: Import & Navigation */}
             <div className="flex items-center gap-2">
               <Button
-                variant="default"
+                variant="ghost"
                 size="sm"
                 onClick={() => setIsImportWizardOpen(true)}
+                className="text-muted-foreground hover:text-foreground"
                 data-testid="button-import-schedule"
               >
                 <Upload className="w-4 h-4 mr-2" />
-                Import Schedule
+                Import
               </Button>
 
               <Button
-                variant="destructive"
-                size="sm"
-                onClick={() => setShowClearAllDialog(true)}
-                data-testid="button-clear-all"
-              >
-                <X className="w-4 h-4 mr-2" />
-                Clear All
-              </Button>
-
-              <Button
-                variant="outline"
+                variant="ghost"
                 size="sm"
                 onClick={() => setIsMiloChatOpen(true)}
-                className="bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 text-white border-0"
+                className="text-purple-600 hover:text-purple-700 hover:bg-purple-50 dark:hover:bg-purple-950"
                 data-testid="button-milo-chat"
               >
                 <MessageSquare className="w-4 h-4 mr-2" />
                 Ask MILO
               </Button>
 
-              {/* Generate Match Preview Button */}
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleGeneratePreview}
-                disabled={isLoadingPreview || isPreviewMode}
-                className={isPreviewMode
-                  ? "bg-violet-100 border-violet-300 text-violet-700 dark:bg-violet-900/30 dark:border-violet-700 dark:text-violet-300"
-                  : "bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white border-0"
-                }
-                data-testid="button-generate-preview"
-              >
-                {isLoadingPreview ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Generating...
-                  </>
-                ) : isPreviewMode ? (
-                  <>
-                    <Sparkles className="w-4 h-4 mr-2" />
-                    Preview Active
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="w-4 h-4 mr-2" />
-                    Generate Match Preview
-                  </>
-                )}
-              </Button>
+              {/* Tools Dropdown - Hide experimental/maintenance features */}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground">
+                    <Settings className="w-4 h-4 mr-2" />
+                    Tools
+                    <ChevronDown className="w-4 h-4 ml-1" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-56">
+                  <DropdownMenuLabel>Maintenance</DropdownMenuLabel>
+                  <DropdownMenuItem onClick={() => setShowClearAllDialog(true)}>
+                    <Trash2 className="w-4 h-4 mr-2 text-destructive" />
+                    Clear Week...
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => analyzeDnaMutation.mutate()}
+                    disabled={analyzeDnaMutation.isPending}
+                  >
+                    <Dna className="w-4 h-4 mr-2" />
+                    Re-analyze Patterns
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel>Diagnostics</DropdownMenuLabel>
+                  <DropdownMenuItem onClick={() => setShowBlockAnalyzer(!showBlockAnalyzer)}>
+                    <Dna className="w-4 h-4 mr-2" />
+                    Block Analyzer
+                    {blockAnalysis.length > 0 && (
+                      <Badge variant="secondary" className="ml-auto text-xs">
+                        {blockAnalysis.length}
+                      </Badge>
+                    )}
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel className="text-xs text-muted-foreground">Experimental</DropdownMenuLabel>
+                  <DropdownMenuItem
+                    onClick={handleAIBuild}
+                    disabled={isAIBuilding}
+                  >
+                    <Brain className="w-4 h-4 mr-2" />
+                    AI Build (Gemini)
+                    {isAIBuilding && <Loader2 className="w-3 h-3 ml-2 animate-spin" />}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
 
               {/* DNA Matching Status Indicator */}
               {activeDriverId && (
@@ -2397,21 +2637,23 @@ export default function Schedules() {
               )}
 
               <Button
-                variant="outline"
+                variant="ghost"
                 size="sm"
                 onClick={handlePreviousWeek}
+                className="text-muted-foreground hover:text-foreground"
                 data-testid="button-previous-week"
               >
                 <ChevronLeft className="w-4 h-4" />
-                Previous Week
+                Prev
               </Button>
               <Button
-                variant="outline"
+                variant="ghost"
                 size="sm"
                 onClick={handleNextWeek}
+                className="text-muted-foreground hover:text-foreground"
                 data-testid="button-next-week"
               >
-                Next Week
+                Next
                 <ChevronRight className="w-4 h-4" />
               </Button>
             </div>
@@ -2640,7 +2882,7 @@ export default function Schedules() {
               </div>
             )}
 
-            {/* Block Analyzer Toggle */}
+            {/* MOVED TO TOOLS MENU - Block Analyzer Toggle
             <Button
               variant={showBlockAnalyzer ? "default" : "outline"}
               size="sm"
@@ -2655,8 +2897,9 @@ export default function Schedules() {
                 </Badge>
               )}
             </Button>
+            */}
 
-            {/* Refresh DNA Profiles Button */}
+            {/* MOVED TO TOOLS MENU - Refresh DNA Profiles Button
             <Button
               variant="outline"
               size="sm"
@@ -2671,6 +2914,7 @@ export default function Schedules() {
               )}
               Refresh DNA
             </Button>
+            */}
           </div>
         </div>
 
@@ -3077,37 +3321,124 @@ export default function Schedules() {
                                         const previewAssignment = isPreviewMode ? previewAssignments.get(occ.blockId) : null;
                                         const hasPreviewAssignment = !!previewAssignment;
 
-                                        // If in preview mode with assignment, show ghost assignment
+                                        // If in preview mode with assignment, show ghost assignment with reasoning tooltip
                                         if (hasPreviewAssignment) {
                                           return (
-                                            <div
-                                              className="w-full p-2 rounded-b-md border-2 border-dashed text-xs transition-all cursor-pointer relative group"
-                                              style={{
-                                                backgroundColor: 'rgba(139, 92, 246, 0.1)', // violet
-                                                borderColor: 'rgba(139, 92, 246, 0.5)',
-                                                boxShadow: '0 0 15px rgba(139, 92, 246, 0.3), inset 0 0 10px rgba(139, 92, 246, 0.1)',
-                                              }}
-                                              onClick={() => handleUnassignedBlockClick(occ)}
-                                              title={`Preview: ${previewAssignment.driverName} (${Math.round(previewAssignment.score * 100)}% match)`}
-                                            >
-                                              <div className="flex items-center gap-1.5">
-                                                <Sparkles className="w-3 h-3 text-violet-500 flex-shrink-0" />
-                                                <span className="font-medium text-violet-700 dark:text-violet-300 truncate">
-                                                  {previewAssignment.driverName}
-                                                </span>
-                                              </div>
-                                              <div className="flex items-center justify-between mt-1">
-                                                <Badge
-                                                  variant="secondary"
-                                                  className="text-[10px] px-1.5 py-0 bg-violet-200 text-violet-700 dark:bg-violet-900/50 dark:text-violet-300"
+                                            <Tooltip>
+                                              <TooltipTrigger asChild>
+                                                <div
+                                                  className="w-full p-2 rounded-b-md border-2 border-dashed text-xs transition-all cursor-pointer relative group"
+                                                  style={{
+                                                    backgroundColor: 'rgba(139, 92, 246, 0.1)', // violet
+                                                    borderColor: 'rgba(139, 92, 246, 0.5)',
+                                                    boxShadow: '0 0 15px rgba(139, 92, 246, 0.3), inset 0 0 10px rgba(139, 92, 246, 0.1)',
+                                                  }}
+                                                  onClick={() => handleUnassignedBlockClick(occ)}
                                                 >
-                                                  PREVIEW
-                                                </Badge>
-                                                <span className="text-[10px] text-violet-600 dark:text-violet-400 font-mono">
-                                                  {Math.round(previewAssignment.score * 100)}%
-                                                </span>
-                                              </div>
-                                            </div>
+                                                  <div className="flex items-center gap-1.5">
+                                                    <Sparkles className="w-3 h-3 text-violet-500 flex-shrink-0" />
+                                                    <span className="font-medium text-violet-700 dark:text-violet-300 truncate">
+                                                      {previewAssignment.driverName}
+                                                    </span>
+                                                  </div>
+                                                  <div className="flex items-center justify-between mt-1">
+                                                    <Badge
+                                                      variant="secondary"
+                                                      className="text-[10px] px-1.5 py-0 bg-violet-200 text-violet-700 dark:bg-violet-900/50 dark:text-violet-300"
+                                                    >
+                                                      PREVIEW
+                                                    </Badge>
+                                                    <span className="text-[10px] text-violet-600 dark:text-violet-400 font-mono">
+                                                      {Math.round(previewAssignment.score * 100)}%
+                                                    </span>
+                                                  </div>
+                                                </div>
+                                              </TooltipTrigger>
+                                              <TooltipContent side="right" className="max-w-xs p-3">
+                                                <div className="space-y-2">
+                                                  <p className="font-semibold text-sm">{previewAssignment.driverName}</p>
+                                                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                                                    <span className="text-muted-foreground">Ownership:</span>
+                                                    <span className="font-mono">{Math.round(previewAssignment.ownershipPct * 100)}%</span>
+                                                    <span className="text-muted-foreground">Match Type:</span>
+                                                    <span className="capitalize">{previewAssignment.matchType}</span>
+                                                    <span className="text-muted-foreground">Confidence:</span>
+                                                    <span className="font-mono">{Math.round(previewAssignment.confidence)}%</span>
+                                                  </div>
+                                                  {previewAssignment.reasons.length > 0 && (
+                                                    <div className="pt-1 border-t">
+                                                      <p className="text-xs text-muted-foreground mb-1">Reasons:</p>
+                                                      <ul className="text-xs space-y-0.5">
+                                                        {previewAssignment.reasons.slice(0, 3).map((reason, idx) => (
+                                                          <li key={idx} className="flex items-start gap-1">
+                                                            <span className="text-green-500">✓</span>
+                                                            <span>{reason}</span>
+                                                          </li>
+                                                        ))}
+                                                      </ul>
+                                                    </div>
+                                                  )}
+                                                  <div className="flex items-center gap-1 pt-1 text-xs text-green-600">
+                                                    <CheckSquare className="w-3 h-3" />
+                                                    <span>DOT Compliant</span>
+                                                  </div>
+                                                </div>
+                                              </TooltipContent>
+                                            </Tooltip>
+                                          );
+                                        }
+
+                                        // Check for conflict in preview mode
+                                        const previewConflict = isPreviewMode ? previewConflicts.get(occ.blockId) : null;
+                                        if (previewConflict) {
+                                          return (
+                                            <Tooltip>
+                                              <TooltipTrigger asChild>
+                                                <div
+                                                  className="w-full p-2 rounded-b-md border-2 border-dashed text-xs transition-all cursor-pointer relative"
+                                                  style={{
+                                                    backgroundColor: 'rgba(239, 68, 68, 0.15)', // red
+                                                    borderColor: 'rgba(239, 68, 68, 0.5)',
+                                                    boxShadow: '0 0 15px rgba(239, 68, 68, 0.3)',
+                                                  }}
+                                                  onClick={() => setSelectedConflict(occ.blockId)}
+                                                >
+                                                  <div className="flex items-center gap-1.5">
+                                                    <AlertOctagon className="w-3 h-3 text-red-500 flex-shrink-0" />
+                                                    <span className="font-medium text-red-700 dark:text-red-300 truncate">
+                                                      Conflict
+                                                    </span>
+                                                  </div>
+                                                  <div className="flex items-center justify-between mt-1">
+                                                    <Badge
+                                                      variant="destructive"
+                                                      className="text-[10px] px-1.5 py-0"
+                                                    >
+                                                      UNASSIGNABLE
+                                                    </Badge>
+                                                    <Info className="w-3 h-3 text-red-500" />
+                                                  </div>
+                                                </div>
+                                              </TooltipTrigger>
+                                              <TooltipContent side="right" className="max-w-xs p-3">
+                                                <div className="space-y-2">
+                                                  <p className="font-semibold text-sm text-red-600">
+                                                    {previewConflict.reason}
+                                                  </p>
+                                                  <ul className="text-xs space-y-0.5">
+                                                    {previewConflict.details.map((detail, idx) => (
+                                                      <li key={idx} className="flex items-start gap-1">
+                                                        <span className="text-red-500">•</span>
+                                                        <span>{detail}</span>
+                                                      </li>
+                                                    ))}
+                                                  </ul>
+                                                  <p className="text-xs text-muted-foreground pt-1 border-t">
+                                                    Click for more details
+                                                  </p>
+                                                </div>
+                                              </TooltipContent>
+                                            </Tooltip>
                                           );
                                         }
 
@@ -3381,6 +3712,73 @@ export default function Schedules() {
         </AlertDialogContent>
       </AlertDialog>
 
+      {/* Conflict Detail Dialog */}
+      <Dialog open={!!selectedConflict} onOpenChange={(open) => !open && setSelectedConflict(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-red-600">
+              <AlertOctagon className="w-5 h-5" />
+              Assignment Conflict
+            </DialogTitle>
+          </DialogHeader>
+          {selectedConflict && previewConflicts.get(selectedConflict) && (() => {
+            const conflict = previewConflicts.get(selectedConflict)!;
+            return (
+              <div className="space-y-4">
+                <Alert variant="destructive">
+                  <AlertOctagon className="h-4 w-4" />
+                  <AlertDescription className="font-medium">
+                    {conflict.reason}
+                  </AlertDescription>
+                </Alert>
+
+                <div className="space-y-2">
+                  <h4 className="text-sm font-medium">Block Details:</h4>
+                  <div className="grid grid-cols-2 gap-2 text-sm bg-muted/50 rounded-lg p-3">
+                    <span className="text-muted-foreground">Block ID:</span>
+                    <span className="font-mono">{conflict.blockId.slice(0, 12)}...</span>
+                    {conflict.blockInfo && (
+                      <>
+                        <span className="text-muted-foreground">Date:</span>
+                        <span>{conflict.blockInfo.serviceDate}</span>
+                        <span className="text-muted-foreground">Time:</span>
+                        <span>{conflict.blockInfo.startTime}</span>
+                        <span className="text-muted-foreground">Tractor:</span>
+                        <span>{conflict.blockInfo.tractorId}</span>
+                        <span className="text-muted-foreground">Type:</span>
+                        <span className="capitalize">{conflict.blockInfo.contractType}</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <h4 className="text-sm font-medium">Why This Block Cannot Be Assigned:</h4>
+                  <ul className="space-y-1 text-sm">
+                    {conflict.details.map((detail, idx) => (
+                      <li key={idx} className="flex items-start gap-2">
+                        <span className="text-red-500 mt-0.5">•</span>
+                        <span>{detail}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                <div className="pt-3 border-t">
+                  <h4 className="text-sm font-medium mb-2">Possible Solutions:</h4>
+                  <ul className="space-y-1 text-sm text-muted-foreground">
+                    <li>• Manually assign a driver who meets all constraints</li>
+                    <li>• Adjust driver schedules to free up capacity</li>
+                    <li>• Review time-off requests that may be blocking</li>
+                    <li>• Check if DOT rest requirements can be met with different routing</li>
+                  </ul>
+                </div>
+              </div>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
+
       {/* Import Wizard */}
       <ImportWizard
         open={isImportWizardOpen}
@@ -3576,6 +3974,96 @@ export default function Schedules() {
           });
         }}
       />
+
+      {/* AI Build Result Modal */}
+      <Dialog open={showAIBuildModal} onOpenChange={setShowAIBuildModal}>
+        <DialogContent className="max-w-4xl max-h-[80vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Brain className="w-5 h-5 text-orange-500" />
+              AI Schedule Build Results
+            </DialogTitle>
+          </DialogHeader>
+
+          {aiBuildResult && (
+            <div className="flex-1 overflow-auto space-y-4">
+              {/* Summary Stats */}
+              <div className="grid grid-cols-3 gap-4">
+                <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-4 text-center">
+                  <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">
+                    {aiBuildResult.totalBlocks}
+                  </div>
+                  <div className="text-sm text-muted-foreground">Total Blocks</div>
+                </div>
+                <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-4 text-center">
+                  <div className="text-2xl font-bold text-green-600 dark:text-green-400">
+                    {aiBuildResult.assigned}
+                  </div>
+                  <div className="text-sm text-muted-foreground">Assigned</div>
+                </div>
+                <div className="bg-orange-50 dark:bg-orange-900/20 rounded-lg p-4 text-center">
+                  <div className="text-2xl font-bold text-orange-600 dark:text-orange-400">
+                    {aiBuildResult.unassigned}
+                  </div>
+                  <div className="text-sm text-muted-foreground">Unassigned</div>
+                </div>
+              </div>
+
+              {/* Reasoning Log */}
+              <div className="border rounded-lg p-4">
+                <h3 className="font-semibold mb-3 flex items-center gap-2">
+                  <Cpu className="w-4 h-4" />
+                  Agent Reasoning
+                </h3>
+                <div className="bg-slate-900 text-slate-100 rounded-lg p-4 font-mono text-sm max-h-[300px] overflow-auto">
+                  {aiBuildResult.reasoning.map((line, i) => (
+                    <div key={i} className="whitespace-pre-wrap">
+                      {line}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Decisions Table */}
+              <div className="border rounded-lg p-4">
+                <h3 className="font-semibold mb-3">Assignment Decisions</h3>
+                <div className="max-h-[200px] overflow-auto">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-background">
+                      <tr className="border-b">
+                        <th className="text-left p-2">Block</th>
+                        <th className="text-left p-2">Driver</th>
+                        <th className="text-left p-2">Action</th>
+                        <th className="text-left p-2">Reasoning</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {aiBuildResult.decisions.map((decision, i) => (
+                        <tr key={i} className="border-b hover:bg-muted/50">
+                          <td className="p-2 font-mono text-xs">{decision.blockInfo}</td>
+                          <td className="p-2">{decision.driverName || '-'}</td>
+                          <td className="p-2">
+                            <Badge variant={decision.action === 'assigned' ? 'default' : 'secondary'}>
+                              {decision.action}
+                            </Badge>
+                          </td>
+                          <td className="p-2 text-xs text-muted-foreground">{decision.reasoning}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="flex justify-end pt-4 border-t">
+            <Button onClick={() => setShowAIBuildModal(false)}>
+              Close
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
     </div>
   </div>

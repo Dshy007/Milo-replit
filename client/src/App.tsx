@@ -28,6 +28,8 @@ import DriverAvailability from "@/pages/DriverAvailability";
 import AIScheduler from "@/pages/AIScheduler";
 import DriverProfiles from "@/pages/DriverProfiles";
 import DriverDnaDashboard from "@/pages/DriverDnaDashboard";
+import FleetComm from "@/pages/FleetComm";
+import DriverStation from "@/pages/DriverStation";
 import NotFound from "@/pages/not-found";
 
 function ProtectedLayout({ children }: { children: ReactNode }) {
@@ -170,6 +172,17 @@ function Router() {
             <DriverDnaDashboard />
           </ProtectedLayout>
         </ProtectedRoute>
+      </Route>
+      <Route path="/fleet-comm">
+        <ProtectedRoute>
+          <ProtectedLayout>
+            <FleetComm />
+          </ProtectedLayout>
+        </ProtectedRoute>
+      </Route>
+      {/* Driver Station - No auth required, full-screen kiosk mode */}
+      <Route path="/driver-station/:driverId">
+        <DriverStation />
       </Route>
       <Route component={NotFound} />
     </Switch>

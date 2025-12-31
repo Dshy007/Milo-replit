@@ -1129,29 +1129,6 @@ export function DriverPoolSidebar({
           </div>
         )}
 
-        {/* Claude AI Auto-Match Button */}
-        <div className="mb-3">
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full h-9 bg-gradient-to-r from-orange-500 to-amber-600 hover:from-orange-600 hover:to-amber-700 text-white border-0"
-            onClick={() => autoMatchMutation.mutate()}
-            disabled={autoMatchMutation.isPending}
-          >
-            {autoMatchMutation.isPending ? (
-              <>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Matching...
-              </>
-            ) : (
-              <>
-                <Sparkles className="w-4 h-4 mr-2" />
-                Auto-Match
-              </>
-            )}
-          </Button>
-        </div>
-
         {/* Search */}
         <div className="relative mb-3">
           <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />

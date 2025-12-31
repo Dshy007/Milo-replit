@@ -2,6 +2,7 @@ import "dotenv/config";
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
+import { startScheduledCallsProcessor } from "./scheduled-calls-processor";
 
 const app = express();
 
@@ -90,5 +91,8 @@ app.use((req, res, next) => {
 
   server.listen(listenOptions, () => {
     log(`serving on port ${port}`);
+
+    // Start scheduled calls processor
+    startScheduledCallsProcessor();
   });
 })();

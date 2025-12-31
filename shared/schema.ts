@@ -518,6 +518,10 @@ export const blocks = pgTable("blocks", {
   timeRangeIdx: index("blocks_time_range_idx").on(table.startTimestamp, table.endTimestamp),
   // Index for pattern-based queries
   patternIdx: index("blocks_pattern_idx").on(table.patternGroup, table.cycleId),
+  // Index for date range queries (CRITICAL for matcher performance)
+  serviceDateIdx: index("blocks_tenant_service_date_idx").on(table.tenantId, table.serviceDate),
+  // Index for soloType filtering
+  soloTypeIdx: index("blocks_tenant_solo_type_idx").on(table.tenantId, table.soloType),
 }));
 
 export const insertBlockSchema = createInsertSchema(blocks, {
@@ -530,6 +534,138 @@ export const updateBlockSchema = insertBlockSchema.omit({ tenantId: true }).part
 export type InsertBlock = z.infer<typeof insertBlockSchema>;
 export type UpdateBlock = z.infer<typeof updateBlockSchema>;
 export type Block = typeof blocks.$inferSelect;
+
+// Trips (Individual legs within a block - each stop-to-stop movement)
+export const trips = pgTable("trips", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+  blockId: varchar("block_id").notNull().references(() => blocks.id),
+  tripId: text("trip_id").notNull(), // Amazon trip ID: "T-111JXN2PL"
+  loadId: text("load_id"), // Amazon load ID: "114R8DGFB"
+  facilitySequence: text("facility_sequence").notNull(), // e.g., "MKC40->FOE1"
+  sequenceNumber: integer("sequence_number").notNull(), // Order within block (1, 2, 3...)
+  // Stop 1 (Origin)
+  stop1Facility: text("stop1_facility").notNull(), // e.g., "MKC40", "FOE1"
+  stop1PlannedArrival: timestamp("stop1_planned_arrival"),
+  stop1PlannedDeparture: timestamp("stop1_planned_departure"),
+  stop1ActualArrival: timestamp("stop1_actual_arrival"),
+  stop1ActualDeparture: timestamp("stop1_actual_departure"),
+  // Stop 2 (Destination)
+  stop2Facility: text("stop2_facility").notNull(), // e.g., "MCI9", "DKS3"
+  stop2PlannedArrival: timestamp("stop2_planned_arrival"),
+  stop2PlannedDeparture: timestamp("stop2_planned_departure"),
+  stop2ActualArrival: timestamp("stop2_actual_arrival"),
+  stop2ActualDeparture: timestamp("stop2_actual_departure"),
+  // Trip metadata
+  estimatedDistance: decimal("estimated_distance", { precision: 10, scale: 2 }), // miles
+  loadType: text("load_type"), // "OutboundAmazonManaged", "StemLegBobTail", etc.
+  status: text("status").notNull().default("pending"), // pending, in_progress, completed, cancelled
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  uniqueTrip: uniqueIndex("trips_tenant_trip_id_idx").on(table.tenantId, table.tripId),
+  blockIdx: index("trips_block_id_idx").on(table.blockId),
+  stop1Idx: index("trips_stop1_facility_idx").on(table.stop1Facility),
+  stop2Idx: index("trips_stop2_facility_idx").on(table.stop2Facility),
+}));
+
+export const insertTripSchema = createInsertSchema(trips, {
+  stop1PlannedArrival: z.coerce.date().optional().nullable(),
+  stop1PlannedDeparture: z.coerce.date().optional().nullable(),
+  stop1ActualArrival: z.coerce.date().optional().nullable(),
+  stop1ActualDeparture: z.coerce.date().optional().nullable(),
+  stop2PlannedArrival: z.coerce.date().optional().nullable(),
+  stop2PlannedDeparture: z.coerce.date().optional().nullable(),
+  stop2ActualArrival: z.coerce.date().optional().nullable(),
+  stop2ActualDeparture: z.coerce.date().optional().nullable(),
+}).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertTrip = z.infer<typeof insertTripSchema>;
+export type Trip = typeof trips.$inferSelect;
+
+// Voice Broadcasts (Automated calls to drivers)
+export const voiceBroadcasts = pgTable("voice_broadcasts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+  driverId: varchar("driver_id").notNull().references(() => drivers.id),
+  blockId: varchar("block_id").references(() => blocks.id),
+  tripId: varchar("trip_id").references(() => trips.id),
+  broadcastType: text("broadcast_type").notNull(), // "weather", "safety_alert", "schedule_change"
+  phoneNumber: text("phone_number").notNull(),
+  message: text("message").notNull(), // The message to be spoken
+  twilioCallSid: text("twilio_call_sid"), // Twilio's call identifier
+  status: text("status").notNull().default("pending"), // pending, queued, in_progress, completed, failed
+  scheduledFor: timestamp("scheduled_for"), // When to make the call
+  attemptCount: integer("attempt_count").notNull().default(0),
+  lastAttemptAt: timestamp("last_attempt_at"),
+  completedAt: timestamp("completed_at"),
+  errorMessage: text("error_message"),
+  metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`), // Extra data (weather info, alert details)
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  driverIdx: index("voice_broadcasts_driver_id_idx").on(table.driverId),
+  statusIdx: index("voice_broadcasts_status_idx").on(table.status),
+  scheduledIdx: index("voice_broadcasts_scheduled_idx").on(table.scheduledFor),
+  typeIdx: index("voice_broadcasts_type_idx").on(table.broadcastType),
+}));
+
+export const insertVoiceBroadcastSchema = createInsertSchema(voiceBroadcasts, {
+  scheduledFor: z.coerce.date().optional().nullable(),
+  lastAttemptAt: z.coerce.date().optional().nullable(),
+  completedAt: z.coerce.date().optional().nullable(),
+}).omit({ id: true, createdAt: true });
+export type InsertVoiceBroadcast = z.infer<typeof insertVoiceBroadcastSchema>;
+export type VoiceBroadcast = typeof voiceBroadcasts.$inferSelect;
+
+// Safety Alerts (From Netradyne or other sources)
+export const safetyAlerts = pgTable("safety_alerts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+  driverId: varchar("driver_id").references(() => drivers.id), // May be null if not matched
+  driverName: text("driver_name"), // Raw name from alert
+  alertType: text("alert_type").notNull(), // "hard_brake", "collision", "distraction", etc.
+  severity: text("severity").notNull().default("medium"), // low, medium, high, critical
+  source: text("source").notNull(), // "netradyne", "manual"
+  sourceAlertId: text("source_alert_id"), // External ID from source
+  description: text("description"),
+  occurredAt: timestamp("occurred_at").notNull(),
+  location: text("location"), // Address or coordinates
+  broadcastSent: boolean("broadcast_sent").notNull().default(false),
+  broadcastId: varchar("broadcast_id").references(() => voiceBroadcasts.id),
+  rawData: jsonb("raw_data").notNull().default(sql`'{}'::jsonb`), // Original alert data
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  driverIdx: index("safety_alerts_driver_id_idx").on(table.driverId),
+  alertTypeIdx: index("safety_alerts_type_idx").on(table.alertType),
+  occurredIdx: index("safety_alerts_occurred_idx").on(table.occurredAt),
+  sourceIdx: index("safety_alerts_source_idx").on(table.source, table.sourceAlertId),
+}));
+
+export const insertSafetyAlertSchema = createInsertSchema(safetyAlerts, {
+  occurredAt: z.coerce.date(),
+}).omit({ id: true, createdAt: true });
+export type InsertSafetyAlert = z.infer<typeof insertSafetyAlertSchema>;
+export type SafetyAlert = typeof safetyAlerts.$inferSelect;
+
+// Facility Codes Lookup (Map Amazon codes to locations)
+export const facilityCodes = pgTable("facility_codes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+  facilityCode: text("facility_code").notNull(), // e.g., "MKC40", "FOE1", "MCI9"
+  facilityName: text("facility_name"), // Full name
+  city: text("city").notNull(),
+  state: text("state").notNull(),
+  latitude: decimal("latitude", { precision: 10, scale: 6 }),
+  longitude: decimal("longitude", { precision: 10, scale: 6 }),
+  nearestAirport: text("nearest_airport"), // Airport code for weather
+  timezone: text("timezone").notNull().default("America/Chicago"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  uniqueFacility: uniqueIndex("facility_codes_tenant_code_idx").on(table.tenantId, table.facilityCode),
+}));
+
+export const insertFacilityCodeSchema = createInsertSchema(facilityCodes).omit({ id: true, createdAt: true });
+export type InsertFacilityCode = z.infer<typeof insertFacilityCodeSchema>;
+export type FacilityCode = typeof facilityCodes.$inferSelect;
 
 // Shift Templates (Reusable shift definitions keyed by operatorId, not Amazon's transient block IDs)
 // Amazon provides different block IDs each week, so we key on operatorId for stability
@@ -634,6 +770,8 @@ export const blockAssignments = pgTable("block_assignments", {
   driverTimeIdx: index("block_assignments_driver_time_idx").on(table.tenantId, table.driverId, table.assignedAt),
   // Index for shift occurrence lookups
   shiftOccurrenceIdIdx: index("block_assignments_shift_occurrence_id_idx").on(table.shiftOccurrenceId),
+  // Index for active assignment lookups (CRITICAL for matcher performance)
+  tenantActiveIdx: index("block_assignments_tenant_active_idx").on(table.tenantId, table.isActive),
 }));
 
 export const insertBlockAssignmentSchema = createInsertSchema(blockAssignments, {
@@ -1403,3 +1541,58 @@ export const updateDriverDnaProfileSchema = insertDriverDnaProfileSchema.omit({ 
 export type InsertDriverDnaProfile = z.infer<typeof insertDriverDnaProfileSchema>;
 export type UpdateDriverDnaProfile = z.infer<typeof updateDriverDnaProfileSchema>;
 export type DriverDnaProfile = typeof driverDnaProfiles.$inferSelect;
+
+// ============================================================================
+// Fleet Communication - Drop-In Sessions & Driver Presence
+// ============================================================================
+
+// Drop-In Sessions (Jitsi calls between dispatch and drivers)
+export const dropInSessions = pgTable("drop_in_sessions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+  dispatcherId: varchar("dispatcher_id").notNull().references(() => users.id),
+  driverId: varchar("driver_id").notNull().references(() => drivers.id),
+  jitsiRoomName: text("jitsi_room_name").notNull(),
+  status: text("status").notNull().default("active"), // active, ended, failed
+  startedAt: timestamp("started_at").defaultNow().notNull(),
+  endedAt: timestamp("ended_at"),
+  durationSeconds: integer("duration_seconds"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  tenantIdx: index("drop_in_sessions_tenant_idx").on(table.tenantId),
+  driverIdx: index("drop_in_sessions_driver_idx").on(table.driverId),
+  dispatcherIdx: index("drop_in_sessions_dispatcher_idx").on(table.dispatcherId),
+  statusIdx: index("drop_in_sessions_status_idx").on(table.status),
+  startedAtIdx: index("drop_in_sessions_started_idx").on(table.startedAt),
+}));
+
+export const insertDropInSessionSchema = createInsertSchema(dropInSessions, {
+  startedAt: z.coerce.date().optional(),
+  endedAt: z.coerce.date().optional().nullable(),
+}).omit({ id: true, createdAt: true });
+export type InsertDropInSession = z.infer<typeof insertDropInSessionSchema>;
+export type DropInSession = typeof dropInSessions.$inferSelect;
+
+// Driver Presence Tracking (Real-time online/offline status)
+export const driverPresence = pgTable("driver_presence", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+  driverId: varchar("driver_id").notNull().references(() => drivers.id),
+  isOnline: boolean("is_online").notNull().default(false),
+  lastSeen: timestamp("last_seen").defaultNow().notNull(),
+  connectionId: text("connection_id"), // WebSocket connection ID
+  deviceInfo: jsonb("device_info").notNull().default(sql`'{}'::jsonb`), // Browser, platform info
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  uniqueDriver: uniqueIndex("driver_presence_tenant_driver_idx").on(table.tenantId, table.driverId),
+  isOnlineIdx: index("driver_presence_online_idx").on(table.isOnline),
+  lastSeenIdx: index("driver_presence_last_seen_idx").on(table.lastSeen),
+}));
+
+export const insertDriverPresenceSchema = createInsertSchema(driverPresence, {
+  lastSeen: z.coerce.date().optional(),
+}).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertDriverPresence = z.infer<typeof insertDriverPresenceSchema>;
+export type DriverPresence = typeof driverPresence.$inferSelect;

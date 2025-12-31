@@ -308,6 +308,26 @@ export async function getSlotDistribution(params: {
 }
 
 /**
+ * Get ownership distributions for MULTIPLE slots in a SINGLE Python call.
+ * PERFORMANCE: Loads model once, returns all distributions in one subprocess.
+ *
+ * @param slots - Array of slot parameters to query
+ * @returns Map of cacheKey -> SlotDistribution
+ */
+export async function getBatchSlotDistributions(slots: Array<{
+  soloType: string;
+  tractorId: string;
+  dayOfWeek: number;
+  canonicalTime?: string;
+}>): Promise<PythonResult<{ distributions: Record<string, SlotDistribution>; count: number }>> {
+  console.log(`[Python Bridge] Batch loading ${slots.length} slot distributions`);
+  return runPythonScript('xgboost_ownership.py', [], JSON.stringify({
+    action: 'batch_get_distributions',
+    slots
+  }));
+}
+
+/**
  * Get a driver's typical work pattern from XGBoost model.
  * Returns how many days they typically work and which days.
  */

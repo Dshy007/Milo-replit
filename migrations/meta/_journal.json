@@ -26,8 +26,29 @@
     {
       "idx": 3,
       "version": "7",
-      "when": 1765486109825,
-      "tag": "0003_add-driver-scheduling-preferences",
+      "when": 1764475680000,
+      "tag": "0003_fix_rejected_to_unassigned",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1764662425000,
+      "tag": "0004_add_driver_dna_profiles",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1767129862737,
+      "tag": "0005_fleet_communication",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1767139000000,
+      "tag": "0006_voice_broadcasts",
       "breakpoints": true
     }
   ]

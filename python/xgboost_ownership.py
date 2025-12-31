@@ -657,6 +657,32 @@ def main():
         dist['slot'] = f"{solo_type}_{tractor_id}_{DAY_NAMES[day_of_week]}"
         print(json.dumps(dist, indent=2))
 
+    elif action == 'batch_get_distributions':
+        # Get ownership distributions for MULTIPLE slots in ONE call (performance optimization)
+        # Input: { "action": "batch_get_distributions", "slots": [ { soloType, tractorId, dayOfWeek, canonicalTime }, ... ] }
+        slots = input_data.get('slots', [])
+
+        classifier = OwnershipClassifier()
+        if not classifier.load():
+            print(json.dumps({'error': 'Model not found'}))
+            return
+
+        results = {}
+        for slot in slots:
+            solo_type = slot.get('soloType', 'solo1')
+            tractor_id = slot.get('tractorId', 'Tractor_1')
+            day_of_week = slot.get('dayOfWeek', 0)
+            canonical_time = slot.get('canonicalTime')
+
+            # Use the same cache key format as TypeScript
+            cache_key = f"{solo_type}_{tractor_id}_{day_of_week}_{canonical_time or get_canonical_time(solo_type, tractor_id)}"
+
+            dist = classifier.get_ownership_distribution(solo_type, tractor_id, day_of_week, canonical_time)
+            dist['slot'] = f"{solo_type}_{tractor_id}_{DAY_NAMES[day_of_week]}"
+            results[cache_key] = dist
+
+        print(json.dumps({'distributions': results, 'count': len(results)}))
+
     elif action == 'get_driver_pattern':
         # Get a driver's typical work pattern (days per week + which days)
         driver_name = input_data.get('driverName', '')
