@@ -24,6 +24,98 @@ import { getSlotDistribution, getBatchSlotDistributions, getAllDriverPatterns, g
 import { validateBlockAssignment, blockToAssignmentSubject } from "./rolling6-calculator";
 
 /**
+ * Learn driver's dominant TIME SLOT from their 12-week assignment history.
+ * Uses the 70% rule: if 70%+ of assignments are at one start time, that's their locked slot.
+ *
+ * This is the KEY insight: Brian always works 00:30, Richard always works 01:30.
+ * They should ONLY be matched to blocks at their respective times.
+ */
+async function getDriverTimeSlots(
+  tenantId: string
+): Promise<Map<string, { dominantTime: string | null; confidence: number }>> {
+  const driverTimeSlots = new Map<string, { dominantTime: string | null; confidence: number }>();
+
+  // Look back 12 weeks
+  const cutoffDate = subWeeks(new Date(), 12);
+
+  // Query all assignments with block start times for the last 12 weeks
+  const historicalAssignments = await db
+    .select({
+      driverId: blockAssignments.driverId,
+      startTimestamp: blocks.startTimestamp,
+    })
+    .from(blockAssignments)
+    .innerJoin(blocks, eq(blockAssignments.blockId, blocks.id))
+    .where(
+      and(
+        eq(blockAssignments.tenantId, tenantId),
+        eq(blockAssignments.isActive, true),
+        gte(blocks.serviceDate, cutoffDate)
+      )
+    );
+
+  // Count time slots per driver (normalize to HH:MM format)
+  const driverTimeCounts = new Map<string, Map<string, number>>();
+
+  for (const a of historicalAssignments) {
+    const startTime = new Date(a.startTimestamp);
+    // Extract HH:MM in local time
+    const timeStr = format(startTime, "HH:mm");
+
+    if (!driverTimeCounts.has(a.driverId)) {
+      driverTimeCounts.set(a.driverId, new Map());
+    }
+    const timeCounts = driverTimeCounts.get(a.driverId)!;
+    timeCounts.set(timeStr, (timeCounts.get(timeStr) || 0) + 1);
+  }
+
+  // Apply 70% rule to determine dominant time slot
+  for (const [driverId, timeCounts] of driverTimeCounts) {
+    const total = Array.from(timeCounts.values()).reduce((a, b) => a + b, 0);
+    if (total === 0) {
+      driverTimeSlots.set(driverId, { dominantTime: null, confidence: 0 });
+      continue;
+    }
+
+    // Find the most common time slot
+    let maxTime = "";
+    let maxCount = 0;
+    for (const [time, count] of timeCounts) {
+      if (count > maxCount) {
+        maxCount = count;
+        maxTime = time;
+      }
+    }
+
+    const confidence = maxCount / total;
+
+    // Only lock to a time slot if 70%+ confidence
+    if (confidence >= 0.70) {
+      driverTimeSlots.set(driverId, { dominantTime: maxTime, confidence });
+    } else {
+      // Driver works varied times - don't lock them
+      driverTimeSlots.set(driverId, { dominantTime: null, confidence });
+    }
+  }
+
+  console.log(`[XGBoost-Matcher] Learned time slots for ${driverTimeSlots.size} drivers from 12-week history`);
+
+  // Log some examples of locked drivers
+  let lockedCount = 0;
+  for (const [driverId, slot] of driverTimeSlots) {
+    if (slot.dominantTime) {
+      lockedCount++;
+      if (lockedCount <= 5) {
+        console.log(`  ${driverId.slice(0, 8)}... locked to ${slot.dominantTime} (${Math.round(slot.confidence * 100)}%)`);
+      }
+    }
+  }
+  console.log(`[XGBoost-Matcher] ${lockedCount} drivers locked to specific time slots`);
+
+  return driverTimeSlots;
+}
+
+/**
  * Learn driver's primary contract type from their 12-week assignment history.
  * Uses the 80% rule: if 80%+ of assignments are one type, that's their type.
  * Otherwise they work "both" types.
@@ -183,9 +275,22 @@ function checkFastConstraints(
   busyDates: Set<string>,
   unavailableDates: Map<string, Set<string>>,
   driverDaysOff: Map<string, string[]>,
-  driverPatterns: Record<string, DriverPattern>
+  driverPatterns: Record<string, DriverPattern>,
+  driverTimeSlots: Map<string, { dominantTime: string | null; confidence: number }>
 ): boolean {
   const driverId = driver.id;
+
+  // 0. TIME SLOT GATE (NEW!) - Most important constraint
+  // If driver is locked to a specific time slot, they can ONLY work that slot
+  // This is the fix for Brian (00:30) and Richard (01:30) being assigned wrong times
+  const timeSlot = driverTimeSlots.get(driverId);
+  if (timeSlot?.dominantTime) {
+    // Driver is locked to a specific time - check if block matches
+    // Block time is already in HH:mm format
+    if (block.time !== timeSlot.dominantTime) {
+      return false; // HARD EXCLUDE - driver's time slot doesn't match block
+    }
+  }
 
   // 1. Already busy on any day this block covers?
   const startDay = new Date(block.startTimestamp);
@@ -565,6 +670,12 @@ export async function matchDeterministic(
   // 2. Learn driver types from 12-week assignment history
   console.log(`[XGBoost-Matcher] Learning driver types from 12-week history...`);
   const learnedTypes = await getDriverTypesFromHistory(tenantId);
+
+  // 2b. Learn driver TIME SLOTS from 12-week assignment history (NEW!)
+  // This is the key fix: drivers like Brian (00:30) and Richard (01:30)
+  // should ONLY be matched to blocks at their respective times
+  console.log(`[XGBoost-Matcher] Learning driver time slots from 12-week history...`);
+  const driverTimeSlots = await getDriverTimeSlots(tenantId);
 
   // 3. Load approved special requests (unavailability + priority)
   console.log(`[XGBoost-Matcher] Loading special requests...`);
@@ -1007,7 +1118,8 @@ export async function matchDeterministic(
         busyDates,
         unavailableDates,
         driverDaysOff,
-        driverPatterns
+        driverPatterns,
+        driverTimeSlots  // NEW: Time slot gate - locks drivers to their dominant time
       );
 
       if (isEligible) {
