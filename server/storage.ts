@@ -42,7 +42,7 @@ export interface IStorage {
   
   // Drivers
   getDriver(id: string): Promise<Driver | undefined>;
-  getDriversByTenant(tenantId: string): Promise<Driver[]>;
+  getDriversByTenant(tenantId: string, includeInactive?: boolean): Promise<Driver[]>;
   createDriver(driver: InsertDriver): Promise<Driver>;
   updateDriver(id: string, driver: Partial<InsertDriver>): Promise<Driver | undefined>;
   deleteDriver(id: string): Promise<boolean>;
@@ -209,9 +209,9 @@ export class MemStorage implements IStorage {
     return this.drivers.get(id);
   }
 
-  async getDriversByTenant(tenantId: string): Promise<Driver[]> {
+  async getDriversByTenant(tenantId: string, includeInactive = false): Promise<Driver[]> {
     return Array.from(this.drivers.values()).filter(
-      (driver) => driver.tenantId === tenantId
+      (driver) => driver.tenantId === tenantId && (includeInactive || driver.isActive !== false)
     );
   }
 

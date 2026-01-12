@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Home, Users, Calendar, Route, Truck, FileText, Upload, Sparkles, Settings, LogOut, MessageSquare, Brain, FileSpreadsheet, CalendarCheck, GitBranch, Send, Loader2, ChevronDown, ChevronUp, User, Trash2, RotateCcw, Dna, Cpu, Radio } from "lucide-react";
+import { Home, Users, Calendar, Route, Truck, FileText, Upload, Sparkles, Settings, LogOut, MessageSquare, Brain, FileSpreadsheet, CalendarCheck, GitBranch, Send, Loader2, ChevronDown, ChevronUp, User, Trash2, RotateCcw, Dna, Cpu, Radio, RefreshCw, Crown, Zap } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useMutation } from "@tanstack/react-query";
@@ -107,6 +107,24 @@ const navItems = [
     url: "/fleet-comm",
     icon: Radio,
     testId: "nav-fleet-comm",
+  },
+  {
+    title: "Weekly Sync",
+    url: "/weekly-sync",
+    icon: RefreshCw,
+    testId: "nav-weekly-sync",
+  },
+  {
+    title: "Holy Grail",
+    url: "/holy-grail",
+    icon: Crown,
+    testId: "nav-holy-grail",
+  },
+  {
+    title: "Simple Schedule",
+    url: "/simple-schedule",
+    icon: Zap,
+    testId: "nav-simple-schedule",
   },
 ];
 

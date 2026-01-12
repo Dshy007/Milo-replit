@@ -20,7 +20,7 @@ import {
   shiftOccurrences, shiftTemplates, contracts, trucks, driverAvailabilityPreferences, driverDnaProfiles,
   dropInSessions, driverPresence, insertDropInSessionSchema, voiceBroadcasts
 } from "@shared/schema";
-import { eq, and, inArray, sql, gte, lte, not, desc, isNotNull } from "drizzle-orm";
+import { eq, and, inArray, sql, gte, lte, lt, not, desc, isNotNull } from "drizzle-orm";
 import session from "express-session";
 import { fromZodError } from "zod-validation-error";
 import bcrypt from "bcryptjs";
@@ -336,7 +336,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/drivers", requireAuth, async (req, res) => {
     try {
-      const drivers = await dbStorage.getDriversByTenant(req.session.tenantId!);
+      // By default, only return active drivers
+      // Pass ?includeInactive=true to get all drivers (for admin/management views)
+      const includeInactive = req.query.includeInactive === 'true';
+      const drivers = await dbStorage.getDriversByTenant(req.session.tenantId!, includeInactive);
       res.json(drivers);
     } catch (error: any) {
       res.status(500).json({ message: "Failed to fetch drivers", error: error.message });
@@ -488,8 +491,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!await validateTenantOwnership(dbStorage.getDriver.bind(dbStorage), req.params.id, req.session.tenantId!)) {
         return res.status(404).json({ message: "Driver not found" });
       }
-      
-      await dbStorage.deleteDriver(req.params.id);
+
+      // FIX: Soft-delete instead of hard-delete to preserve historical data
+      // Hard-delete fails due to foreign key constraints (assignments, special requests, etc.)
+      await dbStorage.updateDriver(req.params.id, {
+        isActive: false,
+        status: 'inactive'
+      });
       res.json({ message: "Driver deleted successfully" });
     } catch (error: any) {
       res.status(500).json({ message: "Failed to delete driver", error: error.message });
@@ -5478,6 +5486,117 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
     }
   });
 
+  // ==================== SIMPLE SCHEDULE (Profile-Based Matching) ====================
+
+  // POST /api/schedule/build-from-profiles - Build schedule by matching blocks to driver slot ownership
+  app.post("/api/schedule/build-from-profiles", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { weekStart } = req.body;
+
+      if (!weekStart) {
+        return res.status(400).json({ message: "Missing required field: weekStart (YYYY-MM-DD)" });
+      }
+
+      // Parse week start date
+      const weekStartDate = new Date(weekStart);
+      const weekEndDate = new Date(weekStartDate);
+      weekEndDate.setDate(weekEndDate.getDate() + 7);
+
+      // Get all active drivers with slot ownership configured
+      const driversWithSlots = await db
+        .select()
+        .from(drivers)
+        .where(
+          and(
+            eq(drivers.tenantId, tenantId),
+            eq(drivers.isActive, true),
+            isNotNull(drivers.ownedSlotType)
+          )
+        );
+
+      // Get all unassigned blocks for the week
+      const weekBlocks = await db
+        .select()
+        .from(blocks)
+        .where(
+          and(
+            eq(blocks.tenantId, tenantId),
+            gte(blocks.serviceDate, weekStartDate),
+            lt(blocks.serviceDate, weekEndDate)
+          )
+        );
+
+      // Get existing assignments to filter out already assigned blocks
+      const existingAssignments = await db
+        .select()
+        .from(blockAssignments)
+        .where(
+          and(
+            eq(blockAssignments.tenantId, tenantId),
+            eq(blockAssignments.isActive, true)
+          )
+        );
+
+      const assignedBlockIds = new Set(existingAssignments.map(a => a.blockId).filter(Boolean));
+      const unassignedBlocks = weekBlocks.filter(b => !assignedBlockIds.has(b.id));
+
+      // Helper to get day name from date
+      const getDayName = (date: Date): string => {
+        const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+        return days[date.getDay()];
+      };
+
+      // Match each block to its owner
+      const matches = unassignedBlocks.map(block => {
+        const blockDate = new Date(block.serviceDate);
+        const dayName = getDayName(blockDate);
+
+        // Find driver who owns this slot and works this day
+        const owner = driversWithSlots.find(d =>
+          d.ownedSlotType === block.soloType &&
+          d.ownedTractorId === block.tractorId &&
+          (d.workPattern as string[] || []).includes(dayName)
+        );
+
+        // Check if owner has this day off
+        const isOnDaysOff = owner && (owner.daysOff as string[] || []).includes(dayName);
+
+        return {
+          blockId: block.id,
+          date: blockDate.toISOString().split('T')[0],
+          soloType: block.soloType,
+          tractorId: block.tractorId,
+          startTime: block.startTimestamp ? new Date(block.startTimestamp).toISOString().substring(11, 16) : 'N/A',
+          driverId: isOnDaysOff ? null : (owner?.id || null),
+          driverName: isOnDaysOff ? null : (owner ? `${owner.firstName} ${owner.lastName}` : null),
+          status: owner ? (isOnDaysOff ? 'day_off' : 'matched') : 'no_owner'
+        };
+      });
+
+      // Sort by date then by slot
+      matches.sort((a, b) => {
+        const dateCompare = a.date.localeCompare(b.date);
+        if (dateCompare !== 0) return dateCompare;
+        return `${a.soloType}_${a.tractorId}`.localeCompare(`${b.soloType}_${b.tractorId}`);
+      });
+
+      res.json({
+        matches,
+        stats: {
+          totalBlocks: unassignedBlocks.length,
+          matched: matches.filter(m => m.status === 'matched').length,
+          dayOff: matches.filter(m => m.status === 'day_off').length,
+          noOwner: matches.filter(m => m.status === 'no_owner').length,
+          driversWithSlots: driversWithSlots.length
+        }
+      });
+    } catch (error: any) {
+      console.error("Build from profiles error:", error);
+      res.status(500).json({ message: "Failed to build schedule from profiles", error: error.message });
+    }
+  });
+
   // ==================== CSV IMPORT ====================
 
   // POST /api/schedules/import-validate - Validate CSV import without committing
@@ -6797,6 +6916,33 @@ Be concise, professional, and helpful. Use functions to provide accurate, real-t
         message: "Failed to import reconstructed blocks",
         error: error.message,
       });
+    }
+  });
+
+  // ==========================================================================
+  // Twilio Webhook Endpoints (no auth - called by Twilio)
+  // ==========================================================================
+
+  // Twilio status callback - receives call status updates
+  app.post("/api/twilio/status-callback", async (req, res) => {
+    try {
+      const { twilioService } = await import("./twilio-service");
+
+      console.log("[Twilio Callback] Received:", req.body);
+
+      await twilioService.handleStatusCallback({
+        CallSid: req.body.CallSid,
+        CallStatus: req.body.CallStatus,
+        CallDuration: req.body.CallDuration,
+        ErrorCode: req.body.ErrorCode,
+        ErrorMessage: req.body.ErrorMessage
+      });
+
+      // Twilio expects a 200 response
+      res.status(200).send("OK");
+    } catch (error: any) {
+      console.error("[Twilio Callback] Error:", error);
+      res.status(500).send("Error processing callback");
     }
   });
 
@@ -8213,6 +8359,201 @@ Match ANY extracted name to our database using:
     } catch (error: any) {
       console.error("[GeminiVision] Error:", error);
       res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  // ============================================================================
+  // Weekly Sync API Routes
+  // ============================================================================
+
+  const { getWeekData, compareWeeks, applyLastWeekAssignments, autoMatchWeek, getDayMode } = await import("./sync-engine");
+
+  // Get week data (blocks and assignments grouped by time slot)
+  app.get("/api/sync/week/:weekStart", requireAuth, async (req: any, res) => {
+    try {
+      const weekStart = parseISO(req.params.weekStart);
+      const data = await getWeekData(req.session.tenantId, weekStart);
+      const mode = getDayMode(weekStart);
+      res.json({ ...data, mode });
+    } catch (error: any) {
+      console.error("[WeeklySync] Error getting week data:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Compare two weeks
+  app.get("/api/sync/compare", requireAuth, async (req: any, res) => {
+    try {
+      const lastWeekStart = parseISO(req.query.lastWeek as string);
+      const thisWeekStart = parseISO(req.query.thisWeek as string);
+      const comparison = await compareWeeks(req.session.tenantId, lastWeekStart, thisWeekStart);
+      const mode = getDayMode(thisWeekStart);
+      res.json({ ...comparison, mode });
+    } catch (error: any) {
+      console.error("[WeeklySync] Error comparing weeks:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Apply last week's assignments to this week
+  app.post("/api/sync/apply-last-week", requireAuth, async (req: any, res) => {
+    try {
+      const { thisWeekStart, slotKeys } = req.body;
+      const result = await applyLastWeekAssignments(
+        req.session.tenantId,
+        parseISO(thisWeekStart),
+        slotKeys
+      );
+      res.json(result);
+    } catch (error: any) {
+      console.error("[WeeklySync] Error applying assignments:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Run ML auto-matcher on unassigned blocks
+  app.post("/api/sync/auto-match", requireAuth, async (req: any, res) => {
+    try {
+      const { weekStart } = req.body;
+      const result = await autoMatchWeek(req.session.tenantId, parseISO(weekStart));
+      res.json(result);
+    } catch (error: any) {
+      console.error("[WeeklySync] Error running auto-match:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Assign a single block to a driver
+  app.post("/api/sync/assign-single", requireAuth, async (req: any, res) => {
+    try {
+      const { blockId, driverId } = req.body;
+
+      // Check if block already has an active assignment
+      const existing = await db
+        .select()
+        .from(blockAssignments)
+        .where(
+          and(
+            eq(blockAssignments.tenantId, req.session.tenantId),
+            eq(blockAssignments.blockId, blockId),
+            eq(blockAssignments.isActive, true)
+          )
+        )
+        .limit(1);
+
+      if (existing.length > 0) {
+        // Deactivate existing assignment
+        await db
+          .update(blockAssignments)
+          .set({ isActive: false, archivedAt: new Date() })
+          .where(eq(blockAssignments.id, existing[0].id));
+      }
+
+      // Create new assignment
+      const [newAssignment] = await db
+        .insert(blockAssignments)
+        .values({
+          tenantId: req.session.tenantId,
+          blockId,
+          driverId,
+          isActive: true,
+          validationStatus: "valid",
+          assignedBy: req.session.userId
+        })
+        .returning();
+
+      res.json({ success: true, assignment: newAssignment });
+    } catch (error: any) {
+      console.error("[WeeklySync] Error assigning block:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Get day mode for a specific week
+  app.get("/api/sync/mode/:weekStart", requireAuth, async (req: any, res) => {
+    try {
+      const weekStart = parseISO(req.params.weekStart);
+      const mode = getDayMode(weekStart);
+      res.json(mode);
+    } catch (error: any) {
+      console.error("[WeeklySync] Error getting day mode:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ==================== HOLY GRAIL ENGINE ====================
+  // Simple slot-based matching: soloType + startTime + tractorId = slot
+
+  const { generateSuggestions, applyDirectMatches, applySingleAssignment } = await import("./holy-grail-engine");
+
+  // Get suggestions comparing last week to this week
+  app.get("/api/holy-grail/suggest", requireAuth, async (req: any, res) => {
+    try {
+      const { lastWeek, thisWeek } = req.query;
+      if (!lastWeek || !thisWeek) {
+        return res.status(400).json({ message: "lastWeek and thisWeek query params required" });
+      }
+
+      const lastWeekStart = parseISO(lastWeek);
+      const thisWeekStart = parseISO(thisWeek);
+
+      const result = await generateSuggestions(
+        req.session.tenantId!,
+        lastWeekStart,
+        thisWeekStart
+      );
+
+      res.json(result);
+    } catch (error: any) {
+      console.error("[HolyGrail] Error generating suggestions:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Apply all suggestions (direct matches + opportunities)
+  app.post("/api/holy-grail/apply", requireAuth, async (req: any, res) => {
+    try {
+      const { suggestions } = req.body;
+      if (!suggestions || !Array.isArray(suggestions)) {
+        return res.status(400).json({ message: "suggestions array required" });
+      }
+
+      const result = await applyDirectMatches(
+        req.session.tenantId!,
+        suggestions,
+        req.session.userId
+      );
+
+      res.json(result);
+    } catch (error: any) {
+      console.error("[HolyGrail] Error applying suggestions:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Apply a single assignment
+  app.post("/api/holy-grail/apply-single", requireAuth, async (req: any, res) => {
+    try {
+      const { blockId, driverId } = req.body;
+      if (!blockId || !driverId) {
+        return res.status(400).json({ message: "blockId and driverId required" });
+      }
+
+      const result = await applySingleAssignment(
+        req.session.tenantId!,
+        blockId,
+        driverId,
+        req.session.userId
+      );
+
+      if (!result.success) {
+        return res.status(400).json({ message: result.error });
+      }
+
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("[HolyGrail] Error applying single assignment:", error);
+      res.status(500).json({ message: error.message });
     }
   });
 

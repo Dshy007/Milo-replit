@@ -57,8 +57,17 @@ export class DbStorage implements IStorage {
     return result[0];
   }
 
-  async getDriversByTenant(tenantId: string): Promise<Driver[]> {
-    return await db.select().from(drivers).where(eq(drivers.tenantId, tenantId));
+  async getDriversByTenant(tenantId: string, includeInactive = false): Promise<Driver[]> {
+    if (includeInactive) {
+      return await db.select().from(drivers).where(eq(drivers.tenantId, tenantId));
+    }
+    // By default, only return active drivers
+    return await db.select().from(drivers).where(
+      and(
+        eq(drivers.tenantId, tenantId),
+        eq(drivers.isActive, true)
+      )
+    );
   }
 
   async createDriver(insertDriver: InsertDriver): Promise<Driver> {
