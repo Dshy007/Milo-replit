@@ -129,7 +129,7 @@ export async function generateComplianceHeatmap(
 
   // Fetch all block assignments in the date range (with buffer for rolling windows)
   const bufferStart = new Date(start);
-  bufferStart.setDate(bufferStart.getDate() - 2); // 48h buffer for Solo2
+  bufferStart.setDate(bufferStart.getDate() - 8); // 8-day buffer to catch week-crossover consecutive days
   
   const assignments = await db
     .select({

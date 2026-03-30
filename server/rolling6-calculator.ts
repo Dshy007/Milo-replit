@@ -264,7 +264,7 @@ export async function validateRolling6Compliance(
 
   // Solo1: 14 hours max in 1 duty day (24-hour rolling window)
   if (soloType === "solo1") {
-    const lookbackStart = subDays(proposedStart, 1); // 24 hours back
+    const lookbackStart = subDays(proposedStart, 8); // lookback to previous Wednesday
     const totalHoursIn24h = await calculateDutyHours(
       driver.id,
       lookbackStart,
@@ -337,7 +337,7 @@ export async function validateRolling6Compliance(
 
   // Solo2: 38 hours max in 2 duty days (48-hour rolling window)
   if (soloType === "solo2") {
-    const lookbackStart = subDays(proposedStart, 2); // 48 hours back
+    const lookbackStart = subDays(proposedStart, 8); // lookback to previous Wednesday
     const totalHoursIn48h = await calculateDutyHours(
       driver.id,
       lookbackStart,
@@ -496,6 +496,59 @@ export function validateProtectedDriverRules(
 }
 
 /**
+ * Count consecutive calendar days worked ending at (and including) proposedDate.
+ * Walks backward through sorted assignments. Stops counting when a 34h+ gap is found (restart).
+ */
+function countConsecutiveDays(
+  driverAssignments: Array<{ startTime: Date; endTime: Date }>,
+  proposedDate: Date
+): number {
+  if (driverAssignments.length === 0) return 0;
+
+  // Sort descending by start time
+  const sorted = [...driverAssignments].sort(
+    (a, b) => b.startTime.getTime() - a.startTime.getTime()
+  );
+
+  // Build set of calendar days that have at least one assignment
+  const workedDays = new Set<string>();
+  for (const a of sorted) {
+    const dayStr = format(a.startTime, 'yyyy-MM-dd');
+    workedDays.add(dayStr);
+  }
+
+  // Count consecutive days going backward from proposedDate
+  let count = 0;
+  let checkDate = new Date(proposedDate);
+  checkDate.setHours(0, 0, 0, 0);
+
+  // Check up to 8 days back
+  for (let i = 0; i < 8; i++) {
+    const dayStr = format(checkDate, 'yyyy-MM-dd');
+    if (workedDays.has(dayStr)) {
+      count++;
+    } else {
+      // Gap day — check if this breaks the streak
+      // Find the last assignment before this gap to check if it was 34h+ ago
+      const gapStart = new Date(checkDate);
+      gapStart.setHours(23, 59, 59, 999);
+      const lastBeforeGap = sorted.find(a => a.endTime <= gapStart);
+      if (!lastBeforeGap) break;
+      // If the gap between lastBeforeGap.endTime and next work day > 34h, streak is broken
+      const nextWorkDay = new Date(checkDate);
+      nextWorkDay.setDate(nextWorkDay.getDate() + 1);
+      nextWorkDay.setHours(0, 0, 0, 0);
+      const gapHours = (nextWorkDay.getTime() - lastBeforeGap.endTime.getTime()) / (1000 * 60 * 60);
+      if (gapHours >= 34) break; // 34h restart — streak resets
+      // Otherwise short gap (driver off one day but no 34h restart) — continue checking
+    }
+    checkDate.setDate(checkDate.getDate() - 1);
+  }
+
+  return count;
+}
+
+/**
  * Comprehensive assignment guard - checks everything before allowing assignment
  */
 export async function validateBlockAssignment(
@@ -576,6 +629,36 @@ export async function validateBlockAssignment(
     proposedSubject,
     existingAssignments,
   );
+
+  // Consecutive day check — look back 8 days including previous week
+  const proposedStart = new Date(proposedSubject.startTimestamp);
+  const priorAssignments = existingAssignments
+    .filter(a => {
+      const blockStart = new Date((a.block as any).startTimestamp || (a.block as any).startTime);
+      return blockStart < proposedStart;
+    })
+    .map(a => ({
+      startTime: new Date((a.block as any).startTimestamp || (a.block as any).startTime),
+      endTime: new Date((a.block as any).endTimestamp || (a.block as any).endTime),
+    }));
+
+  const consecutiveDays = countConsecutiveDays(priorAssignments, proposedStart);
+  if (consecutiveDays >= 6) {
+    return {
+      canAssign: false,
+      validationResult: {
+        isValid: false,
+        validationStatus: "violation" as const,
+        messages: [
+          ...rolling6Result.messages,
+          `Consecutive day limit: driver has worked ${consecutiveDays} consecutive days. Needs 34h restart before this block.`
+        ],
+        metrics: rolling6Result.metrics,
+      },
+      protectedRuleViolations: ['CONSECUTIVE_DAY_LIMIT'],
+      conflictingAssignments: [],
+    };
+  }
 
   // If rolling-6 passes but rest rule had a warning, include the warning
   if (rolling6Result.isValid && restRuleResult.validationStatus === "warning") {
