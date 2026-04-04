@@ -138,6 +138,33 @@ const SLOT_OWNERSHIP = [
       saturday: 'Richard EUGENE Nelson', // 3 shifts
     }
   },
+  // Solo2 slots - 38h overnight blocks
+  // David Finnell: Solo2 18:30 (Mon & Fri) → Solo2_Tractor_1
+  {
+    time: '18:30', tractor: 'Tractor_1',
+    owners: {
+      sunday: null,
+      monday: 'David Finnell',
+      tuesday: null,
+      wednesday: null,
+      thursday: null,
+      friday: 'David Finnell',
+      saturday: null,
+    }
+  },
+  // Abshir Hired: Solo2 21:30 (Mon & Wed) → Solo2_Tractor_3
+  {
+    time: '21:30', tractor: 'Tractor_3',
+    owners: {
+      sunday: null,
+      monday: 'Abshir Hired',
+      tuesday: null,
+      wednesday: 'Abshir Hired',
+      thursday: null,
+      friday: null,
+      saturday: null,
+    }
+  },
 ];
 
 // Unassigned blocks from CSV

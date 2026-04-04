@@ -211,7 +211,8 @@ interface TripRow {
   operatorId: string;
   driver: string;
   departureDate: string;
-  departureTime: string;  // For fuzzy matching
+  departureTime: string;  // Fallback for start time if Stop 1 arrival not available
+  stop1ArrivalTime: string; // PRIMARY block start time: min(Stop 1 arrival) across all trips
   arrivalDate: string;    // For multi-day duration calculation
   arrivalTime: string;    // For duration calculation
   cost: number;
@@ -311,6 +312,73 @@ function extractContract(operatorId: string): string {
     return `Solo${soloNum}_Tractor_${tractorNum}`;
   }
   return operatorId;
+}
+
+/**
+ * Normalize a time string to HH:MM format.
+ * Handles both '8:30' (no leading zero) and '08:30' formats.
+ */
+function normalizeTime(timeStr: string): string {
+  const mins = timeToMinutes(timeStr);
+  if (mins < 0) return timeStr; // Return as-is if unparseable
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return (h.toString().padStart(2, '0') + ':' + m.toString().padStart(2, '0'));
+}
+
+/**
+ * Extract tractor number from Operator ID string.
+ * Returns null if no Tractor_N pattern found.
+ */
+function extractTractorId(operatorId: string): string | null {
+  const match = operatorId.match(/tractor_(d+)/i);
+  return match ? match[1] : null;
+}
+
+/**
+ * Find contract key using start time + solo type as primary key.
+ * Tractor ID (from Operator ID column S) is used ONLY for disambiguation
+ * when multiple contracts share the same start time + solo type.
+ *
+ * Ambiguous cases handled by duration-derived solo type:
+ *   16:30 + Solo1 → Tractor_1 or Tractor_9  (use tractor ID to pick)
+ *   16:30 + Solo2 → Tractor_7
+ *   18:30 + Solo1 → Tractor_7
+ *   18:30 + Solo2 → Tractor_1
+ *   21:30 + Solo1 → Tractor_5
+ *   21:30 + Solo2 → Tractor_3
+ */
+function findContractKey(
+  startTime: string,
+  soloType: 'Solo1' | 'Solo2',
+  tractorId: string | null,
+  usedForDate: Set<string>
+): { contract: string; canonicalTime: string } | null {
+  if (!startTime) return null;
+  const startMins = timeToMinutes(startTime);
+  if (startMins < 0) return null;
+
+  // Find all contracts matching solo type + start time (within 30 min tolerance)
+  const matches = Object.entries(CANONICAL_START_TIMES)
+    .filter(([key]) => key.startsWith(soloType + '_'))
+    .filter(([_, time]) => Math.abs(timeToMinutes(time) - startMins) <= 30)
+    .map(([key, time]) => ({ contract: key, canonicalTime: time }));
+
+  if (matches.length === 0) return null;
+
+  // Primary disambiguation: use tractor ID from operator if available
+  if (tractorId) {
+    const tractorKey = soloType + '_Tractor_' + tractorId;
+    const tractorMatch = matches.find(m => m.contract === tractorKey);
+    if (tractorMatch) return tractorMatch;
+  }
+
+  // Prefer non-used contract for this date (avoid dedup collision)
+  const available = matches.find(m => !usedForDate.has(m.contract));
+  if (available) return available;
+
+  // Last resort: first match regardless of used status
+  return matches[0];
 }
 
 /**
@@ -417,13 +485,22 @@ export function reconstructBlocksLocally(csvData: string): {
           // Legacy column names
           'Departure Date', 'DepartureDate', 'Date'
         ]),
-        // FUZZY MATCHING: Capture departure TIME for time-based tractor matching
+        // FALLBACK: Departure time used only if Stop 1 arrival time is missing
         departureTime: findColumn(row, [
           'Stop 1  Planned Departure Time',
           'Stop 1 Planned Departure Time',
           'Stop 1 Actual Departure Time',
           'Stop 1  Actual Departure Time',
           'Departure Time', 'DepartureTime'
+        ]),
+        // PRIMARY block start time: Stop 1 arrival time.
+        // NOTE: ALL rows are processed - _d1 and _d2 suffixes in operator IDs are NOT filtered.
+        // Mathew Ivy's tractor (d2-only) must be included. extractContract() strips _d1/_d2 safely.
+        stop1ArrivalTime: findColumn(row, [
+          'Stop 1  Planned Arrival Time',
+          'Stop 1 Planned Arrival Time',
+          'Stop 1 Actual Arrival Time',
+          'Stop 1  Actual Arrival Time',
         ]),
         // MULTI-DAY: Capture arrival DATE for Solo2 duration calculation
         arrivalDate: findColumn(row, [
@@ -520,13 +597,38 @@ export function reconstructBlocksLocally(csvData: string): {
 
     console.log(`[Local] Blocks with explicit Tractor_: ${blocksWithTractor.length}, Blocks needing fuzzy match: ${blocksWithoutTractor.length}`);
 
-    // Process blocks WITH Tractor_ first (they claim their slots)
+    // First pass: pre-register blocks that have explicit Tractor_ patterns.
+    // This prevents fuzzy-matched blocks from colliding with them during dedup.
     for (const [blockId, trips] of blocksWithTractor) {
-      const contract = extractContract(trips[0].operatorId);
+      const tractorId = extractTractorId(trips[0].operatorId);
+
+      // Determine solo type from block duration so we pre-register the correct contract.
+      const sortedT = [...trips].sort((a, b) => {
+        const da = parseDate(a.departureDate), db = parseDate(b.departureDate);
+        if (da !== db) return da.localeCompare(db);
+        return (a.departureTime || '').localeCompare(b.departureTime || '');
+      });
+      const first = sortedT[0];
+      const last  = sortedT[sortedT.length - 1];
+      const startDateParsed = parseDate(first.departureDate);
+      const endDateParsed   = parseDate(last.arrivalDate) || parseDate(last.departureDate);
+      const durationHours   = (startDateParsed && endDateParsed)
+        ? calculateDurationWithDates(startDateParsed, first.departureTime || '00:00', endDateParsed, last.arrivalTime || '23:59')
+        : 14;
+      const soloType = durationHours > 20 ? 'Solo2' : 'Solo1';
+
+      // Get block start time: min Stop 1 arrival time, fall back to first departure time
+      const arrivalTimes = trips.map(t => t.stop1ArrivalTime).filter(Boolean);
+      const blockStartTime = arrivalTimes.length > 0
+        ? arrivalTimes.reduce((earliest, t) => timeToMinutes(t) < timeToMinutes(earliest) ? t : earliest)
+        : (first.departureTime || '');
+
+      const usedForDate = usedTractorsPerDate.get(startDateParsed) || new Set<string>();
+      const match = findContractKey(blockStartTime, soloType, tractorId, usedForDate);
+      const contract = match ? match.contract : extractContract(trips[0].operatorId);
       const dates = trips.map(t => parseDate(t.departureDate)).filter(d => d).sort();
       const startDate = dates[0] || '';
 
-      // Mark this tractor as used for this date
       if (startDate && contract) {
         if (!usedTractorsPerDate.has(startDate)) {
           usedTractorsPerDate.set(startDate, new Set());
@@ -544,79 +646,79 @@ export function reconstructBlocksLocally(csvData: string): {
       let canonicalStartTime: string;
       let fuzzyMatchReason = '';
 
-      // Check if contract lookup succeeds (has Tractor_ pattern)
-      const hasTractorPattern = /tractor_\d+/i.test(trips[0].operatorId);
+      // ── NEW MATCHING LOGIC ──────────────────────────────────────────────────
+      // Primary key: start time + solo type. NOT tractor ID.
+      // ALL blocks processed regardless of _d1/_d2 suffix in Operator ID.
+      // Bug history: _d2-only drivers (e.g. Mathew Ivy) were dropped when a
+      // filter was accidentally added. This code contains NO such filter.
+      // extractContract() and extractTractorId() both strip _d1/_d2 safely.
 
-      if (hasTractorPattern && CANONICAL_START_TIMES[contract]) {
-        // Direct lookup succeeded
-        canonicalStartTime = CANONICAL_START_TIMES[contract];
+      // Step 1: Calculate block duration → Solo type
+      const sortedTrips = [...trips].sort((a, b) => {
+        const dateA = parseDate(a.departureDate);
+        const dateB = parseDate(b.departureDate);
+        if (dateA !== dateB) return dateA.localeCompare(dateB);
+        return (a.departureTime || '').localeCompare(b.departureTime || '');
+      });
+      const firstTrip = sortedTrips[0];
+      const lastTrip  = sortedTrips[sortedTrips.length - 1];
+      const startDateForDuration = parseDate(firstTrip.departureDate);
+      const endDateForDuration   = parseDate(lastTrip.arrivalDate) || parseDate(lastTrip.departureDate);
+
+      let durationHours = 14;
+      if (startDateForDuration && endDateForDuration) {
+        durationHours = calculateDurationWithDates(
+          startDateForDuration, firstTrip.departureTime || '00:00',
+          endDateForDuration,   lastTrip.arrivalTime   || '23:59'
+        );
+        console.log('[Match] Block ' + blockId + ' duration: ' + startDateForDuration + ' ' + (firstTrip.departureTime||'') + ' → ' + endDateForDuration + ' ' + (lastTrip.arrivalTime||'') + ' = ' + durationHours.toFixed(1) + 'h');
+      } else if (firstTrip.departureTime && lastTrip.arrivalTime) {
+        durationHours = calculateDurationHours(firstTrip.departureTime, lastTrip.arrivalTime);
+      }
+
+      // Step 2: Solo type from duration (14h = Solo1, 38h = Solo2)
+      const soloType: 'Solo1' | 'Solo2' = durationHours > 20 ? 'Solo2' : 'Solo1';
+
+      // Step 3: Block start time = min(Stop 1 arrival time) across all trips.
+      // Individual delivery trips can have late times (e.g. 20:55 for a 16:30 block).
+      // Using the EARLIEST Stop 1 arrival gives the real contract start time.
+      // Handles "8:30" (no leading zero) and "08:30" formats via normalizeTime().
+      const allStop1ArrivalTimes = trips
+        .map(t => t.stop1ArrivalTime)
+        .filter(t => t && timeToMinutes(t) >= 0);
+      const rawBlockStartTime = allStop1ArrivalTimes.length > 0
+        ? allStop1ArrivalTimes.reduce((earliest, t) =>
+            timeToMinutes(t) < timeToMinutes(earliest) ? t : earliest
+          )
+        : (firstTrip.departureTime || '12:00');
+      const normalizedStartTime = normalizeTime(rawBlockStartTime);
+
+      // Step 4: Match contract by start time + solo type; tractor only for disambiguation
+      const tractorId = extractTractorId(trips[0].operatorId);
+      const dates = trips.map(t => parseDate(t.departureDate)).filter(d => d).sort();
+      const startDate = dates[0] || '';
+      const usedForDate = usedTractorsPerDate.get(startDate) || new Set<string>();
+
+      const contractMatch = findContractKey(normalizedStartTime, soloType, tractorId, usedForDate);
+      if (contractMatch) {
+        contract = contractMatch.contract;
+        canonicalStartTime = contractMatch.canonicalTime;
+        fuzzyMatchReason = 'startTime+soloType';
       } else {
-        // FUZZY MATCHING: No Tractor_ pattern in Operator ID
-        // Use departure time and duration to find best matching tractor
-
-        // Get earliest departure date/time and latest arrival date/time for duration calculation
-        const departureDates = trips.map(t => parseDate(t.departureDate)).filter(Boolean);
-        const departureTimes = trips.map(t => t.departureTime).filter(Boolean);
-        const arrivalDates = trips.map(t => parseDate(t.arrivalDate)).filter(Boolean);
-        const arrivalTimes = trips.map(t => t.arrivalTime).filter(Boolean);
-
-        // Get first departure time (earliest trip start)
-        const blockDepartureTime = departureTimes[0] || '12:00'; // Default to noon if no time found
-
-        // Calculate duration using FULL DATE+TIME for multi-day blocks (Solo2)
-        let durationHours = 14; // Default to Solo1 duration
-
-        // Sort trips by departure to get first departure and last arrival
-        const sortedTrips = [...trips].sort((a, b) => {
-          const dateA = parseDate(a.departureDate);
-          const dateB = parseDate(b.departureDate);
-          if (dateA !== dateB) return dateA.localeCompare(dateB);
-          return (a.departureTime || '').localeCompare(b.departureTime || '');
-        });
-
-        const firstTrip = sortedTrips[0];
-        const lastTrip = sortedTrips[sortedTrips.length - 1];
-
-        // Try to get full date+time duration (handles multi-day Solo2 blocks correctly)
-        const startDateParsed = parseDate(firstTrip.departureDate);
-        const startTimeParsed = firstTrip.departureTime || '00:00';
-        const endDateParsed = parseDate(lastTrip.arrivalDate) || parseDate(lastTrip.departureDate); // Fallback to departure date if no arrival date
-        const endTimeParsed = lastTrip.arrivalTime || '23:59';
-
-        if (startDateParsed && endDateParsed) {
-          durationHours = calculateDurationWithDates(startDateParsed, startTimeParsed, endDateParsed, endTimeParsed);
-          console.log(`[FUZZY] Block ${blockId}: Multi-day duration calc: ${startDateParsed} ${startTimeParsed} → ${endDateParsed} ${endTimeParsed} = ${durationHours.toFixed(1)}h`);
-        } else if (departureTimes[0] && arrivalTimes[arrivalTimes.length - 1]) {
-          // Fallback to same-day calculation
-          durationHours = calculateDurationHours(departureTimes[0], arrivalTimes[arrivalTimes.length - 1]);
-        } else {
-          // Last resort: estimate from trip count
-          durationHours = trips.length > 3 ? 20 : 14;
-        }
-
-        // Get the date for collision tracking
-        const dates = trips.map(t => parseDate(t.departureDate)).filter(d => d).sort();
-        const startDate = dates[0] || '';
-
-        // Perform fuzzy match
-        const fuzzyResult = fuzzyMatchTractor(blockDepartureTime, durationHours, startDate, usedTractorsPerDate);
+        // Fallback: legacy fuzzy match for unusual CSVs without Stop 1 arrival time
+        const fuzzyResult = fuzzyMatchTractor(rawBlockStartTime, durationHours, startDate, usedTractorsPerDate);
         contract = fuzzyResult.contract;
         canonicalStartTime = fuzzyResult.canonicalTime;
-        fuzzyMatchReason = fuzzyResult.reason;
-
-        // Mark this tractor as now used for this date
-        if (startDate) {
-          if (!usedTractorsPerDate.has(startDate)) {
-            usedTractorsPerDate.set(startDate, new Set());
-          }
-          usedTractorsPerDate.get(startDate)!.add(contract);
-        }
-
-        console.log(`[FUZZY] Block ${blockId}: ${fuzzyMatchReason}`);
-        console.log(`[FUZZY]   Operator ID was: "${trips[0].operatorId}"`);
-        console.log(`[FUZZY]   Departure time: ${blockDepartureTime}, Duration: ${durationHours.toFixed(1)}h`);
-        console.log(`[FUZZY]   Assigned to: ${contract} (${canonicalStartTime})`);
+        fuzzyMatchReason = fuzzyResult.reason + ' (FALLBACK)';
       }
+
+      // Mark contract as used for this date
+      if (startDate && contract) {
+        if (!usedTractorsPerDate.has(startDate)) usedTractorsPerDate.set(startDate, new Set());
+        usedTractorsPerDate.get(startDate).add(contract);
+      }
+
+      console.log('[Match] Block ' + blockId + ': ' + fuzzyMatchReason + ' | operatorId="' + trips[0].operatorId + '" soloType=' + soloType + ' startTime=' + normalizedStartTime + ' duration=' + durationHours.toFixed(1) + 'h → ' + contract + ' (' + canonicalStartTime + ')');
 
       // Determine duration based on contract type
       const duration = contract.toLowerCase().includes('solo2') ? '38h' : '14h';
