@@ -62,6 +62,21 @@ export const drivers = pgTable("drivers", {
   // Active/Inactive for XGBoost matching
   isActive: boolean("is_active").default(true), // If false, XGBoost ignores this driver
   daysOff: text("days_off").array(), // Days driver is unavailable (e.g., ["sunday", "saturday"])
+  // Pool status — which group the driver is in on the Drivers page
+  poolStatus: text("pool_status").notNull().default("unknown"),
+  // Valid values: in_pool | onboarding | leaving | admin | off_roster | unknown
+
+  // Onboarding pipeline (from Dan's 10-bucket driver-bucket-tracker skill)
+  onboardingBucket: integer("onboarding_bucket"), // 1-10, nullable
+  onboardingBucketName: text("onboarding_bucket_name"), // e.g. "JJ Keller"
+  onboardingBlockingReason: text("onboarding_blocking_reason"), // free-form
+  onboardingStartedAt: timestamp("onboarding_started_at"),
+  dispatchReadyAt: timestamp("dispatch_ready_at"),
+
+  // Denormalized for fast card display
+  soloType: text("solo_type"), // solo1 | solo2 | both — nullable
+  retentionRisk: text("retention_risk").notNull().default("none"),
+  // Valid values: none | watch | critical
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

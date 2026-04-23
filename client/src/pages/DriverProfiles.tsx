@@ -147,7 +147,7 @@ export default function DriverProfiles() {
               Driver Profiles
             </CardTitle>
             <p className="text-sm text-muted-foreground mt-1">
-              Manage driver status and availability for XGBoost matching
+              Manage driver status and scheduling preferences
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -322,7 +322,7 @@ export default function DriverProfiles() {
                 <span className="text-sm font-medium">
                   {inactiveDrivers.length} inactive driver
                   {inactiveDrivers.length !== 1 ? "s" : ""} will be excluded
-                  from XGBoost analysis
+                  from scheduling
                 </span>
               </div>
             </div>

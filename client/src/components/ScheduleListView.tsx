@@ -374,12 +374,7 @@ export function ScheduleListView({
                   data-testid={`block-row-${occ.blockId}`}
                 >
                   <TableCell className="font-mono font-medium text-blue-600">
-                    <button
-                      className="hover:underline"
-                      onClick={() => {/* TODO: Open detail modal */}}
-                    >
-                      {occ.blockId}
-                    </button>
+                    <span>{occ.blockId}</span>
                   </TableCell>
                   <TableCell>
                     <div className="text-sm">

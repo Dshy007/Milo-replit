@@ -1,19 +1,11 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import type { Driver, SpecialRequest } from "@shared/schema";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import {
   Dialog,
   DialogContent,
@@ -52,118 +44,135 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { baseInsertDriverSchema } from "@shared/schema";
 import { z } from "zod";
-import { Plus, Search, Edit, Trash2, CheckCircle, Upload, FileSpreadsheet, ArrowUpDown, ArrowUp, ArrowDown, Clock, XCircle, Calendar } from "lucide-react";
+import {
+  Plus,
+  Search,
+  Upload,
+  FileSpreadsheet,
+  CheckCircle,
+  Clock,
+  XCircle,
+  Calendar,
+  Users,
+  Truck,
+  GraduationCap,
+  UserMinus,
+  Shield,
+  Archive,
+  HelpCircle,
+  Trash2,
+} from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
+import { DriverSection } from "@/components/drivers/DriverSection";
+import { DriverCard } from "@/components/drivers/DriverCard";
+import { OnboardingDriverCard } from "@/components/drivers/OnboardingDriverCard";
+import { DriverSummaryPills } from "@/components/drivers/DriverSummaryPills";
 
-const driverFormSchema = baseInsertDriverSchema.extend({
-  licenseExpiry: z.string().optional().nullable(),
-  medicalCertExpiry: z.string().optional().nullable(),
-  dateOfBirth: z.string().optional().nullable(),
-}).omit({ tenantId: true });
+const driverFormSchema = baseInsertDriverSchema
+  .extend({
+    licenseExpiry: z.string().optional().nullable(),
+    medicalCertExpiry: z.string().optional().nullable(),
+    dateOfBirth: z.string().optional().nullable(),
+  })
+  .omit({ tenantId: true });
 
 type DriverFormData = z.infer<typeof driverFormSchema>;
 
-type SortField = 'firstName' | 'lastName' | 'email' | 'domicile' | 'phoneNumber' | 'loadEligible';
-type SortDirection = 'asc' | 'desc' | null;
+type PoolStatus = "in_pool" | "onboarding" | "leaving" | "admin" | "off_roster" | "unknown";
+
+const POOL_ORDER: readonly PoolStatus[] = [
+  "in_pool",
+  "onboarding",
+  "leaving",
+  "admin",
+  "off_roster",
+  "unknown",
+] as const;
+
+const POOL_LABELS: Record<PoolStatus, string> = {
+  in_pool: "Active in Pool",
+  onboarding: "Onboarding",
+  leaving: "Leaving",
+  admin: "Admin / Not Dispatching",
+  off_roster: "Off Roster",
+  unknown: "Unsorted (needs triage)",
+};
+
+const POOL_ICONS: Record<PoolStatus, typeof Users> = {
+  in_pool: Truck,
+  onboarding: GraduationCap,
+  leaving: UserMinus,
+  admin: Shield,
+  off_roster: Archive,
+  unknown: HelpCircle,
+};
+
+const POOL_DESCRIPTIONS: Record<PoolStatus, string> = {
+  in_pool: "Dispatch-ready drivers actively rotating through blocks",
+  onboarding: "Drivers in the 10-bucket qualification pipeline",
+  leaving: "Drivers transitioning off the roster",
+  admin: "Drivers in admin roles, not currently dispatching",
+  off_roster: "Drivers no longer on the active roster",
+  unknown: "Pool status not yet set — needs manual assignment",
+};
 
 export default function Drivers() {
-  const [searchQuery, setSearchQuery] = useState("");
-  const [showActiveOnly, setShowActiveOnly] = useState(false);
+  const [search, setSearch] = useState("");
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
-  const [editingDriver, setEditingDriver] = useState<Driver | null>(null);
+  const [selectedDriver, setSelectedDriver] = useState<Driver | null>(null);
   const [deletingDriver, setDeletingDriver] = useState<Driver | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [sortField, setSortField] = useState<SortField | null>(null);
-  const [sortDirection, setSortDirection] = useState<SortDirection>(null);
   const { toast } = useToast();
 
-  // Fetch drivers
   const { data: drivers = [], isLoading } = useQuery<Driver[]>({
     queryKey: ["/api/drivers"],
   });
 
-  // Fetch all special requests to determine drivers with active requests
-  const { data: allRequests = [] } = useQuery<SpecialRequest[]>({
-    queryKey: ["/api/special-requests"],
-  });
-
-  // Fetch special requests for the driver being edited
   const { data: driverRequests = [] } = useQuery<SpecialRequest[]>({
-    queryKey: ["/api/special-requests", editingDriver?.id],
-    enabled: !!editingDriver,
+    queryKey: ["/api/special-requests", selectedDriver?.id],
+    enabled: !!selectedDriver,
     queryFn: async () => {
-      const response = await fetch(`/api/special-requests?driverId=${editingDriver?.id}`);
+      const response = await fetch(
+        `/api/special-requests?driverId=${selectedDriver?.id}`
+      );
       if (!response.ok) throw new Error("Failed to fetch driver requests");
       return response.json();
     },
   });
 
-  // Sort toggle function
-  const toggleSort = (field: SortField) => {
-    if (sortField === field) {
-      // Cycle through: asc -> desc -> null
-      if (sortDirection === 'asc') {
-        setSortDirection('desc');
-      } else if (sortDirection === 'desc') {
-        setSortDirection(null);
-        setSortField(null);
+  const grouped = useMemo(() => {
+    const s = search.trim().toLowerCase();
+    const filtered = s
+      ? drivers.filter(
+          (d) =>
+            `${d.firstName} ${d.lastName}`.toLowerCase().includes(s) ||
+            d.email?.toLowerCase().includes(s) ||
+            d.phoneNumber?.toLowerCase().includes(s) ||
+            d.domicile?.toLowerCase().includes(s)
+        )
+      : drivers;
+    const out: Record<PoolStatus, Driver[]> = {
+      in_pool: [],
+      onboarding: [],
+      leaving: [],
+      admin: [],
+      off_roster: [],
+      unknown: [],
+    };
+    for (const d of filtered) {
+      const status = (d.poolStatus as PoolStatus) || "unknown";
+      if (out[status]) {
+        out[status].push(d);
+      } else {
+        out.unknown.push(d);
       }
-    } else {
-      setSortField(field);
-      setSortDirection('asc');
     }
-  };
+    return out;
+  }, [drivers, search]);
 
-  // Determine drivers with active/upcoming special requests
-  const driversWithActiveRequests = new Set<string>();
-  const now = new Date();
-  allRequests.forEach(request => {
-    if ((request.status === "approved" || request.status === "pending") && request.driverId) {
-      const requestDate = request.startDate ? new Date(request.startDate) : null;
-      if (requestDate && requestDate >= now) {
-        driversWithActiveRequests.add(request.driverId);
-      }
-    }
-  });
-
-  // Filter and sort drivers
-  const filteredDrivers = drivers
-    .filter((driver) => {
-      const searchLower = searchQuery.toLowerCase();
-      const matchesSearch = (
-        driver.firstName.toLowerCase().includes(searchLower) ||
-        driver.lastName.toLowerCase().includes(searchLower) ||
-        driver.email?.toLowerCase().includes(searchLower) ||
-        driver.phoneNumber?.toLowerCase().includes(searchLower) ||
-        driver.domicile?.toLowerCase().includes(searchLower)
-      );
-
-      const matchesActiveFilter = !showActiveOnly || driversWithActiveRequests.has(driver.id);
-      
-      return matchesSearch && matchesActiveFilter;
-    })
-    .sort((a, b) => {
-      if (!sortField || !sortDirection) return 0;
-
-      let aValue: any = a[sortField];
-      let bValue: any = b[sortField];
-
-      // Handle null/undefined values
-      if (aValue === null || aValue === undefined) aValue = '';
-      if (bValue === null || bValue === undefined) bValue = '';
-
-      // Convert to string for comparison
-      aValue = String(aValue).toLowerCase();
-      bValue = String(bValue).toLowerCase();
-
-      if (aValue < bValue) return sortDirection === 'asc' ? -1 : 1;
-      if (aValue > bValue) return sortDirection === 'asc' ? 1 : -1;
-      return 0;
-    });
-
-  // Add driver mutation
+  // Add driver form
   const addDriverForm = useForm<DriverFormData>({
     resolver: zodResolver(driverFormSchema),
     defaultValues: {
@@ -204,7 +213,7 @@ export default function Drivers() {
     },
   });
 
-  // Edit driver mutation
+  // Edit driver form (wired to detail modal)
   const editDriverForm = useForm<DriverFormData>({
     resolver: zodResolver(driverFormSchema),
   });
@@ -215,7 +224,7 @@ export default function Drivers() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/drivers"] });
-      setEditingDriver(null);
+      setSelectedDriver(null);
       toast({
         title: "Driver updated",
         description: "The driver has been updated successfully.",
@@ -230,7 +239,6 @@ export default function Drivers() {
     },
   });
 
-  // Delete driver mutation
   const deleteDriverMutation = useMutation({
     mutationFn: async (id: string) => {
       return apiRequest("DELETE", `/api/drivers/${id}`);
@@ -238,6 +246,7 @@ export default function Drivers() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/drivers"] });
       setDeletingDriver(null);
+      setSelectedDriver(null);
       toast({
         title: "Driver deleted",
         description: "The driver has been deleted successfully.",
@@ -252,12 +261,11 @@ export default function Drivers() {
     },
   });
 
-  // Bulk import mutation
   const bulkImportMutation = useMutation({
     mutationFn: async (file: File) => {
       const formData = new FormData();
       formData.append("file", file);
-      
+
       const response = await fetch("/api/drivers/bulk-import", {
         method: "POST",
         body: formData,
@@ -276,7 +284,9 @@ export default function Drivers() {
       setImportDialogOpen(false);
       toast({
         title: "Import successful",
-        description: `${result.imported} driver(s) imported successfully${result.errors?.length > 0 ? `, ${result.errors.length} errors` : ""}.`,
+        description: `${result.imported} driver(s) imported successfully${
+          result.errors?.length > 0 ? `, ${result.errors.length} errors` : ""
+        }.`,
       });
     },
     onError: (error: Error) => {
@@ -288,25 +298,31 @@ export default function Drivers() {
     },
   });
 
-  // Handle file drop
-  const handleDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    setIsDragging(false);
+  const handleDrop = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      setIsDragging(false);
 
-    const file = e.dataTransfer.files[0];
-    const filenameLower = file?.name.toLowerCase();
-    if (file && (filenameLower.endsWith('.csv') || filenameLower.endsWith('.xlsx') || filenameLower.endsWith('.xls'))) {
-      bulkImportMutation.mutate(file);
-    } else {
-      toast({
-        variant: "destructive",
-        title: "Invalid file",
-        description: "Please upload a CSV (.csv) or Excel (.xlsx, .xls) file",
-      });
-    }
-  }, [bulkImportMutation, toast]);
+      const file = e.dataTransfer.files[0];
+      const filenameLower = file?.name.toLowerCase();
+      if (
+        file &&
+        (filenameLower.endsWith(".csv") ||
+          filenameLower.endsWith(".xlsx") ||
+          filenameLower.endsWith(".xls"))
+      ) {
+        bulkImportMutation.mutate(file);
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Invalid file",
+          description: "Please upload a CSV (.csv) or Excel (.xlsx, .xls) file",
+        });
+      }
+    },
+    [bulkImportMutation, toast]
+  );
 
-  // Handle file input
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -314,15 +330,18 @@ export default function Drivers() {
     }
   };
 
-  // Open edit dialog with driver data
-  const openEditDialog = (driver: Driver) => {
-    setEditingDriver(driver);
+  const openDriverDetail = (driver: Driver) => {
+    setSelectedDriver(driver);
     editDriverForm.reset({
       firstName: driver.firstName,
       lastName: driver.lastName,
       licenseNumber: driver.licenseNumber || "",
-      licenseExpiry: driver.licenseExpiry ? format(new Date(driver.licenseExpiry), "yyyy-MM-dd") : null,
-      medicalCertExpiry: driver.medicalCertExpiry ? format(new Date(driver.medicalCertExpiry), "yyyy-MM-dd") : null,
+      licenseExpiry: driver.licenseExpiry
+        ? format(new Date(driver.licenseExpiry), "yyyy-MM-dd")
+        : null,
+      medicalCertExpiry: driver.medicalCertExpiry
+        ? format(new Date(driver.medicalCertExpiry), "yyyy-MM-dd")
+        : null,
       phoneNumber: driver.phoneNumber || "",
       email: driver.email || "",
       domicile: driver.domicile || "",
@@ -345,234 +364,109 @@ export default function Drivers() {
     );
   }
 
+  const totalFiltered = POOL_ORDER.reduce((sum, s) => sum + grouped[s].length, 0);
+  const hasResults = totalFiltered > 0;
+
   return (
     <div className="p-6 space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      {/* Header */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Drivers</h1>
-          <p className="text-muted-foreground">Manage your driver roster and load eligibility</p>
+          <p className="text-sm text-muted-foreground">
+            Manage your driver roster across every pipeline stage
+          </p>
         </div>
         <div className="flex gap-2">
-          <Button 
-            variant="outline" 
-            onClick={() => setImportDialogOpen(true)} 
+          <Button
+            variant="outline"
+            onClick={() => setImportDialogOpen(true)}
             data-testid="button-import-drivers"
           >
-            <Upload className="mr-2 h-4 w-4" />
+            <Upload className="mr-2 w-4 h-4" />
             Import CSV/Excel
           </Button>
           <Button onClick={() => setAddDialogOpen(true)} data-testid="button-add-driver">
-            <Plus className="mr-2 h-4 w-4" />
+            <Plus className="mr-2 w-4 h-4" />
             Add Driver
           </Button>
         </div>
       </div>
 
-      <Card>
-        <CardHeader>
-          <div className="flex items-center gap-4">
-            <div className="flex-1">
-              <CardTitle>Driver List</CardTitle>
-              <CardDescription>
-                {filteredDrivers.length} driver{filteredDrivers.length !== 1 ? "s" : ""} found
-              </CardDescription>
-            </div>
-            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 w-full sm:w-auto">
-              <div className="flex items-center gap-2 w-full sm:w-auto">
-                <Search className="h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search drivers..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full sm:w-64"
-                  data-testid="input-search-drivers"
-                />
+      {/* Summary pills */}
+      <DriverSummaryPills
+        total={drivers.length}
+        inPool={drivers.filter((d) => d.poolStatus === "in_pool").length}
+        onboarding={drivers.filter((d) => d.poolStatus === "onboarding").length}
+        leaving={drivers.filter((d) => d.poolStatus === "leaving").length}
+        admin={drivers.filter((d) => d.poolStatus === "admin").length}
+      />
+
+      {/* Search */}
+      <div className="flex gap-3">
+        <div className="relative flex-1 max-w-md">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+          <Input
+            placeholder="Search drivers..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-9"
+            data-testid="input-search-drivers"
+          />
+        </div>
+      </div>
+
+      {/* Sections */}
+      {!hasResults ? (
+        <Card>
+          <CardContent className="py-12 text-center">
+            <Users className="w-8 h-8 text-muted-foreground mx-auto mb-3" />
+            <p className="text-sm text-muted-foreground">
+              {search
+                ? "No drivers match your search"
+                : "No drivers yet — add one or import a CSV to get started"}
+            </p>
+          </CardContent>
+        </Card>
+      ) : (
+        POOL_ORDER.map((status) => {
+          const list = grouped[status];
+          if (list.length === 0) return null;
+          return (
+            <DriverSection
+              key={status}
+              title={POOL_LABELS[status]}
+              count={list.length}
+              description={POOL_DESCRIPTIONS[status]}
+              icon={POOL_ICONS[status]}
+              defaultOpen={status !== "off_roster" && status !== "admin"}
+            >
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {list.map((d) =>
+                  status === "onboarding" ? (
+                    <OnboardingDriverCard
+                      key={d.id}
+                      driver={d}
+                      onClick={() => openDriverDetail(d)}
+                    />
+                  ) : (
+                    <DriverCard
+                      key={d.id}
+                      driver={d}
+                      variant={
+                        status === "unknown"
+                          ? "in_pool"
+                          : (status as "in_pool" | "leaving" | "admin" | "off_roster")
+                      }
+                      onClick={() => openDriverDetail(d)}
+                    />
+                  )
+                )}
               </div>
-              <div className="flex items-center gap-2">
-                <Checkbox 
-                  id="active-filter"
-                  checked={showActiveOnly}
-                  onCheckedChange={(checked) => setShowActiveOnly(!!checked)}
-                  data-testid="checkbox-active-requests-filter"
-                />
-                <label 
-                  htmlFor="active-filter" 
-                  className="text-sm cursor-pointer whitespace-nowrap"
-                >
-                  Show only drivers with active requests ({driversWithActiveRequests.size})
-                </label>
-              </div>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {filteredDrivers.length === 0 ? (
-            <div className="text-center py-12">
-              <p className="text-muted-foreground">
-                {searchQuery ? "No drivers found matching your search" : "No drivers added yet"}
-              </p>
-            </div>
-          ) : (
-            <div className="rounded-md border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>
-                      <Button
-                        variant="ghost"
-                        className="h-auto p-0 font-semibold hover:bg-transparent"
-                        onClick={() => toggleSort('firstName')}
-                        data-testid="sort-driver-name"
-                      >
-                        Driver
-                        {sortField === 'firstName' ? (
-                          sortDirection === 'asc' ? (
-                            <ArrowUp className="ml-2 h-4 w-4" />
-                          ) : (
-                            <ArrowDown className="ml-2 h-4 w-4" />
-                          )
-                        ) : (
-                          <ArrowUpDown className="ml-2 h-4 w-4 opacity-50" />
-                        )}
-                      </Button>
-                    </TableHead>
-                    <TableHead>
-                      <Button
-                        variant="ghost"
-                        className="h-auto p-0 font-semibold hover:bg-transparent"
-                        onClick={() => toggleSort('email')}
-                        data-testid="sort-email"
-                      >
-                        Email
-                        {sortField === 'email' ? (
-                          sortDirection === 'asc' ? (
-                            <ArrowUp className="ml-2 h-4 w-4" />
-                          ) : (
-                            <ArrowDown className="ml-2 h-4 w-4" />
-                          )
-                        ) : (
-                          <ArrowUpDown className="ml-2 h-4 w-4 opacity-50" />
-                        )}
-                      </Button>
-                    </TableHead>
-                    <TableHead>
-                      <Button
-                        variant="ghost"
-                        className="h-auto p-0 font-semibold hover:bg-transparent"
-                        onClick={() => toggleSort('domicile')}
-                        data-testid="sort-domicile"
-                      >
-                        Domiciles
-                        {sortField === 'domicile' ? (
-                          sortDirection === 'asc' ? (
-                            <ArrowUp className="ml-2 h-4 w-4" />
-                          ) : (
-                            <ArrowDown className="ml-2 h-4 w-4" />
-                          )
-                        ) : (
-                          <ArrowUpDown className="ml-2 h-4 w-4 opacity-50" />
-                        )}
-                      </Button>
-                    </TableHead>
-                    <TableHead>Mobile phone number</TableHead>
-                    <TableHead>
-                      <Button
-                        variant="ghost"
-                        className="h-auto p-0 font-semibold hover:bg-transparent"
-                        onClick={() => toggleSort('loadEligible')}
-                        data-testid="sort-load-eligibility"
-                      >
-                        Load eligibility
-                        {sortField === 'loadEligible' ? (
-                          sortDirection === 'asc' ? (
-                            <ArrowUp className="ml-2 h-4 w-4" />
-                          ) : (
-                            <ArrowDown className="ml-2 h-4 w-4" />
-                          )
-                        ) : (
-                          <ArrowUpDown className="ml-2 h-4 w-4 opacity-50" />
-                        )}
-                      </Button>
-                    </TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredDrivers.map((driver) => (
-                    <TableRow key={driver.id} data-testid={`row-driver-${driver.id}`}>
-                      <TableCell>
-                        <div className="flex flex-col gap-1">
-                          <div className="font-medium">
-                            {driver.firstName} {driver.lastName}
-                          </div>
-                          {driver.profileVerified && (
-                            <div className="flex items-center gap-1 text-sm text-green-600">
-                              <CheckCircle className="h-3 w-3" />
-                              Profile verified
-                            </div>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        {driver.email || <span className="text-muted-foreground">—</span>}
-                      </TableCell>
-                      <TableCell>
-                        {driver.domicile ? (
-                          <span className="font-medium">{driver.domicile}</span>
-                        ) : (
-                          <span className="text-muted-foreground">—</span>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {driver.phoneNumber || <span className="text-muted-foreground">—</span>}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex flex-col gap-2">
-                          <Badge 
-                            variant={driver.loadEligible ? "default" : "destructive"}
-                            className="w-fit"
-                          >
-                            {driver.loadEligible ? "Eligible" : "Ineligible"}
-                          </Badge>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-auto p-0 text-xs"
-                            onClick={() => openEditDialog(driver)}
-                            data-testid={`link-driver-details-${driver.id}`}
-                          >
-                            Details
-                          </Button>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex items-center justify-end gap-2">
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            onClick={() => openEditDialog(driver)}
-                            data-testid={`button-edit-driver-${driver.id}`}
-                          >
-                            <Edit className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            onClick={() => setDeletingDriver(driver)}
-                            data-testid={`button-delete-driver-${driver.id}`}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+            </DriverSection>
+          );
+        })
+      )}
 
       {/* Import Dialog */}
       <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
@@ -594,11 +488,9 @@ export default function Drivers() {
             onDragLeave={() => setIsDragging(false)}
             onDrop={handleDrop}
           >
-            <FileSpreadsheet className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+            <FileSpreadsheet className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
             <h3 className="text-lg font-semibold mb-2">Drop files here</h3>
-            <p className="text-sm text-muted-foreground mb-4">
-              or click to browse
-            </p>
+            <p className="text-sm text-muted-foreground mb-4">or click to browse</p>
             <input
               type="file"
               accept=".csv,.xlsx,.xls"
@@ -631,7 +523,8 @@ export default function Drivers() {
           <DialogHeader>
             <DialogTitle>Add New Driver</DialogTitle>
             <DialogDescription>
-              Enter the driver's information. License and medical fields are optional for tracking.
+              Enter the driver's information. License and medical fields are optional for
+              tracking.
             </DialogDescription>
           </DialogHeader>
           <Form {...addDriverForm}>
@@ -675,7 +568,12 @@ export default function Drivers() {
                   <FormItem>
                     <FormLabel>Email</FormLabel>
                     <FormControl>
-                      <Input {...field} value={field.value || ""} type="email" data-testid="input-driver-email" />
+                      <Input
+                        {...field}
+                        value={field.value || ""}
+                        type="email"
+                        data-testid="input-driver-email"
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -689,7 +587,12 @@ export default function Drivers() {
                   <FormItem>
                     <FormLabel>Phone Number</FormLabel>
                     <FormControl>
-                      <Input {...field} value={field.value || ""} type="tel" data-testid="input-phone-number" />
+                      <Input
+                        {...field}
+                        value={field.value || ""}
+                        type="tel"
+                        data-testid="input-phone-number"
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -703,7 +606,12 @@ export default function Drivers() {
                   <FormItem>
                     <FormLabel>Domicile</FormLabel>
                     <FormControl>
-                      <Input {...field} value={field.value || ""} placeholder="e.g., MKC, NYC" data-testid="input-domicile" />
+                      <Input
+                        {...field}
+                        value={field.value || ""}
+                        placeholder="e.g., MKC, NYC"
+                        data-testid="input-domicile"
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -760,7 +668,11 @@ export default function Drivers() {
                       <FormItem>
                         <FormLabel>License Number</FormLabel>
                         <FormControl>
-                          <Input {...field} value={field.value || ""} data-testid="input-license-number" />
+                          <Input
+                            {...field}
+                            value={field.value || ""}
+                            data-testid="input-license-number"
+                          />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -774,7 +686,12 @@ export default function Drivers() {
                       <FormItem>
                         <FormLabel>License Expiry Date</FormLabel>
                         <FormControl>
-                          <Input type="date" {...field} value={field.value || ""} data-testid="input-license-expiry" />
+                          <Input
+                            type="date"
+                            {...field}
+                            value={field.value || ""}
+                            data-testid="input-license-expiry"
+                          />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -788,7 +705,12 @@ export default function Drivers() {
                       <FormItem>
                         <FormLabel>Medical Card Expiry</FormLabel>
                         <FormControl>
-                          <Input type="date" {...field} value={field.value || ""} data-testid="input-medical-cert-expiry" />
+                          <Input
+                            type="date"
+                            {...field}
+                            value={field.value || ""}
+                            data-testid="input-medical-cert-expiry"
+                          />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -806,7 +728,11 @@ export default function Drivers() {
                 >
                   Cancel
                 </Button>
-                <Button type="submit" disabled={addDriverMutation.isPending} data-testid="button-submit-add-driver">
+                <Button
+                  type="submit"
+                  disabled={addDriverMutation.isPending}
+                  data-testid="button-submit-add-driver"
+                >
                   {addDriverMutation.isPending ? "Adding..." : "Add Driver"}
                 </Button>
               </DialogFooter>
@@ -815,19 +741,29 @@ export default function Drivers() {
         </DialogContent>
       </Dialog>
 
-      {/* Edit Driver Dialog */}
-      <Dialog open={!!editingDriver} onOpenChange={(open) => !open && setEditingDriver(null)}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto" data-testid="dialog-edit-driver">
+      {/* Driver Detail Modal (reuses edit dialog — Phase 2 will extract to DriverDetailModal) */}
+      <Dialog
+        open={!!selectedDriver}
+        onOpenChange={(open) => !open && setSelectedDriver(null)}
+      >
+        <DialogContent
+          className="max-h-[90vh] overflow-y-auto"
+          data-testid="dialog-driver-detail"
+        >
           <DialogHeader>
-            <DialogTitle>Edit Driver</DialogTitle>
+            <DialogTitle>
+              {selectedDriver
+                ? `${selectedDriver.firstName} ${selectedDriver.lastName}`
+                : "Driver"}
+            </DialogTitle>
             <DialogDescription>
-              Update the driver's information and eligibility status.
+              Update driver information and eligibility status.
             </DialogDescription>
           </DialogHeader>
           <Form {...editDriverForm}>
             <form
               onSubmit={editDriverForm.handleSubmit((data) =>
-                editDriverMutation.mutate({ id: editingDriver!.id, data })
+                editDriverMutation.mutate({ id: selectedDriver!.id, data })
               )}
               className="space-y-4"
             >
@@ -867,7 +803,12 @@ export default function Drivers() {
                   <FormItem>
                     <FormLabel>Email</FormLabel>
                     <FormControl>
-                      <Input {...field} value={field.value || ""} type="email" data-testid="input-edit-driver-email" />
+                      <Input
+                        {...field}
+                        value={field.value || ""}
+                        type="email"
+                        data-testid="input-edit-driver-email"
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -881,7 +822,12 @@ export default function Drivers() {
                   <FormItem>
                     <FormLabel>Phone Number</FormLabel>
                     <FormControl>
-                      <Input {...field} value={field.value || ""} type="tel" data-testid="input-edit-phone-number" />
+                      <Input
+                        {...field}
+                        value={field.value || ""}
+                        type="tel"
+                        data-testid="input-edit-phone-number"
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -895,7 +841,12 @@ export default function Drivers() {
                   <FormItem>
                     <FormLabel>Domicile</FormLabel>
                     <FormControl>
-                      <Input {...field} value={field.value || ""} placeholder="e.g., MKC, NYC" data-testid="input-edit-domicile" />
+                      <Input
+                        {...field}
+                        value={field.value || ""}
+                        placeholder="e.g., MKC, NYC"
+                        data-testid="input-edit-domicile"
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -952,7 +903,11 @@ export default function Drivers() {
                       <FormItem>
                         <FormLabel>License Number</FormLabel>
                         <FormControl>
-                          <Input {...field} value={field.value || ""} data-testid="input-edit-license-number" />
+                          <Input
+                            {...field}
+                            value={field.value || ""}
+                            data-testid="input-edit-license-number"
+                          />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -966,7 +921,12 @@ export default function Drivers() {
                       <FormItem>
                         <FormLabel>License Expiry Date</FormLabel>
                         <FormControl>
-                          <Input type="date" {...field} value={field.value || ""} data-testid="input-edit-license-expiry" />
+                          <Input
+                            type="date"
+                            {...field}
+                            value={field.value || ""}
+                            data-testid="input-edit-license-expiry"
+                          />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -980,7 +940,12 @@ export default function Drivers() {
                       <FormItem>
                         <FormLabel>Medical Card Expiry</FormLabel>
                         <FormControl>
-                          <Input type="date" {...field} value={field.value || ""} data-testid="input-edit-medical-cert-expiry" />
+                          <Input
+                            type="date"
+                            {...field}
+                            value={field.value || ""}
+                            data-testid="input-edit-medical-cert-expiry"
+                          />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -1012,19 +977,22 @@ export default function Drivers() {
                 )}
               />
 
-              {/* Special Requests Section */}
               {driverRequests.length > 0 && (
                 <div className="space-y-3 pt-4 border-t">
                   <h3 className="text-sm font-semibold">Special Requests</h3>
                   <div className="space-y-2 max-h-48 overflow-y-auto">
                     {driverRequests
-                      .filter(req => {
+                      .filter((req) => {
                         const requestDate = req.startDate ? new Date(req.startDate) : null;
-                        return requestDate && requestDate >= new Date() && (req.status === "approved" || req.status === "pending");
+                        return (
+                          requestDate &&
+                          requestDate >= new Date() &&
+                          (req.status === "approved" || req.status === "pending")
+                        );
                       })
                       .map((request) => (
-                        <div 
-                          key={request.id} 
+                        <div
+                          key={request.id}
                           className="flex items-start justify-between gap-2 p-3 rounded-lg border bg-card"
                           data-testid={`driver-request-${request.id}`}
                         >
@@ -1057,7 +1025,8 @@ export default function Drivers() {
                             </div>
                             <p className="text-sm mt-1">
                               {request.startDate && format(new Date(request.startDate), "PPP")}
-                              {request.endDate && request.startDate !== request.endDate && 
+                              {request.endDate &&
+                                request.startDate !== request.endDate &&
                                 ` - ${format(new Date(request.endDate), "PPP")}`}
                             </p>
                             {request.startTime && (
@@ -1074,36 +1043,49 @@ export default function Drivers() {
                           </div>
                         </div>
                       ))}
-                    {driverRequests.filter(req => {
-                      const requestDate = req.startDate ? new Date(req.startDate) : null;
-                      return requestDate && requestDate >= new Date() && (req.status === "approved" || req.status === "pending");
-                    }).length === 0 && (
-                      <p className="text-sm text-muted-foreground py-2">No active or upcoming requests</p>
-                    )}
                   </div>
                 </div>
               )}
 
-              <DialogFooter>
+              <DialogFooter className="flex flex-col sm:flex-row gap-2 sm:justify-between">
                 <Button
                   type="button"
-                  variant="outline"
-                  onClick={() => setEditingDriver(null)}
-                  data-testid="button-cancel-edit"
+                  variant="ghost"
+                  className="text-destructive hover:text-destructive"
+                  onClick={() => selectedDriver && setDeletingDriver(selectedDriver)}
+                  data-testid="button-delete-driver"
                 >
-                  Cancel
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  Delete
                 </Button>
-                <Button type="submit" disabled={editDriverMutation.isPending} data-testid="button-submit-edit-driver">
-                  {editDriverMutation.isPending ? "Updating..." : "Update Driver"}
-                </Button>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setSelectedDriver(null)}
+                    data-testid="button-cancel-edit"
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="submit"
+                    disabled={editDriverMutation.isPending}
+                    data-testid="button-submit-edit-driver"
+                  >
+                    {editDriverMutation.isPending ? "Updating..." : "Save"}
+                  </Button>
+                </div>
               </DialogFooter>
             </form>
           </Form>
         </DialogContent>
       </Dialog>
 
-      {/* Delete Confirmation Dialog */}
-      <AlertDialog open={!!deletingDriver} onOpenChange={(open) => !open && setDeletingDriver(null)}>
+      {/* Delete Confirmation */}
+      <AlertDialog
+        open={!!deletingDriver}
+        onOpenChange={(open) => !open && setDeletingDriver(null)}
+      >
         <AlertDialogContent data-testid="dialog-delete-driver">
           <AlertDialogHeader>
             <AlertDialogTitle>Are you sure?</AlertDialogTitle>
@@ -1118,7 +1100,9 @@ export default function Drivers() {
           <AlertDialogFooter>
             <AlertDialogCancel data-testid="button-cancel-delete">Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => deletingDriver && deleteDriverMutation.mutate(deletingDriver.id)}
+              onClick={() =>
+                deletingDriver && deleteDriverMutation.mutate(deletingDriver.id)
+              }
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               data-testid="button-confirm-delete"
             >

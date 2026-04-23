@@ -24,7 +24,6 @@ import { eq, and, inArray, sql, gte, lte, lt, not, desc, isNotNull } from "drizz
 import session from "express-session";
 import { fromZodError } from "zod-validation-error";
 import bcrypt from "bcryptjs";
-import { benchContracts } from "./seed-data";
 import multer from "multer";
 import { validateBlockAssignment, normalizeSoloType, blockToAssignmentSubject } from "./rolling6-calculator";
 import { subDays, parseISO, format, startOfWeek, endOfWeek, addWeeks } from "date-fns";
@@ -32,7 +31,7 @@ import { findSwapCandidates, getAllDriverWorkloads } from "./workload-calculator
 import { analyzeCascadeEffect, executeCascadeChange, type CascadeAnalysisRequest } from "./cascade-analyzer";
 import { optimizeWithMilo, applyMiloSchedule } from "./milo-scheduler";
 import { matchDeterministic, applyDeterministicMatches } from "./deterministic-matcher";
-import { regenerateDNAFromBlockAssignments } from "./dna-analyzer";
+import { regenerateDNAFromBlockAssignments, updateSingleDriverDNA } from "./dna-analyzer";
 import { initWebSocket, getOnlineDrivers, isDriverOnline, getActiveDropIns } from "./websocket";
 import { twilioService } from "./twilio-service";
 
@@ -189,21 +188,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/auth/login", async (req, res) => {
     try {
       const { username, password, rememberMe } = req.body;
-      
+
       // Debug logging
       console.log('Login attempt for username:', JSON.stringify(username), 'Length:', username?.length);
 
+      const isDevMode = process.env.NODE_ENV === 'development';
+
       // Make username case-insensitive
-      const user = await dbStorage.getUserByUsername(username.toLowerCase());
+      let user = await dbStorage.getUserByUsername(username.toLowerCase());
+
+      // DEV-ONLY: if user doesn't exist in dev mode, auto-create them.
+      // Remove or gate this off before going to production.
+      if (!user && isDevMode) {
+        console.log('[DEV] Auto-creating user for local development:', username);
+        const tenant = await dbStorage.createTenant({ name: `${username} Company (dev)` });
+        const hashedPassword = await bcrypt.hash(password || 'dev', 10);
+        user = await dbStorage.createUser(insertUserSchema.parse({
+          username: username.toLowerCase(),
+          password: hashedPassword,
+          email: `${username.toLowerCase()}@localhost.dev`,
+          tenantId: tenant.id,
+          role: "admin",
+        }));
+      }
+
       if (!user) {
         console.log('User not found for username:', JSON.stringify(username));
         return res.status(401).json({ message: "Invalid credentials" });
       }
 
-      // Compare hashed password
-      const isValidPassword = await bcrypt.compare(password, user.password);
-      if (!isValidPassword) {
-        return res.status(401).json({ message: "Invalid credentials" });
+      // Compare hashed password - skipped in dev mode for frictionless local access
+      if (!isDevMode) {
+        const isValidPassword = await bcrypt.compare(password, user.password);
+        if (!isValidPassword) {
+          return res.status(401).json({ message: "Invalid credentials" });
+        }
+      } else {
+        console.log('[DEV] Password check skipped (development mode)');
       }
 
       // Regenerate session to prevent session fixation attacks
@@ -501,6 +522,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ message: "Driver deleted successfully" });
     } catch (error: any) {
       res.status(500).json({ message: "Failed to delete driver", error: error.message });
+    }
+  });
+
+  // PATCH /api/drivers/:id/pool-status - Change a driver's dispatch-pool bucket
+  app.patch("/api/drivers/:id/pool-status", requireAuth, async (req, res) => {
+    try {
+      const tenantId = req.session.tenantId!;
+      const { id } = req.params;
+      const { poolStatus, onboardingBucket, onboardingBucketName, onboardingBlockingReason } = req.body;
+
+      const valid = ["in_pool", "onboarding", "leaving", "admin", "off_roster", "unknown"];
+      if (!valid.includes(poolStatus)) {
+        return res.status(400).json({ message: `Invalid poolStatus. Must be one of: ${valid.join(", ")}` });
+      }
+
+      const updates: any = { poolStatus };
+      if (poolStatus === "in_pool") updates.dispatchReadyAt = new Date();
+      if (poolStatus === "onboarding") {
+        if (onboardingBucket !== undefined) updates.onboardingBucket = onboardingBucket;
+        if (onboardingBucketName !== undefined) updates.onboardingBucketName = onboardingBucketName;
+        if (onboardingBlockingReason !== undefined) updates.onboardingBlockingReason = onboardingBlockingReason;
+      }
+
+      const [updated] = await db.update(drivers)
+        .set(updates)
+        .where(and(eq(drivers.tenantId, tenantId), eq(drivers.id, id)))
+        .returning();
+
+      if (!updated) return res.status(404).json({ message: "Driver not found" });
+      res.json({ driver: updated });
+    } catch (error: any) {
+      console.error("pool-status patch error:", error);
+      res.status(500).json({ message: "Failed to update pool status", error: error.message });
     }
   });
 
@@ -1872,141 +1926,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Admin endpoint: Reset contracts - DELETE ALL and re-seed benchmark contracts
-  app.post("/api/admin/reset-contracts", requireAuth, async (req, res) => {
-    try {
-      const tenantId = req.session.tenantId!;
-      const results = {
-        assignmentsDeleted: 0,
-        blocksDeleted: 0,
-        contractsDeleted: 0,
-        contractsCreated: 0,
-        errors: [] as string[],
-      };
-
-      // Step 1: Delete all block assignments for this tenant (must delete assignments before blocks)
-      const existingAssignments = await dbStorage.getBlockAssignmentsByTenant(tenantId);
-      for (const assignment of existingAssignments) {
-        await dbStorage.deleteBlockAssignment(assignment.id);
-        results.assignmentsDeleted++;
-      }
-
-      // Step 2: Delete all blocks for this tenant (must delete blocks before contracts due to FK)
-      const existingBlocks = await dbStorage.getBlocksByTenant(tenantId);
-      for (const block of existingBlocks) {
-        await dbStorage.deleteBlock(block.id);
-        results.blocksDeleted++;
-      }
-
-      // Step 3: Delete all contracts for this tenant
-      const existingContracts = await dbStorage.getContractsByTenant(tenantId);
-      for (const contract of existingContracts) {
-        await dbStorage.deleteContract(contract.id);
-        results.contractsDeleted++;
-      }
-
-      // Step 4: Create the 17 benchmark contracts
-      for (const benchContract of benchContracts) {
-        try {
-          const contractData = insertContractSchema.parse({
-            tenantId,
-            name: `${benchContract.type.toUpperCase()} ${benchContract.startTime} ${benchContract.tractorId}`,
-            type: benchContract.type,
-            startTime: benchContract.startTime,
-            tractorId: benchContract.tractorId,
-            domicile: benchContract.domicile,
-            duration: benchContract.duration,
-            baseRoutes: benchContract.baseRoutes,
-            daysPerWeek: 6,
-            protectedDrivers: false,
-          });
-          await dbStorage.createContract(contractData);
-          results.contractsCreated++;
-        } catch (error: any) {
-          results.errors.push(`${benchContract.type}-${benchContract.startTime}-${benchContract.tractorId}: ${error.message}`);
-        }
-      }
-
-      res.json({
-        message: "Contracts reset complete - all old contracts deleted and 17 benchmark contracts created",
-        ...results,
-      });
-    } catch (error: any) {
-      res.status(500).json({ message: "Failed to reset contracts", error: error.message });
-    }
-  });
-
-  // Admin endpoint: Seed bench contracts (upsert - updates existing or creates new)
-  app.post("/api/admin/seed-contracts", requireAuth, async (req, res) => {
-    try {
-      const tenantId = req.session.tenantId!;
-      const results = {
-        created: 0,
-        updated: 0,
-        skipped: 0,
-        errors: [] as string[],
-      };
-
-      // Get existing contracts for this tenant
-      const existing = await dbStorage.getContractsByTenant(tenantId);
-      const existingMap = new Map(
-        existing.map((c) => [`${c.type}-${c.startTime}-${c.tractorId}`, c])
-      );
-
-      // Upsert each bench contract
-      for (const benchContract of benchContracts) {
-        const key = `${benchContract.type}-${benchContract.startTime}-${benchContract.tractorId}`;
-        const existingContract = existingMap.get(key);
-
-        try {
-          if (existingContract) {
-            // Update if duration, baseRoutes, or domicile changed
-            if (
-              existingContract.duration !== benchContract.duration ||
-              existingContract.baseRoutes !== benchContract.baseRoutes ||
-              existingContract.domicile !== benchContract.domicile
-            ) {
-              await dbStorage.updateContract(existingContract.id, {
-                duration: benchContract.duration,
-                baseRoutes: benchContract.baseRoutes,
-                domicile: benchContract.domicile,
-              });
-              results.updated++;
-            } else {
-              results.skipped++;
-            }
-          } else {
-            // Create new contract
-            const contractData = insertContractSchema.parse({
-              tenantId,
-              name: `${benchContract.type.toUpperCase()} ${benchContract.startTime} ${benchContract.tractorId}`,
-              type: benchContract.type,
-              startTime: benchContract.startTime,
-              tractorId: benchContract.tractorId,
-              domicile: benchContract.domicile,
-              duration: benchContract.duration,
-              baseRoutes: benchContract.baseRoutes,
-              daysPerWeek: 6, // Rolling 6-day pattern
-              protectedDrivers: false,
-            });
-            await dbStorage.createContract(contractData);
-            results.created++;
-          }
-        } catch (error: any) {
-          results.errors.push(`${key}: ${error.message}`);
-        }
-      }
-
-      res.json({
-        message: "Contract seeding complete",
-        total: benchContracts.length,
-        ...results,
-      });
-    } catch (error: any) {
-      res.status(500).json({ message: "Failed to seed contracts", error: error.message });
-    }
-  });
-
   // ==================== LOADS ====================
   
   app.get("/api/loads", requireAuth, async (req, res) => {
@@ -2622,7 +2541,90 @@ export async function registerRoutes(app: Express): Promise<Server> {
         validationStatus: validationResult.validationResult.validationStatus,
         validationSummary,
       });
-      
+
+      // Write-through: mirror the logic from /api/drivers/:driverId/assign so
+      // assignmentHistory + driverContractStats stay in sync. Failures here are
+      // logged but do NOT fail the response — the blockAssignment already saved.
+      try {
+        // Calculate bump minutes for history tracking
+        const { calculateBumpMinutes } = await import("./bump-validation");
+        const bumpMinutes = block.canonicalStart
+          ? calculateBumpMinutes(new Date(block.startTimestamp), new Date(block.canonicalStart))
+          : 0;
+
+        if (block.patternGroup && block.canonicalStart && block.cycleId) {
+          await db.insert(assignmentHistory).values({
+            tenantId: req.session.tenantId!,
+            blockId: block.id,
+            driverId: driver.id,
+            contractId: block.contractId,
+            startTimestamp: block.startTimestamp,
+            canonicalStart: block.canonicalStart,
+            patternGroup: block.patternGroup,
+            cycleId: block.cycleId,
+            bumpMinutes,
+            isAutoAssigned: false,
+            confidenceScore: null,
+            assignmentSource: "manual",
+            assignedBy: req.session.userId,
+          });
+
+          // Upsert driverContractStats
+          const existingStats = await db
+            .select()
+            .from(driverContractStats)
+            .where(
+              and(
+                eq(driverContractStats.tenantId, req.session.tenantId!),
+                eq(driverContractStats.driverId, driver.id),
+                eq(driverContractStats.contractId, block.contractId),
+                eq(driverContractStats.patternGroup, block.patternGroup)
+              )
+            )
+            .limit(1);
+
+          if (existingStats.length > 0) {
+            const stats = existingStats[0];
+            const newTotalAssignments = stats.totalAssignments + 1;
+            const newAvgBumpMinutes = Math.round(
+              (stats.avgBumpMinutes * stats.totalAssignments + bumpMinutes) / newTotalAssignments
+            );
+            await db
+              .update(driverContractStats)
+              .set({
+                totalAssignments: newTotalAssignments,
+                streakCount: stats.lastCycleId === block.cycleId ? stats.streakCount : stats.streakCount + 1,
+                avgBumpMinutes: newAvgBumpMinutes,
+                lastWorked: block.startTimestamp,
+                lastCycleId: block.cycleId,
+              })
+              .where(eq(driverContractStats.id, stats.id));
+          } else {
+            await db.insert(driverContractStats).values({
+              tenantId: req.session.tenantId!,
+              driverId: driver.id,
+              contractId: block.contractId,
+              patternGroup: block.patternGroup,
+              totalAssignments: 1,
+              streakCount: 1,
+              avgBumpMinutes: bumpMinutes,
+              lastWorked: block.startTimestamp,
+              lastCycleId: block.cycleId,
+            });
+          }
+        }
+      } catch (writeThroughErr: any) {
+        console.error(
+          `[block-assignments POST] write-through error for driver=${driver.id} block=${block.id}:`,
+          writeThroughErr
+        );
+      }
+
+      // Fire-and-forget DNA refresh — do NOT await
+      updateSingleDriverDNA(req.session.tenantId!, driver.id).catch(err => {
+        console.error(`[DNA] Failed to update DNA for driver ${driver.id}:`, err);
+      });
+
       res.json(assignment);
     } catch (error: any) {
       if (error.name === "ZodError") {
@@ -8359,201 +8361,6 @@ Match ANY extracted name to our database using:
     } catch (error: any) {
       console.error("[GeminiVision] Error:", error);
       res.status(500).json({ success: false, message: error.message });
-    }
-  });
-
-  // ============================================================================
-  // Weekly Sync API Routes
-  // ============================================================================
-
-  const { getWeekData, compareWeeks, applyLastWeekAssignments, autoMatchWeek, getDayMode } = await import("./sync-engine");
-
-  // Get week data (blocks and assignments grouped by time slot)
-  app.get("/api/sync/week/:weekStart", requireAuth, async (req: any, res) => {
-    try {
-      const weekStart = parseISO(req.params.weekStart);
-      const data = await getWeekData(req.session.tenantId, weekStart);
-      const mode = getDayMode(weekStart);
-      res.json({ ...data, mode });
-    } catch (error: any) {
-      console.error("[WeeklySync] Error getting week data:", error);
-      res.status(500).json({ message: error.message });
-    }
-  });
-
-  // Compare two weeks
-  app.get("/api/sync/compare", requireAuth, async (req: any, res) => {
-    try {
-      const lastWeekStart = parseISO(req.query.lastWeek as string);
-      const thisWeekStart = parseISO(req.query.thisWeek as string);
-      const comparison = await compareWeeks(req.session.tenantId, lastWeekStart, thisWeekStart);
-      const mode = getDayMode(thisWeekStart);
-      res.json({ ...comparison, mode });
-    } catch (error: any) {
-      console.error("[WeeklySync] Error comparing weeks:", error);
-      res.status(500).json({ message: error.message });
-    }
-  });
-
-  // Apply last week's assignments to this week
-  app.post("/api/sync/apply-last-week", requireAuth, async (req: any, res) => {
-    try {
-      const { thisWeekStart, slotKeys } = req.body;
-      const result = await applyLastWeekAssignments(
-        req.session.tenantId,
-        parseISO(thisWeekStart),
-        slotKeys
-      );
-      res.json(result);
-    } catch (error: any) {
-      console.error("[WeeklySync] Error applying assignments:", error);
-      res.status(500).json({ message: error.message });
-    }
-  });
-
-  // Run ML auto-matcher on unassigned blocks
-  app.post("/api/sync/auto-match", requireAuth, async (req: any, res) => {
-    try {
-      const { weekStart } = req.body;
-      const result = await autoMatchWeek(req.session.tenantId, parseISO(weekStart));
-      res.json(result);
-    } catch (error: any) {
-      console.error("[WeeklySync] Error running auto-match:", error);
-      res.status(500).json({ message: error.message });
-    }
-  });
-
-  // Assign a single block to a driver
-  app.post("/api/sync/assign-single", requireAuth, async (req: any, res) => {
-    try {
-      const { blockId, driverId } = req.body;
-
-      // Check if block already has an active assignment
-      const existing = await db
-        .select()
-        .from(blockAssignments)
-        .where(
-          and(
-            eq(blockAssignments.tenantId, req.session.tenantId),
-            eq(blockAssignments.blockId, blockId),
-            eq(blockAssignments.isActive, true)
-          )
-        )
-        .limit(1);
-
-      if (existing.length > 0) {
-        // Deactivate existing assignment
-        await db
-          .update(blockAssignments)
-          .set({ isActive: false, archivedAt: new Date() })
-          .where(eq(blockAssignments.id, existing[0].id));
-      }
-
-      // Create new assignment
-      const [newAssignment] = await db
-        .insert(blockAssignments)
-        .values({
-          tenantId: req.session.tenantId,
-          blockId,
-          driverId,
-          isActive: true,
-          validationStatus: "valid",
-          assignedBy: req.session.userId
-        })
-        .returning();
-
-      res.json({ success: true, assignment: newAssignment });
-    } catch (error: any) {
-      console.error("[WeeklySync] Error assigning block:", error);
-      res.status(500).json({ message: error.message });
-    }
-  });
-
-  // Get day mode for a specific week
-  app.get("/api/sync/mode/:weekStart", requireAuth, async (req: any, res) => {
-    try {
-      const weekStart = parseISO(req.params.weekStart);
-      const mode = getDayMode(weekStart);
-      res.json(mode);
-    } catch (error: any) {
-      console.error("[WeeklySync] Error getting day mode:", error);
-      res.status(500).json({ message: error.message });
-    }
-  });
-
-  // ==================== HOLY GRAIL ENGINE ====================
-  // Simple slot-based matching: soloType + startTime + tractorId = slot
-
-  const { generateSuggestions, applyDirectMatches, applySingleAssignment } = await import("./holy-grail-engine");
-
-  // Get suggestions comparing last week to this week
-  app.get("/api/holy-grail/suggest", requireAuth, async (req: any, res) => {
-    try {
-      const { lastWeek, thisWeek } = req.query;
-      if (!lastWeek || !thisWeek) {
-        return res.status(400).json({ message: "lastWeek and thisWeek query params required" });
-      }
-
-      const lastWeekStart = parseISO(lastWeek);
-      const thisWeekStart = parseISO(thisWeek);
-
-      const result = await generateSuggestions(
-        req.session.tenantId!,
-        lastWeekStart,
-        thisWeekStart
-      );
-
-      res.json(result);
-    } catch (error: any) {
-      console.error("[HolyGrail] Error generating suggestions:", error);
-      res.status(500).json({ message: error.message });
-    }
-  });
-
-  // Apply all suggestions (direct matches + opportunities)
-  app.post("/api/holy-grail/apply", requireAuth, async (req: any, res) => {
-    try {
-      const { suggestions } = req.body;
-      if (!suggestions || !Array.isArray(suggestions)) {
-        return res.status(400).json({ message: "suggestions array required" });
-      }
-
-      const result = await applyDirectMatches(
-        req.session.tenantId!,
-        suggestions,
-        req.session.userId
-      );
-
-      res.json(result);
-    } catch (error: any) {
-      console.error("[HolyGrail] Error applying suggestions:", error);
-      res.status(500).json({ message: error.message });
-    }
-  });
-
-  // Apply a single assignment
-  app.post("/api/holy-grail/apply-single", requireAuth, async (req: any, res) => {
-    try {
-      const { blockId, driverId } = req.body;
-      if (!blockId || !driverId) {
-        return res.status(400).json({ message: "blockId and driverId required" });
-      }
-
-      const result = await applySingleAssignment(
-        req.session.tenantId!,
-        blockId,
-        driverId,
-        req.session.userId
-      );
-
-      if (!result.success) {
-        return res.status(400).json({ message: result.error });
-      }
-
-      res.json({ success: true });
-    } catch (error: any) {
-      console.error("[HolyGrail] Error applying single assignment:", error);
-      res.status(500).json({ message: error.message });
     }
   });
 

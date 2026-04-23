@@ -323,50 +323,6 @@ export default function Dashboard() {
         <div className="grid gap-6 md:grid-cols-2">
           <Card>
             <CardHeader>
-              <CardTitle>Getting Started</CardTitle>
-              <CardDescription>Set up your trucking operations</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <Link href="/drivers">
-                <div className="flex items-start gap-3 p-4 border border-border rounded-lg hover-elevate active-elevate-2 transition-all cursor-pointer" data-testid="link-add-drivers">
-                  <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
-                    <Users className="w-4 h-4 text-primary" />
-                  </div>
-                  <div className="flex-1">
-                    <h3 className="font-medium text-foreground mb-1">Add Drivers</h3>
-                    <p className="text-sm text-muted-foreground">Import your driver roster via CSV or add them manually</p>
-                  </div>
-                </div>
-              </Link>
-
-              <Link href="/trucks">
-                <div className="flex items-start gap-3 p-4 border border-border rounded-lg hover-elevate active-elevate-2 transition-all cursor-pointer" data-testid="link-add-trucks">
-                  <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
-                    <Truck className="w-4 h-4 text-primary" />
-                  </div>
-                  <div className="flex-1">
-                    <h3 className="font-medium text-foreground mb-1">Configure Trucks</h3>
-                    <p className="text-sm text-muted-foreground">Add your fleet vehicles and equipment details</p>
-                  </div>
-                </div>
-              </Link>
-
-              <Link href="/import">
-                <div className="flex items-start gap-3 p-4 border border-border rounded-lg hover-elevate active-elevate-2 transition-all cursor-pointer" data-testid="link-import-schedules">
-                  <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
-                    <Upload className="w-4 h-4 text-primary" />
-                  </div>
-                  <div className="flex-1">
-                    <h3 className="font-medium text-foreground mb-1">Import Schedules</h3>
-                    <p className="text-sm text-muted-foreground">Upload your weekly schedule via CSV or Excel file</p>
-                  </div>
-                </div>
-              </Link>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
               <CardTitle>Quick Actions</CardTitle>
               <CardDescription>Common tasks and shortcuts</CardDescription>
             </CardHeader>

@@ -30,8 +30,6 @@ import DriverProfiles from "@/pages/DriverProfiles";
 import DriverDnaDashboard from "@/pages/DriverDnaDashboard";
 import FleetComm from "@/pages/FleetComm";
 import DriverStation from "@/pages/DriverStation";
-import WeeklySync from "@/pages/WeeklySync";
-import HolyGrail from "@/pages/HolyGrail";
 import SimpleSchedule from "@/pages/SimpleSchedule";
 import NotFound from "@/pages/not-found";
 
@@ -180,20 +178,6 @@ function Router() {
         <ProtectedRoute>
           <ProtectedLayout>
             <FleetComm />
-          </ProtectedLayout>
-        </ProtectedRoute>
-      </Route>
-      <Route path="/weekly-sync">
-        <ProtectedRoute>
-          <ProtectedLayout>
-            <WeeklySync />
-          </ProtectedLayout>
-        </ProtectedRoute>
-      </Route>
-      <Route path="/holy-grail">
-        <ProtectedRoute>
-          <ProtectedLayout>
-            <HolyGrail />
           </ProtectedLayout>
         </ProtectedRoute>
       </Route>

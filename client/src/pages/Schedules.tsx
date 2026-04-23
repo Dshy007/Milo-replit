@@ -3578,16 +3578,6 @@ export default function Schedules() {
         </Card>
       )}
 
-      {/* Driver Assignment Modal - Temporarily disabled until modal is updated for occurrences */}
-      {/* TODO: Update DriverAssignmentModal to work with occurrenceId instead of blockId */}
-      {selectedOccurrence && false && (
-        <DriverAssignmentModal
-          block={null}
-          isOpen={isAssignmentModalOpen}
-          onClose={handleCloseModal}
-        />
-      )}
-
       {/* Delete Confirmation Dialog */}
       <AlertDialog open={!!shiftToDelete} onOpenChange={(open) => !open && setShiftToDelete(null)}>
         <AlertDialogContent data-testid="dialog-confirm-delete">
